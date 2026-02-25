@@ -1,26 +1,35 @@
 name: Sync Changes to External Repos
 
 on:
-  push:
-    paths:
-      - 'final/**'
-  # Listen for the signal sent by postprocess.yml
-  repository_dispatch:
-    types: [trigger-sync-to-client-repo]
+  # Listen for Postprocess to finish
+  workflow_run:
+    workflows: ["Postprocess Translated Files"]
+    types:
+      - completed
+  
   workflow_dispatch:
 
 jobs:
   deliver:
+    # Only run if Postprocess succeeded or if triggered manually
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # Dynamically checkout the branch that triggered the run (e.g., dev)
+          ref: ${{ github.event.workflow_run.head_branch || github.ref_name }}
 
       - name: Load Configuration
         run: |
           mkdir -p config
-          # Dynamically load the correct JSON variable
-          if [ "${{ github.ref_name }}" == "dev" ]; then
+          
+          # Check the dynamic branch name
+          CURRENT_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          echo "Running on branch: $CURRENT_BRANCH"
+          
+          if [ "$CURRENT_BRANCH" == "dev" ]; then
             echo '${{ vars.SUSE_CLIENT_CONFIGURATION_DEV }}' > config/clients.json
           else
             echo '${{ vars.SUSE_CLIENT_CONFIGURATION }}' > config/clients.json
