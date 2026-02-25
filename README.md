@@ -2,15 +2,15 @@
 
 ## 🧩 Phrase TMS ↔ GitHub Automation Workflow
 
-[![Sync from Client Repo](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/sync-from-client-repo.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/sync-from-client-repo.yml)
+[![Sync from Client Repo](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/sync-from-client-repo.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/sync-from-client-repo.yml)
 
-[![AsciiDoc Preprocess](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/preprocess.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/preprocess.yml)
+[![AsciiDoc Preprocess](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/preprocess.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/preprocess.yml)
 
-[![Process Phrase Incoming Files](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/pull-from-phrase-incoming.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/pull-from-phrase-incoming.yml)
+[![Process Phrase Incoming Files](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/pull-from-phrase-incoming.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/pull-from-phrase-incoming.yml)
 
-[![AsciiDoc Postprocess](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/postprocess.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/postprocess.yml)
+[![AsciiDoc Postprocess](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/postprocess.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/postprocess.yml)
 
-[![Sync to Client Repo](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/sync-to-client-repo.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.phrase.auto.multi.repo/actions/workflows/sync-to-client-repo.yml)
+[![Sync to Client Repo](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/sync-to-client-repo.yml/badge.svg)](https://github.com/eoinmurphy-vt/suse.cloud.phrase.automation/actions/workflows/sync-to-client-repo.yml)
 
 ### 🔄 Overview
 
