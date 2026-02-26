@@ -1,0 +1,199 @@
+= Rancher RBAC
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト型
+
+== 概要
+
+SUSE Rancher Prime Observability 拡張機能は、Kubernetes RBAC を使用して、SUSE Observability の Rancher ユーザーにアクセスを付与します。
+Rancherを使用しない場合は、スタンドアロンインストール時にxref:/setup/security/rbac/rbac_roles.adoc[ロールの設定方法]を参照してください。
+
+[NOTE]
+====
+Rancher RBACが機能するためには、
+
+* {stackstate-product-name}の認証はxref:setup/security/authentication/oidc.adoc#_rancher[Rancher OIDCプロバイダー]で構成する必要があります。
+* {stackstate-product-name}エージェントは、RBACエージェントを有効にし、サービストークンを使用して認証する必要があります。
+====
+
+すべての認証済みユーザーは、システムを利用できる*インスタンス基本アクセス*ロールを持っています。 これらの権限は、ビュー、設定、メトリックバインディングへのアクセスを提供し、ユーザーがシステム通知を表示できるようにします。 これらは、{stackstate-product-name}データへのアクセスを付与しません。 データを見るためには、ユーザーに追加のロールを付与する必要があります。Rancher *ロールテンプレート*では、*インスタンス基本アクセス*ロールを拡張するための2つの方法が提供されています。
+
+インスタンスロール:: {stackstate-product-name}を設定またはパーソナライズできます。
+スコープロール:: 観測されたクラスターの{stackstate-product-name}データへのアクセスを許可します。
+
+== インスタンスロール
+
+*ロールテンプレート*を*インスタンスロール*用に、{stackstate-product-name}を実行している*プロジェクト*内のユーザーまたはグループに割り当てることができます。プロジェクトのメンバーに明示的にインスタンスロールが割り当てられていない場合、そのメンバーは*インスタンス基本アクセス*ロールの権限を持ちます。
+
+=== {stackstate-product-name}データにアクセスできるインスタンスロール
+
+いくつかの「グローバル」ロールは、監視対象のすべてのクラスターのすべての {stackstate-product-name} データにアクセスすることを許可します。 これらのロールは、システムの設定やシステムレベルの問題のトラブルシューティングに使用することを目的としています。 これらのロールを持つユーザーは、xref:scoped[スコープロール]を設定する必要はありません。
+
+インスタンス管理者:: すべてのビューとすべての権限への完全なアクセスを付与します。
+インスタンス・トラブルシューティャー:: SUSE Observability をトラブルシューティングに使用するために必要なすべての権限（モニターの有効化/無効化、カスタムビューの作成、CLI の使用を含む）を付与します。
+インスタンス・オブザーバー:: SUSE Observabilityインスタンス内のすべてのデータへのアクセスを付与します。
+
+=== インスタンスロール（{stackstate-product-name} データへのアクセスなし）
+
+これらのロールは、*インスタンスオブザーバー*ロールまたはxref:scoped[スコープロール]のいずれかと組み合わせる必要があります（下記参照）。 そうでなければ、{stackstate-product-name}データにはアクセスできず、UIには「コンポーネントが見つかりません」というメッセージが表示されます。 これは、プロジェクトオーナーなどを含むすべての Rancher ユーザーに適用されます。
+
+インスタンスの推奨アクセス:: SUSE Observability を使用するための推奨権限を付与します。 このロールには、厳密には必要ではないが、（限られた）パーソナライズの手段を提供する権限が含まれています {stackstate-product-name}。
+インスタンス基本アクセス:: {stackstate-product-name} を使用するための最小限の権限を付与します。このロールは明示的に割り当てる必要はなく、これに対する *ロールテンプレート* はありません。すべてのログインユーザーがこのロールを持っています。
+
+以下に、各定義済みのSUSE Observabilityロールに割り当てられた権限を示します。異なる権限の詳細と、それらを `sts` CLI を使用して管理する方法については、xref:/setup/security/rbac/rbac_permissions.adoc[ロールベースのアクセス制御 (RBAC) 権限] を参照してください。
+
+[tabs]
+====
+基本アクセス::
++
+--
+基本アクセスはSUSE Observabilityを使用するための最小限の権限を付与します。オブザーバー（インスタンス、クラスター、またはプロジェクト）と組み合わせて使用します。
+これらの権限はすべてのユーザーに付与されます。
+
+|===
+|リソースの作成 |動詞 
+
+|metric-bindings |get
+|設定 |get
+|system-notifications |get
+|ビュー <:so>びゅー |get
+|===
+
+--
+推奨アクセス::
++
+--
+推奨されるアクセス権は、厳密には必要ではありませんが、SUSE Observability をより有用にします。限られた程度のパーソナライズを提供します。
+オブザーバー（インスタンス、クラスター、またはプロジェクト）と組み合わせて使用します。
+
+|===
+|リソースの作成 |動詞 
+
+|api-tokens |get
+|favorite-dashboards |作成、削除
+|favorite-views |作成、削除
+|stackpacks |get 
+|visualization-settings |update
+|===
+
+--
+Observer::
++
+--
+オブザーバーは、SUSE Observability インスタンス内のすべての可観測データへのアクセスを付与します。 より良い体験を得るために*推奨アクセス*と組み合わせてください。
+
+|===
+|リソースの作成 |動詞 
+
+|トポロジー |get
+|指標 |get
+|トレース |get
+|===
+
+--
+トラブルシュータ <:so>とらぶるしゅーた::
++
+--
+インスタンス・トラブルシューティャーは、SUSE Observabilityで利用可能なすべてのデータにアクセスでき、ビューの作成やモニターの有効化／無効化も行えます。
+
+|===
+|リソースの作成 |動詞 
+
+|エージェント |get 
+|api-tokens |get
+|コンポーネント・アクション |execute
+|ダッシュボード |取得、作成、更新、削除 
+|favorite-dashboards |作成、削除
+|favorite-views |作成、削除
+|metric-bindings |get
+|指標 |get 
+|モニター類 |取得、作成、更新、削除、実行 
+|通知 |取得、作成、更新、削除 
+|設定 |get 
+|stackpack-configurations |取得、作成、更新、削除
+|stackpacks |get 
+|system-notifications |get
+|トポロジー |get 
+|トレース |get 
+|ビュー <:so>びゅー |取得、作成、更新、削除 
+|visualization-settings |get
+|===
+
+--
+管理者::
++
+--
+管理者役割には、すべての権限が割り当てられています。
+
+|===
+|リソースの作成 |動詞 
+
+|エージェント |get 
+|api-tokens |get
+|コンポーネント・アクション |execute
+|ダッシュボード |取得、作成、更新、削除 
+|favorite-dashboards |作成、削除
+|favorite-views |作成、削除
+|インジェスチョンAPIキー |取得、作成、更新、削除
+|metric-bindings |get
+|指標 |get 
+|モニター類 |取得、作成、更新、削除、実行 
+|通知 |取得、作成、更新、削除 
+|permissions |取得、作成、更新、削除 
+|制限されたスクリプト |execute
+|service-tokens |取得、作成、更新、削除
+|設定 |取得、作成、更新、削除、ロック解除 
+|stackpack-configurations |取得、作成、更新、削除
+|stackpacks |取得、作成 
+|sync-data |取得、更新、削除
+|system-notifications |get
+|topic-messages |get
+|トポロジー |get 
+|トレース |get 
+|ビュー <:so>びゅー |取得、作成、更新、削除 
+|visualization-settings |update
+|===
+
+--
+====
+
+[#scoped]
+== スコープロール
+
+観測されたクラスター内のユーザーまたはグループに次の*ロールテンプレート*を割り当てることができます。 これらは、*クラスタ*内の（*プロジェクト*の）{stackstate-product-name}データへのアクセスを許可し、ユーザーにトポロジー、指標、ログ、トレースデータの読み取り権限を与えます。
+
+Observer:: *プロジェクト*内の名前空間からのデータへのアクセスを許可します。これは、クラスタ構成の*プロジェクトメンバーシップ*セクションで利用できます。
+クラスタ・オブザーバー:: *クラスタ*からのすべてのデータへのアクセスを許可します。このテンプレートは、クラスタ構成の*クラスタメンバーシップ*セクションで使用できます。
+
+これらの役割のリソースは、xref:/setup/security/rbac/rbac_permissions.adoc#_scoped_permissions[Scoped Permissions]に対応しています。これらは、`scope.observability.cattle.io` API グループで利用可能です（これらのリソースは読み取り専用のため、動詞としては`get`のみ）：
+
+* `topology` - コンポーネント（デプロイメント、ポッドなど）をクラスタまたは名前空間から
+* `traces` - クラスタまたは名前空間からのスパン
+* `metrics` - クラスタまたは名前空間に由来する指標データ
+
+ログへのアクセスは `topology` リソースによって制御されている点にご注意ください。
+
+これらのオブザーバー役割を持つユーザーにパーソナライズを有効にするには、{stackstate-product-name}を実行している*プロジェクト*に*インスタンス推奨アクセス*役割を付与してください。
+
+== カスタムロール
+
+推奨アクセスを超える追加の権限を付与するには、Rancherでカスタムの*ロールテンプレート*を作成し、*SUSE Observability インスタンス推奨アクセス*から継承します。 次に、たとえば、モニターとメトリクスチャートを表示する権利を付与するには、次のルールを追加します：
+
+* 動詞：`get`
+* リソース：`metricbindings`および`monitors`
+* ApiGroup：`instance.observability.cattle.io`
+
+image::rancher-custom-role.png[より高度なアクセスのためのカスタムロールテンプレート]
+
+xref:/setup/security/rbac/rbac_permissions.adoc[RBAC Permissions] で定義されている任意のリソースと動詞の組み合わせを指定できます。 リソース名からダッシュ (`-`) が削除されることに注意してください。そのため、権限 `get-metric-bindings` は、動詞 `get` を持つ Kubernetes RBAC リソース `metricbindings` になります。
+
+
+== トラブルシューティング
+
+* クラスターの RBAC エージェントがプラットフォームと通信できることを確認してください。
+
+* xref:/setup/security/rbac/rbac_permissions.adoc#_list_subjects_for_a_user[ユーザー主体を確認してください]（ユーザーとロール）。
+  ** OIDCプロバイダーのロール設定を確認してください。
+* xref:/setup/security/rbac/rbac_permissions.adoc#_show_granted_permissions[主体の権限を確認してください]
+  ** ユーザーが(Cluster)Roleと関連付けられている(Cluster)RoleBindingsが存在することを確認してください。
+  ** (Cluster)Roleを調べて、正しい権限が付与されているかどうかを確認してください。
