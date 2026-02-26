@@ -1,7 +1,7 @@
 name: Sync Changes to External Repos
 
 on:
-  # Listen for Postprocess to finish
+  # Listen for Postprocess to finish successfully
   workflow_run:
     workflows: ["Postprocess Translated Files"]
     types:
@@ -11,14 +11,14 @@ on:
 
 jobs:
   deliver:
-    # Only run if Postprocess succeeded or if triggered manually
+    # Safety Check: Only run if Postprocess succeeded or if triggered manually
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # Dynamically checkout the branch that triggered the run (e.g., dev)
+          # Dynamically checkout the branch that triggered Postprocess (e.g., dev)
           ref: ${{ github.event.workflow_run.head_branch || github.ref_name }}
 
       - name: Load Configuration
@@ -49,14 +49,12 @@ jobs:
           
           CONFIG_FILE="config/clients.json"
 
-          # Iterate over every folder in final/
           for REPO_DIR in final/*; do
             [ -d "$REPO_DIR" ] || continue
             
             CLIENT_ID=$(basename "$REPO_DIR")
             echo ">>> Processing delivery for: $CLIENT_ID"
 
-            # Lookup Client Config using jq
             CLIENT_URL=$(jq -r ".[] | select(.id==\"$CLIENT_ID\") | .url" $CONFIG_FILE)
             TARGET_PATH=$(jq -r ".[] | select(.id==\"$CLIENT_ID\") | .target_path" $CONFIG_FILE)
             BRANCH=$(jq -r ".[] | select(.id==\"$CLIENT_ID\") | .branch" $CONFIG_FILE)
@@ -65,25 +63,15 @@ jobs:
               echo "⚠ Warning: No configuration found for ID '$CLIENT_ID'. Skipping."
               continue
             fi
-
-            echo "    URL: $CLIENT_URL"
-            echo "    Target: $TARGET_PATH"
             
-            # Setup Temp Workspace
             TEMP_WS="workspace_$CLIENT_ID"
             rm -rf "$TEMP_WS"
             
-            # Clone Client Repo
             git clone --depth 1 --branch "$BRANCH" "https://$EXT_PAT@github.com/$CLIENT_URL.git" "$TEMP_WS"
             
-            # Sync Files
-            # Ensure parent directories exist
             mkdir -p "$TEMP_WS/$(dirname "$TARGET_PATH")"
-            
-            # Rsync content of final/CLIENT_ID/ -> workspace/TARGET_PATH/
             rsync -av "$REPO_DIR/" "$TEMP_WS/$TARGET_PATH/"
             
-            # Commit & Push
             cd "$TEMP_WS"
             git add .
             
@@ -92,7 +80,6 @@ jobs:
             else
               git commit -m "Translation Update: Delivered processed files"
               
-              # Push Retry Logic
               MAX_RETRIES=5
               count=0
               success=false
@@ -102,7 +89,6 @@ jobs:
                   break
                 fi
                 count=$((count+1))
-                echo "    Push failed, retrying ($count/$MAX_RETRIES)..."
                 git fetch origin
                 git rebase "origin/$BRANCH"
                 sleep 5
