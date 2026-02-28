@@ -1,0 +1,142 @@
+= 健康同期
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+このセクションでは、異なるモニタリングシステムからSUSE Observabilityにカスタムヘルスデータを同期する高度なトピックについて説明します。
+このトピックは、既存のモニタリング・システムとのカスタム統合を希望するエンジニアにとって興味深いものである。
+既製品のモニターについては、xref:/use/alerting/kubernetes-monitors.adoc[こちらを]ご覧ください。
+
+== 概要
+
+健全性の同期は、SUSE Observabilityのトポロジー要素に外部監視システムからの既存の健全性チェックを追加します。ヘルスデータは、独自のデータとルールを使用して外部モニタリングシステムで計算され、SUSE Observabilityの関連するトポロジー要素に自動的に同期して添付されます。
+
+== ヘルス同期の設定
+
+SUSE Observability Receiver APIは、すべての受信ヘルスデータを自動的に受信して処理します。SUSE Observabilityでは、ヘルス同期を有効にするための追加設定は必要ありませんが、受信するヘルスデータが期待されるJSON形式と一致している必要があります。
+
+健康データの取り込み方法の詳細は、以下のページで確認できる：
+
+* xref:/configure/health/send-health-data/send-health-data.adoc[SUSE Observability Receiver APIによるヘルスデータの取り込み]
+
+== 健康同期パイプライン
+
+健康同期のフレームワークは次のように機能する：
+
+* ヘルスデータはSUSE Observabilityに送信され、Receiver API経由で取り込まれます。
+* 取り込まれたヘルスチェックに関連するSUSE Observabilityトポロジー要素が特定され、それに基づいてバインドされます：
+ ** トポロジー同期中に得られたトポロジー識別子。
+ ** インジェストされたxref:/configure/health/send-health-data/send-health-data.adoc#_json_health_payload[ヘルスペイロードから] `+topologyElementIdentifier+` 。
+* SUSE Observabilityは、トポロジー要素とヘルスチェックの両方の変更を追跡して、最新の情報を維持します。
+
+image::health-sync-pipeline.svg[健康同期パイプライン]
+
+=== 一貫性モデル
+
+SUSE Observabilityのヘルス同期では、外部の監視システムから送信されたデータとSUSE Observabilityが取り込んで表示するデータが一致することを保証するために、さまざまな整合性モデルに依存しています。整合性モデルは、xref:/configure/health/send-health-data/send-health-data.adoc#_common_json_object[共通JSONオブジェクトの] `+"health"+` プロパティで指定するか、ヘルスデータをSUSE Observabilityに送信するときにSUSE Observability CLIの引数として指定します。対応機種は`+REPEAT_SNAPSHOTS+` と`+TRANSACTIONAL_INCREMENTS+` 。
+[tabs]
+====
+スナップショットを繰り返すモデル::
++
+--
+`+REPEAT_SNAPSHOTS+` 整合性モデルは、外部のモニタリング・システムにあるすべてのチェックの定期的な完全スナップショットで動作する。SUSE Observabilityは、受信した各スナップショットのチェックを追跡し、関連する外部チェックの状態をSUSE Observabilityで作成、更新、または削除する必要があるかどうかを決定します。例えば、チェック状態がスナップショットに存在しなくなった場合。このモデルでは、すべての決定が受信したスナップショットから推測されるため、どの外部チェックを削除するかを完全に制御できる。SUSE Observabilityに存在する外部チェックに曖昧さはありません。
+
+*このモデルは次のような場合に使用する：*外部監視システムは、決められた時間ウィンドウにどの要素が存在するかの状態を保持することができるため、完全なスナップショットがどのように見えるかを伝えることができる。
+
+*JSONペイロード：*xref:/configure/health/send-health-data/repeat_snapshots.adoc[Repeat Snapshotsヘルスペイロードは]、スナップショットの開始または停止を指定する特定のプロパティを受け付ける。
+--
+
+トランザクション・インクリメント・モデル::
++
+--
+`+TRANSACTIONAL_INCREMENTS+` 整合性モデルは、インクリメンタルな変更のみがSUSE Observabilityに通知されるストリーミングシステムで使用するように設計されています。データの繰り返しがないため、パイプライン全体で一度だけの配信が保証され、データの一貫性が保たれる。データが欠落しているかどうかを検出するために、SUSE Observabilityでは、チェックポイントと前回のチェックポイントの両方が`+check_states+` 。このモデルでは、データロスがないことを保証するために、パイプライン全体を厳しく管理する必要がある。
+
+*このモデルは次のような場合に使用する：*外部モニタリングシステムは、外部チェックの全状態にアクセスできるわけではなく、イベントベースのアプローチでのみ機能する。
+
+*JSONペイロード：*メタデータ`+repeat_interval+` および`+expire_interval+` は、データに定義済みの周期性がないため、xref:/configure/health/send-health-data/transactional_increments.adoc[Transactional Increments ヘルスペイロードには]関係しない。
+
+--
+====
+
+=== 健康の流れとサブストリーム
+
+外部監視システムは、ヘルスストリームでSUSE Observability Receiverにヘルスデータを送信します。各ヘルスストリームには、ヘルスチェックを行うサブストリームが少なくとも1つある。
+
+==== 健康の流れ
+
+ヘルスストリームは、ヘルス同期を一意に識別し、ヘルスチェックの状態が一緒に処理されるべき境界を定義する。
+
+==== サブストリーム
+
+サブストリームには、SUSE Observabilityで処理されるヘルスチェックデータが含まれます。分散型外部モニタリングシステムからのヘルスデータを扱う場合、複数のサブストリームを構成することができ、それぞれが1つの場所からのヘルススナップショットを含む。各サブストリームのデータは半独立であるが、完全なヘルスストリームのヘルスチェック状態に寄与する。単一のロケーションがヘルスストリームのヘルスチェック状態の報告に責任を持つ場合、xref:/configure/health/send-health-data/send-health-data.adoc#_json_health_payload[ヘルスペイロードから] `+sub_stream_id+` 。SUSE Observabilityは、すべての外部ヘルスチェックが単一のデフォルトのサブストリームに属していると仮定します。
+
+=== リピート間隔
+
+健康同期は、取り込まれた健康データをサブストリームごとに処理する。xref:/configure/health/send-health-data/send-health-data.adoc#_json_health_payload[ヘルスペイロードで]指定された繰り返し間隔は、SUSE Observabilityでデータを最新の状態に保つために、完全なスナップショットを何度も送信する外部監視システムからのコミットメントです。これは、SUSE Observabilityがヘルス同期の実行状況をユーザーに通知するのに役立ちます。
+
+=== 有効期限
+
+有効期限切れ間隔を使用して、健全性同期のサブストリームを構成し、外部システムから送信されなくなったデータを削除することができる。これは、サブストリームのソースが廃止され、SUSE Observabilityがそのソースから二度と連絡が取れなくなった場合に役立ちます。期限切れ間隔がなければ、以前に同期されたデータは永久にぶら下がったままになってしまう。
+
+=== 州をチェック
+
+ヘルスチェック状態は、外部のモニタリングシステムによって計算され、トポロジーエレメントにアタッチするために必要なすべての情報を含む。この状態を実体化し、コンポーネントにアタッチするには、ヘルス状態を特定のモニター（この場合は<<_external_monitor,ExternalMonitor>>）に帰属させる必要がある。
+
+トポロジーエレメントにアタッチされると、ヘルスチェック状態はエレメント自身のヘルス状態に寄与する。
+
+=== 外部モニター
+
+外部モニタを使用すると、健全性の状態をコンポーネントにアタッチし、SUSE Observabilityのハイライトページに改善ヒントを表示できます。このリソースは、xref:/setup/cli/cli-sts.adoc[SUSE Observability CLI]またはstackpackの一部として作成する必要があります。これはエクスターナ・モニターの例である：
+
+----
+    {
+      "_type": "ExternalMonitor",
+      "healthStreamUrn": "urn:health:kubernetes:external-health",
+      "description": "Monitored by external tool.",
+      "identifier": "urn:custom:external-monitor:heartbeat",
+      "name": "External Monitor Heartbeat",
+      "remediationHint": "",
+      "tags": [
+        "heartbeat"
+      ]
+    }
+----
+
+すべての`+ExternalMonitor+` ペイロードには以下の詳細がある：
+
+* `+_type+`:SUSE Observabilityはこれがモニタであることを認識する必要があるため、値は常に `+ExternalMonitor+`
+* `+healthStreamUrn+`:このフィールドは、xref:/configure/health/send-health-data/repeat_snapshots.adoc#_json_property_health[ヘルスペイロードの]一部として送信される`+urn+` と一致する必要がある。
+* `+description+`:外部モニターの説明。
+* `+identifier+`:`+urn:custom:external-monitor:....+` という形式の識別子で、外部モニタの設定を更新する際に外部モニタを一意に識別する。
+* `+name+`:外部モニターの名前
+* `+remediationHint+`:モニターが故障したときにユーザーができることを説明したもの。フォーマットはマークダウン。
+* `+tags+`:モニターにタグを追加して、SUSE Observabilityインスタンスのモニター概要（http://your-SUSE Observability-instance/#/monitors）で整理しやすくします。
+
+xref:/setup/cli/cli-sts.adoc[SUSE Observability CLIを]使用して`+External Monitor+` 。
+
+* `+externalMonitor.yaml+` という名前の新しい YAML ファイルを作成し、独自の外部モニターを作成するためにこの YAML テンプレートを追加します。
+```
+nodes:
+* _type: ExternalMonitor
+healthStreamUrn: urn:health:sourceId:streamId
+description: Monitored by external tool.
+identifier: urn:custom:external-monitor:heartbeat
+name: External Monitor Heartbeat
+remediationHint: |-
+  To remedy this issue with the deployment {{ labels.deployment }}, consider taking the following steps:
+ .. Look at the logs of the pods created by the deployment
+tags:
+  *** heartbeat
+```
+* cliを使って外部モニターを作成する
+```bash
+sts settings apply -f externalMonitor.yaml
+✅ Applied 1 setting node(s).
+
+TYPE            | ID              | IDENTIFIER                            | NAME                    +
+ExternalMonitor | 150031117290020 | urn:custom:external-monitor:heartbeat | External Monitor Heartbeat
+```
+
+== 参照
+
+* xref:/configure/health/send-health-data/send-health-data.adoc#_json_health_payload[JSONヘルスペイロード]
