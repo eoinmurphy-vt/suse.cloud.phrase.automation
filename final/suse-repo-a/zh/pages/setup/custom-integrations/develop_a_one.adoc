@@ -1,0 +1,180 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= 教程：开发自定义集成（StackPack）
+:revdate: 2026-01-08
+:page-revdate: {revdate}
+:description:  开发自定义集成（StackPack）
+
+[IMPORTANT]
+====
+此功能为预生产状态，尚未发布。仅当环境变量 `STS_EXPERIMENTAL_STACKPACK` 已设置时才可用。可能会发生不兼容更改。
+====
+
+== 目标
+
+作为开发者，您希望通过构建自定义 StackPack 将您的技术与 {stackstate-product-name} 集成。本教程将指导您通过 StackPack CLI 完成该过程。
+
+== 先决条件
+
+- 访问xref:/setup/cli/cli-sts.adoc[StackPack CLI]
+- 功能开关已启用：
++
+[source,bash]
+----
+export STS_EXPERIMENTAL_STACKPACK=true
+----
+
+
+== 如何开发自定义集成（StackPack）
+
+=== 创建一个新的 StackPack
+
+`scaffold` 子命令从可配置模板创建新的 StackPack 项目结构，简化 StackPack 开发的初始设置过程。该命令支持本地目录模板和 GitHub 托管模板。
+
+- 使用 CLI 创建一个新的 StackPack 项目：
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack
+----
+
+- 要使用特定的 GitHub 模板（默认：https://github.com/StackVista/stackpack-templates[stackvista/stackpack-templates]）：
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack --template-github-repo stackvista/stackpack-templates --template-name microservice --destination-dir stackpack
+✓ Validating arguments...
+✓ Checking destination directory...
+✓ Fetching template from github:stackvista/stackpack-templates@main:templates
+✓ Rendering templates...
+✓ Validating rendered templates...
+✓ Copying files to destination...
+Files copied:
+  README.md
+  provisioning/dashboard.sty
+  provisioning/metricbindings.sty
+  provisioning/monitors.sty
+  provisioning/remediation-hints/node-memory-pressure.md.hbs
+  provisioning/stackpack.sty
+  resources/deprovisioning.md
+  resources/error.md
+  resources/installed.md
+  resources/logo.png
+  resources/notinstalled.md
+  resources/overview.md
+  resources/provisioning.md
+  resources/waitingfordata.md
+  stackpack.yaml
+
+✅ ✓ Scaffold complete!
+
+Next steps:
+1. Review the generated files in: ./my-stackpack
+2. Check the ./my-stackpack/README.md for instructions on what to do next.
+...
+----
+
++
+- 要使用本地模板：
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack --template-local-dir ./templates --template-name webapp
+----
+
+
+=== 查看和自定义
+
+- 审查目标目录中的生成文件。
+- 编辑 `stackpack.yaml` 和其他文件以定义您的集成逻辑。
+  * 集成数据。要映射组件并摄取指标，请参见xref:setup/custom-integrations/otelmappings/README.adoc[添加Otel遥测映射]
+  * xref:setup/custom-integrations/monitors/index.adoc[添加监视器]
+  * xref:setup/custom-integrations/metric-bindings/index.adoc[添加指标绑定]
+
+[NOTE]
+====
+默认情况下：https://github.com/StackVista/stackpack-templates[stackvista/stackpack-templates] 模板是一个很好的起点，因为它包含了大多数扩展点（如监视器和指标绑定）的示例。
+====
+
+=== 测试您的 StackPack
+
+`test` 子命令通过自动化包 → 上传 → 安装/升级流程，简化了 StackPack 开发工作流程，并自动管理测试迭代的版本。
+
+- 在预生产环境中快速测试您的 StackPack（需要运行中的 SUSE Observability 实例）：
++
+[source,bash]
+----
+sts stackpack test -d ./my-stackpack --yes
+✅ Starting stackpack test sequence...
+  Stackpack: my-stackpack (current version: 0.0.1)
+
+Step 1/5: Checking installed version...
+
+Step 2/5: Creating temporary copy for testing...
+✅ ✓ Temporary copy created
+
+Step 3/5: Bumping version for testing...
+✅ ✓ Version bumped to: 0.0.1-cli-test.10000
+
+Step 4/5: Packaging stackpack...
+✅ ✓ Stackpack packaged successfully!
+
+Stackpack: my-stackpack (v0.0.1-cli-test.10000)
+Zip file: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.10000.zip
+✅ ✓ Stackpack packaged successfully
+
+Step 5/5: Uploading and installing/upgrading stackpack...
+✅ Uploaded StackPack: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.10000.zip
+NAME              | DISPLAY NAME      | VERSION
+my-stackpack | my-stackpack | 0.0.1-cli-test.10000
+✅ ✓ Stackpack uploaded successfully
+✅ StackPack instance installed
+ID             | NAME | STATUS      | VERSION         | LAST UPDATED
+274027256960772 | -    | PROVISIONING | 0.0.1-cli-test.1 | Fri Aug 29 09:10
+                |      |              | 0000             | :26 2025 CEST
+✅ ✓ Stackpack installed successfully
+
+✅ 🎉 Test sequence completed successfully!
+----
+
+- `test` 子命令将您的 StackPack 打包、上传并安装，带有测试版本后缀。
+- 在您的 StackPack 上进行迭代，使用 `test` 命令以获取快速反馈，进行更改，并观察安装/升级过程是否成功执行。在 Suse Observability UI 中查看已摄取的拓扑和遥测。
+
+=== 打包您已完成的 StackPack 版本
+
+`package` 子命令将 StackPack 目录打包成 zip 文件。此命令将所有必需的 StackPack 文件和目录打包成一个适当命名的 zip 压缩包，以便分发和部署。
+
+- 将您的 StackPack 打包成可分发的 zip 文件：
++
+[source,bash]
+----
+sts stackpack package -d ./my-stackpack
+✅ ✓ Stackpack packaged successfully!
+
+Stackpack: stackpack (v0.0.1)
+Zip file: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.zip
+----
+
+- 要指定输出文件：
++
+[source,bash]
+----
+sts stackpack package -d ./my-stackpack -f my-custom-archive.zip
+----
+
+=== 上传您的 StackPack
+
+`upload` 子命令将 zip 档案推送到运行中的 {stackstate-product-name} 实例。
+
+- 将归档文件上传到 {stackstate-product-name}：
++
+[source,bash]
+----
+sts stackpack upload -f ./my-stackpack-0.0.1.zip
+✅ ✓ Stackpack uploaded successfully!
+----
+
+=== 安装 StackPack
+
+通过 {stackstate-product-name} stackpacks UI xref:/stackpacks/about-stackpacks.adoc#_install_or_uninstall_a_stackpack[安装或升级您的 StackPack]。
+
+endif::ss-ff-stackpacks2_enabled[]

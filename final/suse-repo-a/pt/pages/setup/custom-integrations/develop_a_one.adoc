@@ -1,0 +1,180 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= Tutorial: Desenvolva uma Integração Personalizada (StackPack)
+:revdate: 2026-01-08
+:page-revdate: {revdate}
+:description:  Desenvolva uma Integração Personalizada (StackPack)
+
+[IMPORTANT]
+====
+Este recurso está em pré-produção e não foi lançado. Está disponível apenas se a variável de ambiente `STS_EXPERIMENTAL_STACKPACK` estiver definida. Alterações incompatíveis podem ocorrer.
+====
+
+== Meta
+
+Como desenvolvedor, você deseja integrar sua tecnologia com {stackstate-product-name} ao construir um StackPack personalizado. Este tutorial o guia pelo processo usando o StackPack CLI.
+
+== Pré-requisitos
+
+- Acesso ao xref:/setup/cli/cli-sts.adoc[StackPack CLI]
+- Flag de funcionalidade habilitada:
++
+[source,bash]
+----
+export STS_EXPERIMENTAL_STACKPACK=true
+----
+
+
+== Como Desenvolver uma Integração Personalizada (StackPack)
+
+=== Crie um novo StackPack
+
+O subcomando `scaffold` cria uma nova estrutura de projeto StackPack a partir de modelos configuráveis, agilizando o processo de configuração inicial para o desenvolvimento do StackPack. O comando suporta tanto modelos de diretório local quanto modelos hospedados no GitHub.
+
+- Crie um novo projeto StackPack usando a CLI:
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack
+----
+
+- Para usar um modelo específico do GitHub (padrão: https://github.com/StackVista/stackpack-templates[stackvista/stackpack-templates]):
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack --template-github-repo stackvista/stackpack-templates --template-name microservice --destination-dir stackpack
+✓ Validating arguments...
+✓ Checking destination directory...
+✓ Fetching template from github:stackvista/stackpack-templates@main:templates
+✓ Rendering templates...
+✓ Validating rendered templates...
+✓ Copying files to destination...
+Files copied:
+  README.md
+  provisioning/dashboard.sty
+  provisioning/metricbindings.sty
+  provisioning/monitors.sty
+  provisioning/remediation-hints/node-memory-pressure.md.hbs
+  provisioning/stackpack.sty
+  resources/deprovisioning.md
+  resources/error.md
+  resources/installed.md
+  resources/logo.png
+  resources/notinstalled.md
+  resources/overview.md
+  resources/provisioning.md
+  resources/waitingfordata.md
+  stackpack.yaml
+
+✅ ✓ Scaffold complete!
+
+Next steps:
+1. Review the generated files in: ./my-stackpack
+2. Check the ./my-stackpack/README.md for instructions on what to do next.
+...
+----
+
++
+- Para usar um modelo local:
++
+[source,bash]
+----
+sts stackpack scaffold --name my-stackpack --template-local-dir ./templates --template-name webapp
+----
+
+
+=== Revise e personalize
+
+- Revise os arquivos gerados no diretório de destino.
+- Edite `stackpack.yaml` e outros arquivos para definir sua lógica de integração.
+  * Integrando dados. Para mapear componentes e ingerir métricas, veja xref:setup/custom-integrations/otelmappings/README.adoc[Adicionando Mapeamentos de Telemetria Otel]
+  * xref:setup/custom-integrations/monitors/index.adoc[Adicionando Monitores]
+  * xref:setup/custom-integrations/metric-bindings/index.adoc[Adicionando Vínculos de Métrica]
+
+[NOTE]
+====
+O modelo padrão: https://github.com/StackVista/stackpack-templates[stackvista/stackpack-templates] é um ótimo ponto de partida, pois contém exemplos para a maioria dos pontos de extensão, como Monitores e Vínculos de Métricas.
+====
+
+=== Teste seu StackPack
+
+O subcomando `test` que simplifica o fluxo de trabalho de desenvolvimento do StackPack, automatizando a sequência pacote → upload → instalação/atualização, com gerenciamento automático de versões para iterações de teste.
+
+- Teste rapidamente seu StackPack em um ambiente de pré-produção (requer uma instância SUSE Observability em execução):
++
+[source,bash]
+----
+sts stackpack test -d ./my-stackpack --yes
+✅ Starting stackpack test sequence...
+  Stackpack: my-stackpack (current version: 0.0.1)
+
+Step 1/5: Checking installed version...
+
+Step 2/5: Creating temporary copy for testing...
+✅ ✓ Temporary copy created
+
+Step 3/5: Bumping version for testing...
+✅ ✓ Version bumped to: 0.0.1-cli-test.10000
+
+Step 4/5: Packaging stackpack...
+✅ ✓ Stackpack packaged successfully!
+
+Stackpack: my-stackpack (v0.0.1-cli-test.10000)
+Zip file: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.10000.zip
+✅ ✓ Stackpack packaged successfully
+
+Step 5/5: Uploading and installing/upgrading stackpack...
+✅ Uploaded StackPack: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.10000.zip
+NAME              | DISPLAY NAME      | VERSION
+my-stackpack | my-stackpack | 0.0.1-cli-test.10000
+✅ ✓ Stackpack uploaded successfully
+✅ StackPack instance installed
+ID             | NAME | STATUS      | VERSION         | LAST UPDATED
+274027256960772 | -    | PROVISIONING | 0.0.1-cli-test.1 | Fri Aug 29 09:10
+                |      |              | 0000             | :26 2025 CEST
+✅ ✓ Stackpack installed successfully
+
+✅ 🎉 Test sequence completed successfully!
+----
+
+- O subcomando `test` empacota, faz upload e instala seu StackPack com um sufixo de versão de teste.
+- Itere sobre seu StackPack, usando o comando `test` para feedback rápido, faça alterações e observe que o processo de instalação/atualização foi executado com sucesso. Revise a topologia e a telemetria ingeridas na interface do usuário do SUSE Observability UI.
+
+=== Empacote sua versão final do StackPack
+
+O subcomando `package` cria um arquivo zip a partir dos diretórios do StackPack. Este comando empacota todos os arquivos e diretórios necessários do StackPack em um arquivo zip nomeado corretamente para distribuição e implantação.
+
+- Empacote seu StackPack em um zip distribuível:
++
+[source,bash]
+----
+sts stackpack package -d ./my-stackpack
+✅ ✓ Stackpack packaged successfully!
+
+Stackpack: stackpack (v0.0.1)
+Zip file: /Users/viliakov/Workspace/src/github/stackstate-cli/my-stackpack/my-stackpack-0.0.1-cli-test.zip
+----
+
+- Para especificar o arquivo de saída:
++
+[source,bash]
+----
+sts stackpack package -d ./my-stackpack -f my-custom-archive.zip
+----
+
+=== Faça upload do seu StackPack
+
+O subcomando `upload` envia o arquivo zip para uma instância {stackstate-product-name} em execução.
+
+- Faça upload do arquivo compactado para {stackstate-product-name}:
++
+[source,bash]
+----
+sts stackpack upload -f ./my-stackpack-0.0.1.zip
+✅ ✓ Stackpack uploaded successfully!
+----
+
+=== Instale o StackPack
+
+xref:/stackpacks/about-stackpacks.adoc#_install_or_uninstall_a_stackpack[Instale ou atualize seu StackPack] via a {stackstate-product-name} Stackpacks UI.
+
+endif::ss-ff-stackpacks2_enabled[]
