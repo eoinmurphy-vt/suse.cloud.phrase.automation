@@ -1,0 +1,55 @@
+= APIキー（非推奨）
+:revdate: 2025-07-22
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+テレメトリーデータを{stackstate-product-name} に送信するために、{stackstate-product-name} に対する認証に API キーが使用された。Helmエージェントのインストールでは、これは`+stackstate.apiKey+` helm変数を設定することで行われた。
+
+APIキーおよびIngestion APIキーは非推奨であり、2026年第4四半期に削除される予定です。サービス・トークンは現在、テレメトリ・データの送信にも好ましい認証メカニズムである。
+
+xref:/k8s-suse-rancher-prime.adoc#_installing_the_suse_observability_agent[StackPackインストール]フローの{stackstate-product-name} に新しいクラスタを追加するフローには、Rancher RBAC用のRBAC Agentと互換性のあるクラスタ固有のトークンの作成が含まれます。
+
+== APIキーからサービス・トークンへの移行
+
+単一のAPIキーの使用から、遠隔測定データのためのService Tokensの使用に移行するには、2つのオプションがあります。
+
+1. クラスタごとにService Tokenに移行する。これは設定に少し手間がかかるが、Rancher RBACをサポートしている。
+2. すべてのKubernetesクラスタとOTelコレクタから使用する単一のService Tokenに移行する。これはRancher RBACをサポートしていない。
+
+すべてのエージェントと Open Telemetry コレクターをサービス・トークンに移行した後、{stackstate-product-name} をインストールするための Helm の値から`+global.receiverApiKey+` または`+stackstate.apiKey+` を削除し、`+helm upgrade+` を実行して変更を適用できます。
+
+=== クラスタごとのサービス・トークンへの移行
+
+1. UIでKubernetes Stackpackを開く
+2. 移行するクラスタを拡張する
+3. Create new service token "ボタンをクリックしてクラスタ固有のサービス・トークンを取得し、トークンをコピーします。
+4. スタックパックのエージェントインストール/アップグレード手順に従って、APIキーとしてサービストークンを使用してエージェントをクラスタに再デプロイします。
+
+UIを使う代わりに、CLIを使ってトークンを生成することもできますxref:setup/security/authentication/service_tokens#_telemetry_data_ingestion[。]また、移行するクラスタに`+update-scoped-permissions+` scopedを割り当ててください。その他の手順は、UIの場合と変わらない。
+
+=== 単一サービス・トークンへの移行
+
+CLIでサービス・トークンを生成するxref:setup/security/authentication/service_tokens#_telemetry_data_ingestion[：]
+
+[,sh]
+----
+> sts rbac create-subject --subject my-agent
+✅ Created subject 'my-agent'
+> sts rbac grant --subject my-agent --permission update-metrics
+✅ Granted permission 'update-metrics' on 'system' to subject 'my-agent'
+PERMISSION   | RESOURCE
+update-metrics | system
+----
+
+複数のクラスタから使用されるトークンに対しては機能しないため、`+update-scoped-permissions+` パーミッションを追加しないでください。
+
+Kubernetes StackPack の UI とxref:setup/otel/getting-started/getting-started-k8s.adoc[Open Telemetry コレクターのドキュメントに]ある指示に従って、エージェントと Open Telemetry コレクターを再デプロイします。生成されたService TokenをAPIキーとして以下のように使用する。
+
+== Ingestion APIキーからの移行
+
+インジェストAPIキーは、外部ツールがSUSE Observabilityクラスタにデータ（メトリクス、イベント、トレースなど）をインジェストするために使用します。
+これらのツールには、STS AgentまたはOTel Collectorが含まれます。サービス・トークンには、これと同じ、あるいはそれ以上の機能がある。<<_migrate_to_a_service_token_per_cluster, クラスタごとのサービス・トークン>>または<<_migrate_to_a_single_service_token, 単一のサービス・トークンに>>移行するには、APIキー（前の設定）と同じ手順に従ってください。
+
+== 詳細はこちら
+
+* xref:use/security/k8s-service-tokens.adoc[サービス・トークン]
