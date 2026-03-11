@@ -1,0 +1,103 @@
+= Escrever consultas PromQL para gráficos representativos
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidade do SUSE
+
+== Diretrizes
+
+Quando o {stackstate-product-name} mostra dados em um gráfico, ele quase sempre precisa alterar a resolução dos dados armazenados para que eles caibam no espaço disponível para o gráfico. Para obter os gráficos mais representativos possíveis, siga estas diretrizes:
+
+* Não consulte a métrica bruta, mas sempre agregue ao longo do tempo (usando as funções `+*_over_time+` ou `+rate+` ).
+* Use o parâmetro `+${__interval}+` como o intervalo para agregações ao longo do tempo; ele será ajustado automaticamente com a resolução do gráfico.
+* Use o parâmetro `+${__rate_interval}+` como o intervalo para as agregações do `+rate+`. Ele também será ajustado automaticamente com a resolução do gráfico, mas leva em conta os comportamentos específicos do `+rate+`.
+* Métricas de projeto apenas para os rótulos usados pela agregação de diferentes séries temporais.
+
+A aplicação de uma agregação geralmente significa que é feita uma compensação para enfatizar certos padrões em métricas mais do que outros. Por exemplo, para janelas de tempo grandes, o site `+max_over_time+` mostrará todos os picos, mas não mostrará todos os pontos baixos. Enquanto o `+min_over_time+` faz exatamente o oposto e o `+avg_over_time+` suaviza os picos e as depressões. Para mostrar esse comportamento, aqui está um exemplo de vinculação de métrica usando o uso da CPU dos pods. Para experimentá-lo você mesmo, copie-o para um arquivo YAML e use a xref:/setup/custom-integrations/metric-bindings/index.adoc#_create_or_update_the_metric_binding_in_stackstate[CLI para aplicá-lo] em seu próprio site {stackstate-product-name} (você pode removê-lo mais tarde).
+
+A projeção de várias séries temporais em potencial para um subconjunto de seus rótulos dobra as séries temporais que diferem em um detalhe irrelevante.  Ao criar uma vinculação métrica, somente os rótulos usados na legenda são relevantes.  Da mesma forma, ao criar monitores, somente os rótulos necessários para o mapeamento para um componente (status do monitor em um) devem ser retornados pela consulta.
+
+----
+- _type: MetricBinding
+  chartType: line
+  enabled: true
+  tags: {}
+  unit: short
+  name: CPU Usage (different aggregations and intervals)
+  priority: HIGH
+  identifier: urn:stackpack:my-stackpack:metric-binding:pod-cpu-usage-a
+  queries:
+    - expression: sum(max_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: max_over_time dynamic interval
+    - expression: sum(min_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: min_over_time dynamic interval
+    - expression: sum(avg_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: avg_over_time dynamic interval
+    - expression: sum(last_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: last_over_time dynamic interval
+    - expression: sum(max_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: max_over_time 1m interval
+    - expression: sum(min_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: min_over_time 1m interval
+    - expression: sum(avg_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: avg_over_time 1m interval
+    - expression: sum(last_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: last_over_time 1m interval
+  scope: (label = "stackpack:kubernetes" and type = "pod")
+----
+
+Depois de aplicá-lo, abra a perspectiva de métricas de um pod em {stackstate-product-name} (de preferência um pod com alguns picos e depressões no uso da CPU). Amplie o gráfico usando o ícone no canto superior direito para obter uma visão melhor. Agora você também pode alterar a janela de tempo para ver quais são os efeitos das diferentes agregações (30 minutos vs. 24 horas, por exemplo).
+
+[CAUTION]
+====
+Quando a associação de métricas não especificar uma agregação, o site {stackstate-product-name} usará automaticamente a agregação `+last_over_time+` para reduzir o número de pontos de dados em um gráfico. Consulte também xref:/setup/custom-integrations/metric-bindings/writing-promql.adoc#_why_is_aggregation_necessary[Por que a agregação é necessária?] para obter uma explicação.
+====
+
+
+image::k8s/metric-aggregation-differences-30m.png[O gráfico para essa métrica vinculada aos últimos 30 m, there are only a few lines in the chart visible because most time series are on top of each other]image::k8s/metric-aggregation-differences-24h.png[O mesmo gráfico, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
+
+== Por que a agregação é necessária?
+
+Antes de mais nada, por que você deveria usar uma agregação? Não faz sentido recuperar mais pontos de dados do armazenamento de métricas do que cabe no gráfico. Portanto, o site {stackstate-product-name} determina automaticamente a etapa necessária entre dois pontos de dados para obter um bom resultado. Para janelas de tempo curtas (por exemplo, um gráfico que mostra apenas uma hora de dados), isso resulta em um pequeno passo (cerca de 10 segundos). As métricas geralmente são coletadas apenas a cada 30 segundos, portanto, para etapas de 10 segundos, o mesmo valor será repetido por três etapas antes de mudar para o próximo valor. Para diminuir o zoom para uma janela de tempo de uma semana, será necessário um passo muito maior (cerca de uma hora, dependendo do tamanho exato do gráfico na tela).
+
+Quando as etapas se tornam maiores do que a resolução dos pontos de dados coletados, é necessário tomar uma decisão sobre como resumir os pontos de dados do intervalo de uma hora em um único valor. Quando uma agregação ao longo do tempo já estiver especificada na consulta, ela será usada para fazer isso. No entanto, se nenhuma agregação for especificada, ou quando o intervalo de agregação for menor que a etapa, a agregação `+last_over_time+` será usada, com o tamanho `+step+` como intervalo. O resultado é que somente o último ponto de dados de cada hora é usado para "resumir" todos os pontos de dados daquela hora.
+
+Para resumir, ao executar uma consulta PromQL para um intervalo de tempo de uma semana com uma etapa de uma hora, essa consulta:
+
+----
+container_cpu_usage /1000000000
+----
+
+é automaticamente convertido para:
+
+----
+last_over_time(container_cpu_usage[1h]) /1000000000
+----
+
+Experimente você mesmo no https://observability.suse.com/#/metrics?alias=Pod%20%24%7Bpod_name%7D&promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock-shop%22%2Cpod_name%3D~%22carts.%2A%22%7D%5B1h%5D%29%20%2F1000000000&timeRange=LAST_7_DAYS[playground]
+
+image::k8s/k8s-metric-queries-for-chart-last-over-time.png[Último ao longo do tempo]image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[Máximo ao longo do tempo com intervalo fixo]image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[Máximo ao longo do tempo com intervalo automático]
+
+Muitas vezes, esse comportamento não é intencional e é melhor decidir por si mesmo que tipo de agregação é necessária. Usando diferentes funções de agregação, é possível enfatizar determinado comportamento (ao custo de ocultar outro comportamento). É mais importante ver picos, depressões, um gráfico suave etc.? Em seguida, use o parâmetro `+${__interval}+` para o intervalo, pois ele é automaticamente substituído pelo tamanho `+step+` usado para a consulta. O resultado é que todos os pontos de dados na etapa são usados.
+
+image::k8s/k8s-metric-queries-small-range.png[Uma faixa fixa, shorter than the data resolution]image::k8s/k8s-metric-queries-interval-for-range.png[Faixa automática, based on step but with a lower limit]
+
+O parâmetro `+${__interval}+` evita outro problema. Quando o tamanho do `+step+` e, portanto, o valor do `+${__interval}+`, diminuísse para um tamanho menor do que a resolução dos dados métricos armazenados, isso resultaria em lacunas no gráfico.
+
+Portanto, o `+${__interval}+` nunca diminuirá menos do que 2* o intervalo de raspagem padrão (o intervalo de raspagem padrão é de 30 segundos) do agente {stackstate-product-name}.
+
+Por fim, a função `+rate()+` exige que pelo menos dois pontos de dados estejam no intervalo para calcular uma taxa. Com menos de dois pontos de dados, a taxa não terá um valor. Portanto, é garantido que `+${__rate_interval}+` seja sempre pelo menos 4 * o intervalo de raspagem. Isso garante que não haja lacunas inesperadas ou outros comportamentos estranhos nos gráficos de taxas, a menos que faltem dados.
+
+Há algumas publicações excelentes em blogs na Internet que explicam isso com mais detalhes:
+
+* https://www.robustperception.io/step-and-query_range/[Etapa e intervalo de consulta]
+* https://www.robustperception.io/what-range-should-i-use-with-rate/[Que intervalo devo usar com rate()?]
+* https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-%5F%5Frate_interval-for-prometheus-rate-queries-that-just-work/[Introdução de __rate_interval na Grafana]
+
+== Veja também
+
+Mais alguns recursos sobre como entender as consultas PromQL:
+
+* https://promlabs.com/blog/2020/06/18/the-anatomy-of-a-promql-query/[Anatomia de uma consulta PromQL]
+* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[Seleção de dados no PromQL]
+* https://iximiuz.com/en/posts/prometheus-vector-matching/[Como unir várias métricas]
+* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[Agregação ao longo do tempo]
