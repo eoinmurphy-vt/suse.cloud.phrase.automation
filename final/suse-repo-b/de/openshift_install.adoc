@@ -1,0 +1,453 @@
+= OpenShift installieren
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: {stackstate-product-name} Selbst gehostet
+
+== Bevor Sie beginnen
+
+[NOTE]
+====
+Zusätzliche Hinweise für die Installation auf:
+
+* *OpenShift-Cluster mit eingeschränkten Rechten*: Lesen Sie die xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc[erforderlichen Berechtigungen].
+* *Kubernetes*: Siehe die xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[Kubernetes-Installationsanweisungen].
+====
+
+
+Bevor Sie mit der Installation von {stackstate-product-name} beginnen:
+
+* Prüfen Sie, ob Ihre OpenShift-Umgebung die xref:/setup/install-stackstate/requirements.adoc[Anforderungen] erfüllt
+* Stellen Sie sicher, dass Sie die OpenShift-Kommandozeilen-Tools installiert haben (`oc`)
+* Fügen Sie das {stackstate-product-name} helm-Repository zum lokalen helm-Client hinzu:
+
+[,text]
+----
+helm repo add suse-observability https://charts.rancher.com/server-charts/prime/suse-observability
+helm repo update
+----
+
+== Installieren Sie {stackstate-product-name}
+
+[NOTE]
+====
+Für Umgebungen ohne Internetzugang, auch bekannt als Air-Gapped-Umgebungen, befolgen Sie zunächst xref:/k8s-suse-rancher-prime-air-gapped.adoc[diese zusätzlichen Anweisungen].
+
+Achten Sie auch darauf, dass Sie die Anweisungen für den Einbau von Luftschächten befolgen, wenn diese für einen Schritt vorhanden sind.
+====
+
+
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_project[Erstellen Sie das Projekt, in dem {stackstate-product-name} installiert werden soll.]
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#create-values-yaml[`values.yaml` Konfigurationsdatei erstellen]
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_openshift_values_yaml[Erstellen Sie die Datei `openshift-values.yaml` ]
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_deploy_suse_observability_with_helm[Bereitstellung von {stackstate-product-name} mit Helm]
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_access_the_suse_observability_ui[Zugriff auf die Benutzeroberfläche {stackstate-product-name} ]
+. xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_manually_create_securitycontextconfiguration_objects[Manuelles Erstellen von `SecurityContextConfiguration` Objekten]
+
+=== Projekt erstellen
+
+Beginnen Sie damit, das Projekt zu erstellen, in dem Sie {stackstate-product-name} installieren möchten. In unserem Beispiel werden wir den Namensraum `suse-observability` verwenden:
+
+[,text]
+----
+oc new-project suse-observability
+----
+
+[NOTE]
+====
+Der Projektname wird in den Befehlen `helm` und `kubectl` als Namespace-Name im Flag `--namespace` verwendet.
+====
+
+
+[#create-values-yaml]
+=== `values.yaml` Konfigurationsdatei erstellen
+
+Die Datei `values.yaml` enthält die gesamte Konfiguration, die für die Bereitstellung von {stackstate-product-name} erforderlich ist, einschließlich Ihres Lizenzschlüssels, der Basis-URL, des Administratorkennworts und des Größenprofils.
+
+[NOTE]
+====
+*Bevor Sie fortfahren:* Stellen Sie sicher, dass Sie die neueste Version der Helm-Karten mit `helm repo update` haben.
+====
+
+[tabs]
+====
+Empfohlene Methode::
++
+--
+[NOTE]
+=====
+Die Konfigurationsmethode `global.suseObservability` ist ab der Version `2.8.0` verfügbar. Für frühere Versionen verwenden Sie die Legacy-Methode.
+=====
+
+Erstellen Sie eine Datei `values.yaml` mit der Konfigurationsstruktur `global.suseObservability`:
+
+[source,yaml]
+----
+global:
+  # Optional: Override image registry (defaults to registry.rancher.com)
+  # Only needed for air-gapped environments or custom registries
+  # imageRegistry: "your-private-registry.example.com"
+
+  # Optional: Override storage class (uses cluster default if not set)
+  # storageClass: "your-storage-class"
+
+  suseObservability:
+    # Required: Your {stackstate-product-name} license key
+    license: "YOUR-LICENSE-KEY"
+
+    # Required: Base URL for {stackstate-product-name}
+    # Use http://localhost:8080 if ingress is not configured yet
+    baseUrl: "https://observability.example.com"
+
+    # Required: Sizing profile
+    # Available: trial, 10-nonha, 20-nonha, 50-nonha, 100-nonha,
+    #            150-ha, 250-ha, 500-ha, 4000-ha
+    sizing:
+      profile: "150-ha"
+
+    # Required: Plain text Admin password
+    adminPassword: "your-password"
+    # Instead of adminPassword you can provide a bcrypt hashed password with adminPasswordBcrypt
+    # Generate with: htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'
+    # adminPasswordBcrypt: "$2a$10$..."
+
+    # Optional: Receiver API key (auto-generated if not provided)
+    # receiverApiKey: "your-receiver-api-key"
+
+    # Optional: Pull secret for private registry
+    # pullSecret:
+    #   username: "registry-user"
+    #   password: "registry-pass"
+----
+
+TIP: Um einen bcrypt-Passwort-Hash zu erzeugen, verwenden Sie: `htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'`
+
+Weitere Konfigurationsoptionen, einschließlich Affinitätseinstellungen, finden Sie unter xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[Konfigurieren von Kubernetes-Affinitäten].
+
+--
+Veraltete Methode (veraltet)::
++
+--
+[WARNING]
+=====
+Diese Methode ist veraltet. Bei Neuinstallationen ist die oben empfohlene Methode anzuwenden. Für bestehende Installationen, die diese Methode verwenden, lesen Sie bitte den xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[Migrationsleitfaden] für die Umstellung auf das neue Konfigurationsformat.
+=====
+
+Sie können die Dateien {stackstate-product-name} `baseConfig_values.yaml`, `sizing_values.yaml` und `affinity_values.yaml` erzeugen, indem Sie ein separates Helm Chart ausführen. Die `suse-observability/suse-observability-values` Tabelle. Eine Beispiel-Befehlszeile lautet:
+
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set baseUrl='<suse-observability-base-url>' \
+  --set sizing.profile='<sizing.profile>' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+Dieser Befehl erzeugt die Dateien `$VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml`, `$VALUES_DIR/suse-observability-values/templates/sizing_values.yaml` und `$VALUES_DIR/suse-observability-values/templates/affinity_values.yaml`, die die erforderliche Konfiguration für die Installation von {stackstate-product-name} Helm Chart enthalten.
+
+[NOTE]
+=====
+Die {stackstate-product-name} Administrator-Passwörter werden durch den obigen Befehl automatisch generiert und als Kommentare in der generierten `basicConfig.yaml` Datei ausgegeben. Die eigentlichen Werte enthalten die `bcrypt` Hashes dieser Passwörter, so dass sie sicher in der Helm-Veröffentlichung im Cluster gespeichert sind.
+=====
+
+
+Die Werte, die an dieses Diagramm übergeben werden können, sind:
+
+[cols="1,1,2"]
+|===
+| Konfiguration | Wert | Beschreibung
+
+| Grundkonfiguration erzeugen
+| `basicConfig.generate`
+| Schalten Sie die Erstellung der Datei `basicConfig_values.yaml` ein oder aus.
+
+| API-Schlüssel des Empfängers
+| `receiverApiKey`
+| Der API-Schlüssel, der von {stackstate-product-name} verwendet wird, um Daten von Agenten zu erhalten. Dies ist ein geheimer Schlüssel, der geheim gehalten werden sollte. Wenn Sie dies weglassen, wird ein Zufallsschlüssel für Sie generiert.
+
+| Basis-URL
+| `baseUrl`
+| Die `<STACKSTATE_BASE_URL>`. Die externe URL für {stackstate-product-name}, die Benutzer und Agenten für die Verbindung verwenden. Zum Beispiel `https://suse-observability.internal`. Wenn Sie sich noch nicht für eine Ingress-Konfiguration entschieden haben, verwenden Sie `http://localhost:8080`. Dies kann später in der generierten Datei aktualisiert werden.
+
+| Benutzername und Passwort**
+| `-u` `-p`
+| Der Benutzername und das Kennwort, die von {stackstate-product-name} verwendet werden, um Bilder abzurufen. Für Air-Gapped-Umgebungen müssen dies der Benutzername und das Passwort für die lokale Docker-Registry sein.
+
+| Lizenzschlüssel
+| `license`
+| Der {stackstate-product-name} Lizenzschlüssel.
+
+| Standard-Passwort
+| `adminPassword`
+| Das Passwort für den Standardbenutzer (`admin`) für den Zugriff auf die Benutzeroberfläche von {stackstate-product-name}. Alternativ können Sie ein mit bcrypt verschlüsseltes Passwort unter `adminPasswordBcrypt` angeben. Es kann nur eine der beiden Optionen gleichzeitig verwendet werden.
+
+| Bild-Register
+| `imageRegistry`
+| Das Register, in dem die {stackstate-product-name} Bilder gehostet werden. Wenn nicht angegeben, ist der Standardwert "quay.io".
+
+| Geheimen Benutzernamen ziehen
+| `pullSecret.username`
+| Der Benutzername, der zum Abrufen von Images aus der Docker-Registry verwendet wird, in der die {stackstate-product-name} -Images gehostet werden.
+
+| Geheimes Passwort ziehen
+| `pullSecret.password`
+| Das Passwort, das verwendet wird, um Images aus der Docker-Registry zu ziehen, in der die {stackstate-product-name} Images gehostet werden.
+
+| Dimensionierung erzeugen
+| `sizing.generate`
+| Schalten Sie die Erstellung der Datei `sizing_values.yaml` ein oder aus.
+
+| Profil für die Größenbestimmung
+| `sizing.profile`
+| Ein Versuch, 10-Nonha, 20-Nonha, 50-Nonha, 100-Nonha, 150-ha, 250-ha, 500-ha. Auf der Grundlage dieser Profile können Sie die Datei `sizing_values.yaml` generieren, die Standardgrößen für die {stackstate-product-name} Ressourcen und die Konfiguration enthält, die im HA- oder Nicht-HA-Modus bereitgestellt werden sollen. Zum Beispiel erzeugt 10-nonha eine `sizing_values.yaml`, um eine Nicht-HA-Instanz {stackstate-product-name} zur Beobachtung eines 10-Knoten-Clusters in einem Nicht-Hochverfügbarkeitsmodus bereitzustellen. Derzeit ist der Wechsel von einer Nicht-HA- zu einer HA-Umgebung nicht möglich. Wenn Sie davon ausgehen, dass in Ihrer Umgebung etwa 150 Knoten beobachtet werden müssen, ist es besser, sich sofort für HA zu entscheiden.
+
+| Pod AntiAffinität
+| `affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution`
+| Erzwingen Sie, dass die Replikate der gleichen Datendienste auf verschiedenen Kubernetes-Knoten geplant werden. Gilt nur für `HA` Profile. Entweder `true` oder `false`. Die Standardeinstellung ist `true` - die Verteilung auf verschiedene Knoten wird erzwungen.
+|===
+
+[NOTE]
+=====
+Speichern Sie die erzeugten Dateien `basicConfig.yaml` und `sizing_values.yaml` sicher. Sie können diese Dateien für Upgrades wiederverwenden, was Zeit spart und sicherstellt, dass {stackstate-product-name} weiterhin denselben API-Schlüssel verwendet. Dies ist wünschenswert, da dies bedeutet, dass Agenten und andere Datenlieferanten für {stackstate-product-name} nicht mehr aktualisiert werden müssen.
+Sie können die Dateien unabhängig voneinander neu generieren, indem Sie die Schalter `basicConfig.generate=false` und `sizing.generate=false` verwenden, um eine der Dateien zu deaktivieren, während die zuvor generierte Version der Datei in `output-dir` erhalten bleibt.
+=====
+
+[NOTE]
+=====
+Das Diagramm {stackstate-product-name} Werte erzeugt Affinitätskonfigurationen, die Sie zusammen mit dem Hauptdiagramm {stackstate-product-name} verwenden können, um das Pod-Planungsverhalten zu steuern. Weitere Informationen finden Sie in der Dokumentation xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[Configure Kubernetes Affinities (Kubernetes-Affinitäten konfigurieren] ).
+=====
+
+--
+====
+
+=== erstellen. `openshift-values.yaml`
+
+Da OpenShift ein strengeres Sicherheitsmodell als Kubernetes hat, müssen alle Standard-Sicherheitskontexte in der Bereitstellung deaktiviert werden.
+
+Erstellen Sie eine Helm-Werte-Datei `openshift-values.yaml` mit dem folgenden Inhalt und speichern Sie sie neben der generierten Datei `values.yaml`. Diese enthält die Werte, die für ein OpenShift-Deployment benötigt werden.
+
+[,yaml]
+----
+elasticsearch:
+  prometheus-elasticsearch-exporter:
+    podSecurityContext: ""
+  sysctlInitContainer:
+    enabled: false
+scc:
+  enabled: true
+----
+
+=== Bereitstellung von {stackstate-product-name} mit Helm
+
+Der empfohlene Einsatz von {stackstate-product-name} ist ein produktionsbereites, hochverfügbares Setup mit vielen redundant ausgeführten Diensten. Bei Bedarf ist es auch möglich, {stackstate-product-name} in einer nicht-redundanten Konfiguration zu betreiben, bei der jeder Dienst nur eine einzige Replik hat. Diese Einstellung wird nur für eine Testumgebung empfohlen.
+
+Für Umgebungen mit Luftzufuhr befolgen Sie die Anweisungen für Installationen mit Luftzufuhr.
+
+[tabs]
+====
+Empfohlene Methode::
++
+--
+
+So stellen Sie {stackstate-product-name} in einem Hochverfügbarkeits-Setup auf OpenShift bereit:
+
+. Bevor Sie loslegen:
+ ** xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_project[Erstellen Sie das Projekt, in dem {stackstate-product-name} installiert werden soll.]
+ ** <<create-values-yaml,`values.yaml` Konfigurationsdatei erstellen>>
+ ** <<_create_openshift_values_yaml,erstellen. `openshift_values.yaml`>>
+. Stellen Sie die neueste Version von {stackstate-product-name} mit dem folgenden Befehl im Namensraum `suse-observability` bereit:
+
+[,text]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values values.yaml \
+  --values openshift-values.yaml \
+  --set "clickhouse.sidecars[0].securityContext.runAsUser=null" \
+suse-observability \
+suse-observability/suse-observability
+----
+
+--
+Empfohlene Methode (Air-gapped)::
++
+--
+
+So stellen Sie {stackstate-product-name} in einem Air-Gapped-Setup auf OpenShift bereit:
+
+. Bevor Sie loslegen:
+ ** xref:/k8s-suse-rancher-prime-air-gapped.adoc[Befolgen Sie diese zusätzlichen Anweisungen für luftdurchlässige Installationen].
+ ** xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_project[Erstellen Sie das Projekt, in dem {stackstate-product-name} installiert werden soll.]
+ ** <<create-values-yaml,`values.yaml` Konfigurationsdatei erstellen>>
+ ** <<_create_openshift_values_yaml,erstellen. `openshift_values.yaml`>>
+. Stellen Sie die neueste Version von {stackstate-product-name} mit dem folgenden Befehl im Namensraum `suse-observability` bereit:
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values local-docker-registry.yaml \
+  --values values.yaml \
+  --values openshift-values.yaml \
+  --set "clickhouse.sidecars[0].securityContext.runAsUser=null" \
+suse-observability \
+suse-observability/suse-observability
+----
+
+--
+Veraltete Methode (veraltet)::
++
+--
+
+[WARNING]
+=====
+Diese Methode ist veraltet. Bei Neuinstallationen ist die oben empfohlene Methode anzuwenden. Für bestehende Installationen, die diese Methode verwenden, lesen Sie bitte den xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[Migrationsleitfaden] für die Umstellung auf das neue Konfigurationsformat.
+=====
+
+So stellen Sie {stackstate-product-name} in einem Hochverfügbarkeits-Setup auf OpenShift bereit:
+
+. Bevor Sie loslegen:
+ ** xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_project[Erstellen Sie das Projekt, in dem {stackstate-product-name} installiert werden soll.]
+ ** <<create-values-yaml,Erzeugen Sie `baseConfig_values.yaml` und `sizing_values.yaml`>>
+ ** <<_create_openshift_values_yaml,erstellen. `openshift_values.yaml`>>
+. Stellen Sie die neueste Version von {stackstate-product-name} mit dem folgenden Befehl im Namensraum `suse-observability` bereit:
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+  --values openshift-values.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
+
+--
+Herkömmliche Methode (Air-gapped)::
++
+--
+
+[WARNING]
+=====
+Diese Methode ist veraltet. Bei Neuinstallationen ist die oben empfohlene Methode anzuwenden. Für bestehende Installationen, die diese Methode verwenden, lesen Sie bitte den xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[Migrationsleitfaden] für die Umstellung auf das neue Konfigurationsformat.
+=====
+
+So stellen Sie {stackstate-product-name} in einem Air-Gapped-Setup auf OpenShift bereit:
+
+. Bevor Sie loslegen:
+ ** xref:/k8s-suse-rancher-prime-air-gapped.adoc[Befolgen Sie diese zusätzlichen Anweisungen für luftdurchlässige Installationen].
+ ** xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc#_create_project[Erstellen Sie das Projekt, in dem {stackstate-product-name} installiert werden soll.]
+ ** <<create-values-yaml,Erzeugen Sie `baseConfig_values.yaml` und `sizing_values.yaml`>>
+ ** <<_create_openshift_values_yaml,erstellen. `openshift_values.yaml`>>
+. Stellen Sie die neueste Version von {stackstate-product-name} mit dem folgenden Befehl im Namensraum `suse-observability` bereit:
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values local-docker-registry.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+  --values openshift-values.yaml \
+  --set "clickhouse.sidecars[0].securityContext.runAsUser=null" \
+suse-observability \
+suse-observability-A.B.C.tgz
+----
+
+--
+====
+
+Nach der Installation sollte die Version {stackstate-product-name} im Namespace {stackstate-product-name} aufgeführt sein und alle Pods sollten laufen:
+
+[,text]
+----
+# Check the release is listed
+helm list --namespace suse-observability
+
+# Check pods are running
+# It may take some time for all pods to be installed or available
+kubectl get pods --namespace suse-observability
+----
+
+=== Zugriff auf die Benutzeroberfläche {stackstate-product-name} 
+
+Nachdem {stackstate-product-name} bereitgestellt wurde, können Sie überprüfen, ob alle Pods funktionieren:
+
+[,bash]
+----
+kubectl get pods --namespace suse-observability
+----
+
+Wenn alle Pods in Betrieb sind, können Sie eine Port-Weiterleitung aktivieren:
+
+[,bash]
+----
+kubectl port-forward service/suse-observability-router 8080:8080 --namespace suse-observability
+----
+
+{stackstate-product-name} wird nun in Ihrem Browser unter `https://localhost:8080` verfügbar sein. Melden Sie sich mit dem Benutzernamen `admin` und dem in der Datei `values.yaml` angegebenen Standardpasswort an.
+
+Die nächsten Schritte sind
+
+* xref:/setup/install-stackstate/kubernetes_openshift/ingress.adoc[{stackstate-product-name} außerhalb des Clusters zugänglich machen]
+* xref:/k8s-quick-start-guide.adoc[Beginnen Sie mit der Überwachung Ihrer Kubernetes-Cluster]
+* Geben Sie Ihren xref:/setup/security/authentication/README.adoc[Mitarbeitern Zugang].
+
+== Manuelles Erstellen von `SecurityContextConfiguration` Objekten
+
+Wenn Sie kein Administratorkonto verwenden können, um {stackstate-product-name} auf OpenShift zu installieren, bitten Sie Ihren Administrator, die folgenden `SecurityContextConfiguration` Objekte anzuwenden.
+
+[,yaml]
+----
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ template "common.fullname.short" . }}-{{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    suse-observability.io/note: "Ignored by helm uninstall, has to be deleted manually"
+fsGroup:
+  type: RunAsAny
+groups:
+- system:serviceaccounts:{{ .Release.Namespace }}
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- ephemeral
+- persistentVolumeClaim
+- projected
+- secret
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: true
+allowPrivilegedContainer: false
+readOnlyRootFilesystem: false
+seccompProfiles:
+  - runtime/default
+----
+
+== Siehe auch
+
+* Weitere Konfigurations- und Verwaltungsoptionen finden Sie in der Kubernetes-Dokumentation - xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[Verwalten einer {stackstate-product-name} Kubernetes-Installation]
+* xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[Migrationsleitfaden für bestehende Installationen]
