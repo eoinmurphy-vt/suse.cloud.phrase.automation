@@ -1,0 +1,544 @@
+= {stackstate-product-name}
+:revdate: 2025-07-25
+:page-revdate: {revdate}
+:description: {stackstate-product-name}
+
+== 导言
+
+{stackstate-product-name}可用于 Kubernetes 集群及其工作负载的可观察性。
+
+安装{stackstate-product-name} 、{stackstate-product-name} UI 扩展和{stackstate-product-name} Agents 总共需要约 30 分钟。
+
+== 获得帮助
+
+如需支持，请在https://scc.suse.com/[Customer Center (SCC)] SUSE 上提交支持案例。
+
+== 先决条件
+
+=== 许可证密钥
+
+{stackstate-product-name} 服务器的许可证密钥可通过订阅选项卡中的 SUSE 客户中心获取，并显示为 "{stackstate-product-name}" 注册码。该许可证有效期至 Rancher Prime 订阅结束。
+
+=== 要求
+
+要安装{stackstate-product-name} ，请确保群集有足够的 CPU 和内存容量。具体要求如下。
+
+{stackstate-product-name} 有不同的安装方式可供选择。可以在高可用性（HA）或单实例（非 HA）设置中安装{stackstate-product-name} 。建议在测试或小型环境中使用非 HA 设置。对于生产环境，建议在 HA 设置中安装{stackstate-product-name} 。
+
+HA 生产设置可支持 150 到 4000 个观察节点。在该规模表中，一个观察节点被视为 4 个 vCPU 和 16GB 内存，即我们的`+default node size+` 。
+如果观察到的集群中的节点更大，它们可以算作多个`+default nodes+` ，因此在选择配置文件时，一个 12vCPU 和 48GB 的节点算作 3 个`+default nodes+` 。
+非HA 设置可支持多达 100 个`+default nodes+` 进行观测。
+
+
+下表列出了在群集中部署{stackstate-product-name} 服务器所需的资源，其中考虑到了将观察到的`+default nodes+` 数量以及是否应进行 HA 安装。
+
+|===
+|  | 试用 | 10 个非HA | 20 个非HA | 50 个非HA | 100 个非HA | 150 HA | 250 HA | 500 HA | 4000 HA
+
+| *CPU 请求（内核）*
+| 6.945
+| 6.945
+| 9.245
+| 13.945
+| 23.545
+| 49.245
+| 61.245
+| 84.745
+| 210.05
+
+| *CPU 限制（内核）*
+| 15.02
+| 15.02
+| 19.32
+| 28.72
+| 47.87
+| 104
+| 127
+| 175.38
+| 278.95
+
+| *内存申请*
+| 23180Mi
+| 23180Mi
+| 27056Mi
+| 31582Mi
+| 48088Mi
+| 129958Mi
+| 142426Mi
+| 161106Mi
+| 264330Mi
+
+| *内存限制*
+| 23718Mi
+| 23718Mi
+| 27708Mi
+| 31614Mi
+| 48120Mi
+| 134762Mi
+| 147030Mi
+| 165910Mi
+| 327550Mi
+
+| *存储*
+| 153613Mi
+| 338957Mi
+| 379917Mi
+| 482317Mi
+| 533517Mi
+| 2654430Mi
+| 2756950Mi
+| 3678260Mi
+| 7159862Mi
+|===
+
+NOTE: 另外还需要 20% 的资源用于 pod（不平等）分配、控制平面和代理安装。
+
+[NOTE]
+====
+配置文件显示的需求量代表运行{stackstate-product-name} 服务器所需的资源总量。
+确保 Suse Observability 服务器的所有不同服务都能分配：
+
+* 对于非 HA 安装，每个节点的最小容量为 4VCPU, 8GB
+* 对于多达 500 个节点的 HA 安装，每个节点的最小容量为 8VCPU, 16GB
+* 对于 4000 节点的 HA 安装，每个节点的最小容量为 16VCPU、32GB
+====
+
+
+[NOTE]
+====
+试用设置是 10 个非HA 设置，配置为 3 天保留和较低的磁盘空间要求。
+====
+
+
+这些只是{stackstate-product-name} 在不同安装选项中可消耗资源的上限和下限。实际资源使用量取决于所使用的功能、配置的资源限制和动态使用模式，如部署或 DaemonSet 扩展。对于 Rancher Prime 客户，我们建议从默认要求开始，并监控{stackstate-product-name} 组件的资源使用情况。
+
+[NOTE]
+====
+最低要求不包括备用 CPU/内存容量，以确保应用程序顺利滚动更新。
+====
+
+
+=== 存储
+
+{stackstate-product-name} 对需要存储数据的服务使用持久卷要求。群集的默认存储类别将用于所有服务，除非被命令行或`+values.yaml+` 文件中指定的值覆盖。所有服务都有一个预配置的容量大小，可以满足您的需求，但也可以根据需要使用变量进行自定义。
+
+[NOTE]
+====
+{stackstate-product-name} 要求底层存储基于闪存（固态硬盘）或类似性能。
+====
+
+[NOTE]
+====
+对于生产环境，由于存在数据损坏的潜在风险，不建议在{stackstate-product-name} 中使用 NFS 进行存储调配，也不支持 NFS。
+====
+
+
+对于我们的不同安装配置文件，默认存储要求如下：
+
+|===
+|  | 试用 | 10 个非HA | 20 个非HA | 50 个非HA | 100 个非HA | 150 HA | 250 HA | 500 HA | 4000 HA
+
+| *保留时间（天数）*
+| 3
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+
+| *存储要求*
+| 125GB
+| 280GB
+| 420GB
+| 420GB
+| 600GB
+| 2TB
+| 2TB
+| 2.5TB
+| 5.5TB
+|===
+
+有关所用默认设置的更多详情，请参阅xref:/setup/install-stackstate/kubernetes_openshift/storage.adoc[配置存储]。
+
+=== 舵
+
+{stackstate-product-name} 是通过 Helm 安装的，其最低版本为 3.13.1。
+
+=== 不同的组成部分
+
+==== {stackstate-product-name} 服务器
+
+这是安装的内部托管服务器部分。它包含一套用于存储可观测性数据的服务：
+
+* 拓扑（堆栈图）
+* 度量（VictoriaMetrics）
+* 痕迹（ClickHouse）
+* 日志（ElasticSearch）
+
+此外，它还包含一套用于所有可观测任务的服务，如通知、状态管理、监控等。
+
+==== {stackstate-product-name} 代理
+
+轻量级{stackstate-product-name} 代理安装在下游工作节点上。它可以收集和报告指标、事件、跟踪和日志，并提供实时可观察性和洞察力，从而实现对 IT 环境的主动监控和故障排除。
+
+{stackstate-product-name} 版本的代理还使用 eBPF 作为监控所有工作负载及其通信的轻量级方法。它还能解码大多数常见 L7 协议的 RED（速率、错误和持续时间）信号，如 TCP、HTTP、TLS、Redis 等。
+
+==== Rancher Prime - Observability UI 扩展
+
+这是 Rancher Manager 的用户界面扩展，可整合{stackstate-product-name} 观察到的健康信号。它可以直接访问任何资源的健康状况，并链接到{stackstate-product-name} 的用户界面，以便进一步调查。
+
+=== 在何处安装{stackstate-product-name} 服务器
+
+{stackstate-product-name} 服务器应安装在为 Observability 服务的下游集群中。请参考下图。
+
+要使{stackstate-product-name} 正常工作，它需要
+
+* https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/manage-clusters/create-kubernetes-persistent-storage[Kubernetes 持久存储]在可观察性集群中提供，以存储指标、事件等。
+* 可观察性集群，以支持在 HTTPS URL 上向 Rancher、{stackstate-product-name} 用户和{stackstate-product-name} 代理公开{stackstate-product-name} 的方式。这可以通过使用入口控制器的入口配置来实现，或者也可以使用{stackstate-product-name} 服务的（云）负载平衡器来实现，更多信息请参阅https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/kubernetes-resources-setup/load-balancer-and-ingress-controller[文档] Rancher。
+
+image::k8s/prime/SUSEObservabilityDeployment.png[建筑学]
+
+=== 安装前
+
+在安装{stackstate-product-name} 服务器之前，必须在安装{stackstate-product-name} 服务器的群集中设置默认存储类：
+
+* *对于 k3*默认创建的本地路径存储类类型为 rancher.io/local-path。
+* *对于 EKS、AKS 和 GKE，*默认设置为一个存储类别
+* *用于 RKE2 节点驱动程序*：默认情况下不创建存储类。您需要在安装{stackstate-product-name} 之前创建一个。
+
+== 安装 {stackstate-product-name}
+
+[NOTE]
+====
+*很高兴知道*
+
+如果您使用 Rancher 管理器创建了群集，并希望从本地终端而不是网络终端运行下面的配置命令，只需从群集仪表板复制或下载 kubeconfig（见下图），然后将其粘贴（或将下载的文件）到一个便于查找的文件中，例如 ~/.kube/config-rancher，并设置环境变量 KUBECONFIG=$HOME/.kube/config-rancher
+====
+
+
+image::k8s/prime/rancher_cluster_dashboard.png[牧场主]
+
+满足前提条件后，您就可以继续安装了。应用程序商店尚未提供安装程序。相反，您可以通过集群的 kubectl shell 安装{stackstate-product-name} 。
+
+现在，您可以按照下面的说明进行 HA 或 NON-HA 设置。
+
+[NOTE]
+====
+请注意，目前还不支持从 HA 升级或降级到 NON-HA，反之亦然。
+====
+
+
+=== 安装
+
+. 获取舵标图
++
+.helm_repo.sh
+[,text]
+----
+helm repo add suse-observability https://charts.rancher.com/server-charts/prime/suse-observability
+helm repo update
+----
+
+. 创建配置并部署
++
+[tabs]
+====
+建议方法::
++
+--
+[NOTE]
+=====
+`+global.suseObservability+` 配置方法从`+2.8.0+` 版本开始提供。对于早期版本，请使用传统方法。
+=====
+
+创建一个包含配置的`+values.yaml+` 文件：
+
+[source,yaml]
+----
+global:
+  # Optional: Override image registry (defaults to registry.rancher.com)
+  # Only needed for air-gapped environments or custom registries
+  # imageRegistry: "your-private-registry.example.com"
+
+  suseObservability:
+    # Required: Your {stackstate-product-name} license key
+    license: "YOUR-LICENSE-KEY"
+
+    # Required: Base URL for {stackstate-product-name}
+    baseUrl: "https://observability.example.com"
+
+    # Required: Sizing profile
+    # Available: trial, 10-nonha, 20-nonha, 50-nonha, 100-nonha,
+    #            150-ha, 250-ha, 500-ha, 4000-ha
+    sizing:
+      profile: "150-ha"
+
+    # Required: Plain text Admin password
+    adminPassword: "your-password"
+    # Instead of adminPassword you can provide a bcrypt hashed password with adminPasswordBcrypt
+    # Generate with: htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'
+    # adminPasswordBcrypt: "$2a$10$..."
+
+    # Optional: Receiver API key (auto-generated if not provided)
+    # receiverApiKey: "your-receiver-api-key"
+
+    # Optional: Affinity for pod scheduling (see affinity documentation)
+    # affinity:
+    #   nodeAffinity: ...
+    #   podAntiAffinity:
+    #     requiredDuringSchedulingIgnoredDuringExecution: true
+----
+
+`+baseUrl+` 必须是 Rancher、用户和{stackstate-product-name} 代理访问{stackstate-product-name} 所通过的 URL。URL 必须包括方案，例如`+https://observability.internal.mycompany.com+` 。另请参阅<<_accessing_suse_observability,访问{stackstate-product-name}>> 。
+
+`+sizing.profile+` 、10 公顷、20 公顷、50 公顷、100 公顷、150 公顷、250 公顷、500 公顷、4000 公顷。根据此配置文件，资源和配置会自动应用于 HA 或非 HA 模式。目前，从非 HA 环境转移到 HA 环境是不可能的，因此，如果您预计您的环境需要观察大约 150 个节点，请立即选择 HA 配置文件。
+
+只需一条命令即可部署：
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values values.yaml \
+    suse-observability \
+    suse-observability/suse-observability
+----
+
+或者，不使用值文件，直接使用`+--set+` flags 进行部署：
+
+[,bash]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --set global.suseObservability.license="YOUR-LICENSE-KEY" \
+    --set global.suseObservability.baseUrl="https://observability.example.com" \
+    --set global.suseObservability.sizing.profile="150-ha" \
+    --set global.suseObservability.adminPassword='$2a$10$...' \
+    suse-observability \
+    suse-observability/suse-observability
+----
+
+[WARNING]
+=====
+使用单个默认密码是开始使用{stackstate-product-name} 的最佳xref:/setup/security/authentication/authentication_options.adoc[选择]，但对于生产设置，还有xref:/setup/security/authentication/authentication_options.adoc[更安全的身份验证选项]可供选择。
+=====
+
+[NOTE]
+=====
+有关亲缘配置选项，请参阅xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[配置 Kubernetes 亲缘]。
+=====
+--
+旧方法（已废弃）::
++
+--
+[WARNING]
+=====
+该方法已被弃用。对于新安装的设备，请使用上述推荐方法。对于使用此方法的现有安装，请参阅xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[迁移指南]以过渡到新的配置格式。
+=====
+
+生成舵图数值文件：
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set baseUrl='<suse-observability-base-url>' \
+  --set rancherUrl='<rancher-prime-base-url>' \
+  --set sizing.profile='<sizing.profile>' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+`+baseUrl+` 必须是 Rancher、用户和{stackstate-product-name} 代理访问{stackstate-product-name} 所通过的 URL。URL 必须包括方案，例如`+https://observability.internal.mycompany.com+` 。另请参阅<<_accessing_suse_observability,访问{stackstate-product-name}>> 。
+
+要使用 UI 扩展在 Rancher 中查看健康信息，请将`+rancherUrl+` 设置为 Rancher 的 URL（准确地说，是其 Origin）。
+
+该命令生成的文件`+$VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml+` 、`+$VALUES_DIR/suse-observability-values/templates/sizing_values.yaml+` 和`+$VALUES_DIR/suse-observability-values/templates/affinity_values.yaml+` 包含安装{stackstate-product-name} 舵图所需的配置。
+
+[NOTE]
+=====
+{stackstate-product-name} 管理员密码将由上述命令自动生成，并在生成的`+basicConfig.yaml+` 文件中以注释形式输出。更多信息，请参阅xref:/setup/security/authentication/single_password.adoc[单密码]。
+实际值包含这些密码的`+bcrypt+` 哈希值，以便安全地存储在集群中的 Helm 版本中。
+=====
+
+[WARNING]
+=====
+使用单个默认密码是开始使用{stackstate-product-name} 的最佳xref:/setup/security/authentication/authentication_options.adoc[选择]，但对于生产设置，还有xref:/setup/security/authentication/authentication_options.adoc[更安全的身份验证选项]可供选择。
+=====
+
+[NOTE]
+=====
+安全存储生成的`+basicConfig.yaml+` 、`+sizing_values.yaml+` 和`+affinity_values.yaml+` 文件。您可以重复使用这些文件进行升级，从而节省时间，并确保{stackstate-product-name} 继续使用相同的 API 密钥。这样做是可取的，因为这意味着{stackstate-product-name} 的代理和其他数据提供者无需更新。
+可以使用`+basicConfig.generate=false+` 和`+sizing.generate=false+` 开关单独重新生成这些文件，禁用其中任何一个，同时在`+output-dir+` 中保留先前生成的文件版本。
+=====
+
+[NOTE]
+=====
+{stackstate-product-name} 值图表会生成亲和配置，您可以将其与主{stackstate-product-name} 图表一起使用，以控制 pod 的调度行为。更多信息，请参阅xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[配置 Kubernetes Affinities]。
+=====
+
+. 配置{stackstate-product-name} ，将 Rancher 用作 OIDC 提供商。
+
+    Generate the `+oidc_values.yaml+`. This guide assumes that you save it in the `+$VALUES_DIR+`
+
++
+.$VALUES_DIR/oidc_values.yaml
+[,yaml]
+----
+stackstate:
+  authentication:
+    rancher:
+      clientId: "<oidc-client-id>"
+      secret: "<oidc-secret>"
+      baseUrl: "<rancher-url>"
+----
++
+[NOTE]
+=====
+如果计划使用 Rancher RBAC 来确定下游群集的可见性范围，则需要执行此步骤。
+有关如何配置{stackstate-product-name} 以将 Rancher 用作 OIDC 提供商的详细说明，请参阅xref:/setup/security/authentication/oidc.adoc#_rancher[配置{stackstate-product-name} 以将 Rancher 用作 OIDC 提供商]。
+=====
+
+. 使用生成的值部署{stackstate-product-name} 舵图：
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+    --values $VALUES_DIR/oidc_values.yaml \
+    suse-observability \
+    suse-observability/suse-observability
+----
+--
+====
+
+
+== 访问 {stackstate-product-name}
+
+{stackstate-product-name} Helm 图表支持创建 Ingress 资源，以便在群集之外访问{stackstate-product-name} 。当群集中有入口控制器时，请按照xref:/setup/install-stackstate/kubernetes_openshift/ingress.adoc[以下说明]进行设置。确保生成的 URL 使用带有有效证书（非自签名证书）的 TLS。
+
+如果您更喜欢使用负载平衡器而不是入口，请公开`+suse-observability-router+` 服务。负载平衡器的 URL 需要使用有效而非自签的 TLS 证书。
+
+== 安装用户界面扩展
+
+要安装用户界面扩展，请从 rancher 用户界面启用用户界面扩展
+
+image::k8s/prime/ui_extensions.png[安装]
+
+启用用户界面扩展后，请按照以下步骤操作：
+
+. 在 rancher UI 上导航至扩展，在扩展的 "可用 "部分，你会发现 Observability 扩展。
+. 安装 Observability 扩展。
+. 安装完成后，在 rancher UI 的左侧面板上会出现 _{stackstate-product-name}_部分。
+. 导航至 _{stackstate-product-name}_部分并选择 "配置"。在本节中，您可以添加{stackstate-product-name} 服务器详细信息并进行连接。
+. 按照下面_获取服务令牌_部分的说明填写详细信息。
+
+=== 获取服务令牌：
+
+. 登录{stackstate-product-name} 实例。
+. 从左上角选择 CLI。
+. 注意 API 标记，并在本地计算机上安装{stackstate-product-name} cli。
+. 运行
+
+
+----
+sts service-token create --name suse-observability-extension --roles stackstate-k8s-troubleshooter
+----
+
+
+=== {stackstate-product-name} Rancher UI 扩展兼容性矩阵
+
+|===
+| 用户界面扩展版本 | 支持的 Rancher 版本
+
+| 0.x.x
+| 2.8
+
+| 1.x.x
+| 2.9
+
+| 2.x.x
+| 2.10 +
+2.11 +
+2.12
+|===
+
+== 安装{stackstate-product-name} Agent
+
+. 在{stackstate-product-name} UI 中打开主菜单，选择堆栈包。
+. 选择 Kubernetes StackPack。
+. 单击新实例并提供要添加的下游群集的群集名称。确保 Rancher 集群的名称与此处提供的名称一致。点击安装。
+. 在说明列表中找到与您的群组最匹配的部分
+. 执行提供的安装代理说明，这些说明可在`+kubectl shell+` 中运行，您可通过 Rancher UI 为群集打开该说明。不过，如果本地计算机已安装 Helm 并获得连接到群集的授权，也可以从本地计算机运行。
+. 安装代理后，可在{stackstate-product-name} UI 和_SUSE Rancher - Observability UI 扩展_中看到群集。
+
+== 所需特权
+
+部署{stackstate-product-name} 代理需要以下系统权限：
+
+. `+hostPID: true+`:要将进程标识符（PID）与相应的控制组（cgroups）关联起来，就需要该权限。这种关联对于将流程准确映射到各自的容器至关重要。
+. `+hostNetwork: true+` (可选）：默认情况下，节点代理通过`+hostNetwork: true+` 运行，以便于从节点上所有已配置的 pod 抓取开放指标数据，而无需额外的网络策略。如果禁用，则必须定义适当的网络策略，以确保代理可以访问必要的端点。
+. `+securityContext.privileged: true+`:几项关键功能都需要这种高级权限。它主要允许代理向每个网络命名空间注入 eBPF（扩展伯克利数据包过滤器）程序，以达到监控目的。读取所有网络命名空间的连接跟踪（conntrack）表也需要它。虽然这份清单并不详尽，但未来的发展目标是在可行的情况下，用更细粒度的 Linux 功能来取代这种宽泛的权限。
+
+此外，代理还需要在其 pod 中挂载容器运行时套接字。这项配置至关重要，因为它有助于与容器运行时守护进程直接通信，而这是从主机系统上的所有容器中获取度量和元数据的前提条件。
+
+== 牧场主专用公益广告模板
+
+`+Rancher-restricted+` 配置（link:https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/authentication-permissions-and-global-configuration/psa-config-templates[Pod Security Admission (PSA) Configuration Templates]）是一种限制性很强的设置，符合当前保护 pod 安全的最佳实践。
+
+在默认执行限制性安全策略的 Kubernetes 集群上运行 Rancher 时，有两种安装 SUSE Observability Helm 图表的方法：
+
+* *豁免整个图表命名空间*以及其他link:https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/authentication-permissions-and-global-configuration/psa-config-templates#exempting-required-rancher-namespaces[所需的 Rancher 命名空间]。
+* 通过将`+elasticsearch.sysctlInitContainer.enabled+` 设置为`+false+` ，*禁用具有特权的 Elasticsearch init 容器*。这需要手动增加节点上的link:https://www.elastic.co/docs/deploy-manage/deploy/self-managed/vm-max-map-count[虚拟内存设置](`+vm.max_map_count+`)。另请参阅xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_elasticsearch[Elasticsearch 所需权限]。
+
+由于 SUSE Observability Agent 必须在特权模式下运行，因此建议将其安装到计划不受限制性策略约束的命名空间中。
+
+[NOTE]
+====
+从`+v2.3.8+` 及以后的版本开始，所有 SUSE Observability Helm 图表容器都配置了以下`+securityContext+` 设置：
+
+. `+securityContext.capabilities.drop+` 是 `+["ALL"]+`
+. `+securityContext.seccompProfile.type+` 是 `+"RuntimeDefault"+`
+. `+securityContext.runAsNonRoot+` 是 `+true+`
+. `+securityContext.allowPrivilegeEscalation+` 是 `+false+`
+====
+
+== 单点登录
+
+要使用自己的身份验证提供商启用单点登录，xref:/setup/security/authentication/authentication_options.adoc[请参阅此处]。
+
+== 常见问题和意见：
+
+. 在添加用户界面扩展之前，是否必须安装{stackstate-product-name} 代理？
+ ** 这不是强制性的，用户界面扩展可以独立安装。
+. 在进行用户界面扩展之前，是否必须安装{stackstate-product-name} Server？
+ ** 是的，这是必须的，因为您需要在配置中提供{stackstate-product-name} 端点
+. 我们可以在本地群集或下游群集上安装{stackstate-product-name} 吗？
+ ** 两种选择都可以。
+. 要监控下游群集，我们应该从应用商店安装{stackstate-product-name} 代理，还是从{stackstate-product-name} UI 添加新实例？
+ ** 根据用户的偏好，这两个选项都可以使用。
+
+== 未决问题
+
+. 卸载和重新安装 Observability 的用户界面扩展时，我们注意到服务令牌不会被删除，而是会在重新安装时重新使用。每当我们卸载扩展程序时，都应删除服务令牌。
+ ** 卸载用户界面扩展时，应删除这些信息。
+. 安装扩展后，{stackstate-product-name} UI 会在与 Rancher UI 相同的标签页中打开。
+ ** 您可以使用 Shift 单击在新标签页中打开，这将成为默认行为
+. 请注意，目前还不支持从 HA 升级或降级到 NON-HA，反之亦然。
+
+== 故障排除
+
+有关安装 Observability UI 扩展的任何问题，请参阅扩展xref:/setup/install-stackstate/extension-troubleshooting.adoc[故障排除指南]。
