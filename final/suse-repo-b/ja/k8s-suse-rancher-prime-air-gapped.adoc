@@ -1,0 +1,254 @@
+= {stackstate-product-name} をエアギャップ・モードで取り付ける
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: {stackstate-product-name}
+
+本書は、エアギャップ環境においてHelmチャートを使用し、{stackstate-product-name} をインストールするためのステップバイステップのガイドを提供します。このプロセスでは、インターネットにアクセスできるホストで必要なDockerイメージとHelmチャートを準備し、それらをプライベートネットワーク内のホストに転送し、Dockerイメージをプライベートレジストリにコピーし、Helmチャートをデプロイする。
+
+== 前提条件
+
+=== ローカルホスト（インターネットアクセス）
+
+* *オペレーティングシステム*：LinuxまたはMacOS
+* *インストールされているツール*：
+ ** https://www.docker.com/products/docker-desktop/[ドッカー]
+ ** https://helm.sh/docs/intro/install/[ヘルムクリ]
+ ** ソース・レジストリからDockerイメージをダウンロードするためのスクリプト（リンクはこのガイドの後半で提供します）。
+* *インターネットアクセス*Quay.ioからDockerイメージを、ChartMuseumからHelmチャートをプルするのに必要。
+
+=== プライベート・ネットワーク・ホスト
+
+* *アクセス*ホストへのSSHアクセス。
+* *インストールされているツール*：
+ ** https://www.docker.com/products/docker-desktop/[ドッカー]
+ ** https://helm.sh/docs/intro/install/[ヘルムクリ]
+ ** ソース・レジストリからDockerイメージをダウンロードするためのスクリプト（リンクはこのガイドの後半で提供します）。
+ ** プライベートDockerレジストリにイメージをアップロードするためのネットワークアクセスと認証情報。
+ ** ターゲットクラスタにHelmチャートをインストールするように設定されたKubeconfig。
+
+== DockerイメージとHelmチャートの準備
+
+ローカルホストで以下のコマンドを実行し、必要なDockerイメージとHelmチャートを取得する：
+
+*HelmリポジトリをローカルのHelmキャッシュに追加する：*
+
+[,bash]
+----
+# Adding the Helm repository for {stackstate-product-name}
+helm repo add suse-observability https://charts.rancher.com/server-charts/prime/suse-observability
+helm repo update
+----
+
+*チャートの最新バージョンを取得。これらのコマンドはチャートのTGZアーカイブをダウンロードする：*
+
+[,bash]
+----
+# Downloading the chart for {stackstate-product-name}
+# The file will be named suse-observability-k8s-A.B.C.tgz
+helm fetch suse-observability/suse-observability
+
+# Downloading the helper chart that generates values for {stackstate-product-name}
+# The file will be named suse-observability-values-L.M.N.tgz
+helm fetch suse-observability/suse-observability-values
+----
+
+*Dockerイメージを保存するためのBashスクリプトをダウンロードする：*
+
+[,bash]
+----
+# o11y-get-images.sh
+curl -LO https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-get-images.sh
+# o11y-save-images.sh
+curl -LO https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-save-images.sh
+
+# Make the scripts executable
+chmod a+x o11y-get-images.sh o11y-save-images.sh
+----
+
+*Dockerイメージの展開と保存：*
+
+[,bash]
+----
+# Extract the list of images from the Helm chart and save it to a file.
+./o11y-get-images.sh -f suse-observability-A.B.C.tgz > o11y-images.txt
+----
+
+[NOTE]
+====
+`suse-observability-A.B.C.tgz` を、先にダウンロードしたチャート・アーカイブの実際のファイル名に置き換える。
+====
+
+
+[,bash]
+----
+# Save Docker images to an archive.
+# The script expects the file o11y-images.txt to contain the list of images used by {stackstate-product-name}.
+# The Docker images will be saved to o11y-images.tar.gz.
+./o11y-save-images.sh -i o11y-images.txt -f o11y-images.tar.gz
+----
+
+== 必要なファイルをリモートホストにコピーする
+
+以下のファイルをローカルホストからプライベートネットワーク上のホストにコピーする：
+
+* o11y-images.txt（{stackstate-product-name} チャートで必要とされる画像のリスト）
+* o11y-images.tar.gz （{stackstate-product-name} の Docker イメージを含むアーカイブ）
+* https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-load-images.sh[o11y-load-images.sh](DockerイメージをレジストリにアップロードするBashスクリプト)
+* 先にダウンロードしたヘルム海図：
+ ** suse-observability-A.B.C.tgz
+ ** suse-observability-values-L.M.N.tgz
+
+== アーカイブからプライベートレジストリへのDockerイメージのリストア
+
+*プライベートレジストリに画像をアップロードする：*
+
+[,bash]
+----
+# Load Docker images from the archive and push them to the private registry.
+# Replace <private-registry> with your private registry's URL.
+export DST_REGISTRY_USERNAME="..."
+export DST_REGISTRY_PASSWORD="..."
+./o11y-load-images.sh -d registry.example.com:5043 -i o11y-images.txt -f o11y-images.tar.gz
+----
+
+[NOTE]
+====
+宛先レジストリが認証を使用しない場合は、環境変数`DST_REGISTRY_USERNAME` と`DST_REGISTRY_PASSWORD` を設定しないか、空の値に設定しなければならない*。
+====
+
+
+== インストール {stackstate-product-name}
+
+{stackstate-product-name} Helmチャートをエアギャップ環境にインストールするには、DockerイメージURLで使用されるレジストリをオーバーライドする必要があります。このガイドでは、xref:/k8s-suse-rancher-prime#_installation[インストールの]セットアップに従いますが、事前にダウンロードしたHelmアーカイブとプライベートDockerレジストリを使用します。
+
+[tabs]
+====
+推奨方法::
++
+--
+[NOTE]
+=====
+`global.suseObservability` 設定方法は、バージョン`2.8.0` 以降で利用可能です。それ以前のバージョンの場合は、レガシー・メソッドを使用する。
+=====
+
+`values.yaml` 、プライベートレジストリを含むコンフィギュレーションファイルを作成する：
+
+[source,yaml]
+----
+global:
+  # Required: Your private registry URL
+  imageRegistry: "registry.example.com:5043"
+
+  suseObservability:
+    # Required: Your {stackstate-product-name} license key
+    license: "YOUR-LICENSE-KEY"
+
+    # Required: Base URL for {stackstate-product-name}
+    baseUrl: "https://observability.example.com"
+
+    # Required: Sizing profile
+    sizing:
+      profile: "150-ha"
+
+    # Required: Plain text Admin password
+    adminPassword: "your-password"
+    # Instead of adminPassword you can provide a bcrypt hashed password with adminPasswordBcrypt
+    # Generate with: htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'
+    # adminPasswordBcrypt: "$2a$10$..."
+
+    # Optional: Pull secret for private registry authentication
+    pullSecret:
+      username: "registry-user"
+      password: "registry-pass"
+----
+
+ダウンロードしたチャートアーカイブを使用してデプロイします：
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values values.yaml \
+    suse-observability \
+    suse-observability-A.B.C.tgz
+----
+
+[NOTE]
+=====
+推奨される方法では、`suse-observability` チャートをダウンロードするだけでよい（`suse-observability-values` は不要）。画像リストはメインチャートから抽出される。
+=====
+--
+レガシーメソッド（非推奨）::
++
+--
+[WARNING]
+=====
+このメソッドは非推奨。新規設置の場合は、上記の推奨方法を使用してください。この方法を使用している既存のインストールについては、新しい構成フォーマットに移行するためのxref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[移行ガイドを]参照してください。
+=====
+
+以下の内容でprivate-registry.yamlファイルを作成する：
+
+[,yaml]
+----
+global:
+  imageRegistry: registry.example.com:5043
+----
+
+*ヘルムチャート値ファイル生成コマンド：*
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+    --set license='<licenseKey>' \
+    --set baseUrl='<baseURL>' \
+    --set rancherUrl='<rancherURL>' \
+    --set sizing.profile='<sizing.profile>' \
+    suse-observability-values suse-observability-values-L.M.N.tgz \
+    --output-dir $VALUES_DIR
+----
+
+プライベートレジストリの認証が必要な場合は、プルシークレットのユーザー名とパスワードを含める：
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+    --set license='<licenseKey>' \
+    --set baseUrl='<baseURL>' \
+    --set rancherUrl='<rancherURL>' \
+    --set sizing.profile='<sizing.profile>' \
+    --set pullSecret.username='registry-user' \
+    --set pullSecret.password='registry-pass' \
+    suse-observability-values suse-observability-values-L.M.N.tgz \
+    --output-dir $VALUES_DIR
+----
+
+*{stackstate-product-name} ヘルムチャートの展開：*
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+    --values private-registry.yaml \
+    suse-observability \
+    suse-observability-A.B.C.tgz
+----
+--
+====
+
+*デプロイメントの検証：*
+
+[,bash]
+----
+kubectl get pod -n suse-observability
+----

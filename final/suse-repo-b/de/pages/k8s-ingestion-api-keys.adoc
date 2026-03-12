@@ -1,0 +1,55 @@
+= API-Schlüssel (veraltet)
+:revdate: 2025-07-22
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+Ein API-Schlüssel wurde zur Authentifizierung gegenüber {stackstate-product-name} verwendet, um Telemetriedaten an {stackstate-product-name} zu senden. Bei einer Helm-Agent-Installation wurde dies durch Setzen der Helm-Variablen `stackstate.apiKey` erreicht.
+
+API-Schlüssel und Ingestion-API-Schlüssel sind veraltet und werden im vierten Quartal 2026 entfernt. Service-Tokens sind jetzt der bevorzugte Authentifizierungsmechanismus, auch für die Übermittlung von Telemetriedaten. 
+
+Der Ablauf für das Hinzufügen neuer Cluster zu {stackstate-product-name} im xref:/k8s-suse-rancher-prime.adoc#_installing_the_suse_observability_agent[StackPack-Installationsablauf] beinhaltet die Erstellung eines clusterspezifischen Tokens, das mit dem RBAC-Agent für Rancher RBAC kompatibel ist.
+
+== Umstellung von API-Schlüssel auf Service-Token
+
+Es gibt 2 Optionen, um von der Verwendung eines einzelnen API-Schlüssels auf die Verwendung von Service-Tokens für Telemetriedaten umzusteigen. 
+
+1. Migrieren Sie zu einem Service Token pro Cluster. Dies ist etwas aufwändiger einzurichten, aber es unterstützt Rancher RBAC.
+2. Migrieren Sie zu einem einzigen Service-Token, den Sie von allen Kubernetes-Clustern und OTel-Collectors verwenden. Dies unterstützt nicht Rancher RBAC.
+
+Nach der Migration aller Agenten und Open Telemetry-Collectors zu Service-Tokens können Sie nun `global.receiverApiKey` oder `stackstate.apiKey` aus den Helm-Werten für die Installation von {stackstate-product-name} entfernen und ein `helm upgrade` ausführen, um die Änderungen anzuwenden.
+
+=== Umstellung auf ein Service-Token pro Cluster
+
+1. Öffnen Sie das Kubernetes Stackpack in der UI
+2. Erweitern Sie den zu migrierenden Cluster
+3. Klicken Sie auf die Schaltfläche "Neues Service-Token erstellen", um das clusterspezifische Service-Token zu erhalten und kopieren Sie das Token
+4. Befolgen Sie die Anweisungen zur Installation/Upgrade des Agenten im Stackpack, um den Agenten erneut im Cluster mit dem Service-Token als API-Schlüssel bereitzustellen.
+
+Anstatt die Benutzeroberfläche zu verwenden, können Sie das Token auch mit der CLI generieren, wie xref:setup/security/authentication/service_tokens#_telemetry_data_ingestion[hier dokumentiert]. Vergewissern Sie sich, dass `update-scoped-permissions` auch dem zu migrierenden Cluster zugeordnet ist. Die anderen Schritte sind dieselben wie bei der Benutzeroberfläche.
+
+=== Umstellung auf ein einziges Service-Token
+
+Erzeugen Sie ein Service-Token mit der CLI wie xref:setup/security/authentication/service_tokens#_telemetry_data_ingestion[hier dokumentiert]..:
+
+[,sh]
+----
+> sts rbac create-subject --subject my-agent
+✅ Created subject 'my-agent'
+> sts rbac grant --subject my-agent --permission update-metrics
+✅ Granted permission 'update-metrics' on 'system' to subject 'my-agent'
+PERMISSION   | RESOURCE
+update-metrics | system
+----
+
+Fügen Sie keine `update-scoped-permissions` -Berechtigung hinzu, da sie für ein Token, das von mehreren Clustern verwendet wird, nicht funktioniert.
+
+Stellen Sie Ihre Agenten und Open Telemetry-Kollektoren erneut bereit, indem Sie die Anweisungen in der Benutzeroberfläche für das Kubernetes StackPack und in der xref:setup/otel/getting-started/getting-started-k8s.adoc[Dokumentation zum Open Telemetry-Kollektor] befolgen. Verwenden Sie den generierten Service Token als API-Schlüssel, indem Sie wie folgt vorgehen.
+
+== Migrieren von Ingestion-API-Schlüsseln
+
+Ingestion-API-Schlüssel wurden von externen Tools verwendet, um Daten (z. B. Metriken, Ereignisse und Abhängigkeiten) in den SUSE Observability-Cluster einzuspeisen.
+Zu diesen Tools gehören der STS-Agent oder/und der OTel Collector. Service-Tokens haben die gleichen und noch mehr Möglichkeiten. Führen Sie die gleichen Schritte wie für den API-Schlüssel (im vorherigen Abschnitt) aus, um zu einem <<_migrate_to_a_service_token_per_cluster, Service-Token pro Cluster>> oder <<_migrate_to_a_single_service_token, einem einzelnen Service-Token>> zu migrieren.
+
+== Mehr Infos
+
+* xref:use/security/k8s-service-tokens.adoc[Dienstmünzen]

@@ -1,0 +1,544 @@
+= {stackstate-product-name}
+:revdate: 2025-07-25
+:page-revdate: {revdate}
+:description: {stackstate-product-name}
+
+== はじめに
+
+{stackstate-product-name}以前はStackStateとして知られていたものを、KubernetesクラスタとそのワークロードのObservabilityに使うことができる。
+
+{stackstate-product-name} 、{stackstate-product-name} UIエクステンション、{stackstate-product-name} エージェントのインストールは、合計で約30分かかります。
+
+== 支援を受ける
+
+サポートについては、https://scc.suse.com/[SUSE Customer Center (SCC]) でサポートケースを作成してください。
+
+== 前提条件
+
+=== ライセンスキー
+
+{stackstate-product-name} サーバーのライセンスキーは、SUSEカスタマーセンターのサブスクリプションタブから取得でき、「{stackstate-product-name}" 登録コード」と表示されます。このライセンスは、Rancher Primeのサブスクリプションが終了するまで有効です。
+
+=== 必要条件
+
+{stackstate-product-name} をインストールするには、クラスタに十分なCPUとメモリ容量があることを確認してください。具体的な条件は以下の通り。
+
+{stackstate-product-name} には、さまざまな設置オプションが用意されている。{stackstate-product-name} 、高可用性（HA）またはシングルインスタンス（非HA）のセットアップでインストールすることが可能です。非HAセットアップは、テスト目的や小規模な環境に推奨される。本番環境では、{stackstate-product-name} を HA セットアップでインストールすることをお勧めします。
+
+HAプロダクション・セットアップは、150から最大4000の観測ノードをサポートできる。このサイジングテーブルで観測されるノードは、4つのvCPUと16GBのメモリとされ、我々の`default node size` 。
+観測クラスタ内のノードがより大きい場合、それらは複数の`default nodes` 、12vCPUと48GBのノードは、プロファイルを選択する際に3`default nodes` としてカウントされます。
+Non-HAのセットアップは、観測中、最大100`default nodes` 。
+
+
+次の表は、`default nodes` の量と、インストールが HA であるかどうかを考慮して、{stackstate-product-name} サーバーをクラスターに展開するために必要なリソースを説明したものです。
+
+|===
+|  | トライアル | 10ノンHA | 20ノンHA | 50ノンHA | 100ノンHA | 150 HA | 250 HA | 500 HA | 4000 HA
+
+| *CPUリクエスト（コア）*
+| 6.945
+| 6.945
+| 9.245
+| 13.945
+| 23.545
+| 49.245
+| 61.245
+| 84.745
+| 210.05
+
+| *CPU制限（コア）*
+| 15.02
+| 15.02
+| 19.32
+| 28.72
+| 47.87
+| 104
+| 127
+| 175.38
+| 278.95
+
+| *メモリーのリクエスト*
+| 23180Mi
+| 23180Mi
+| 27056Mi
+| 31582Mi
+| 48088Mi
+| 129958Mi
+| 142426Mi
+| 161106Mi
+| 264330Mi
+
+| *メモリーの制限*
+| 23718Mi
+| 23718Mi
+| 27708Mi
+| 31614Mi
+| 48120Mi
+| 134762Mi
+| 147030Mi
+| 165910Mi
+| 327550Mi
+
+| *ストレージ*
+| 153613Mi
+| 338957Mi
+| 379917Mi
+| 482317Mi
+| 533517Mi
+| 2654430Mi
+| 2756950Mi
+| 3678260Mi
+| 7159862Mi
+|===
+
+NOTE: ポッド（不均等な）配布、コントロールプレーン、エージェントのインストールには、さらに20％のリソースが必要である。
+
+[NOTE]
+====
+プロファイルに表示される要件は、{stackstate-product-name} サーバーを実行するために必要なリソースの総量を表します。
+Suse Observabilityサーバーのすべてのサービスが割り当てられるようにする：
+
+* 非HAインストールの場合、ノードあたりの最小サイズは4VCPU、8GBです。
+* 500ノードまでのHAインストールでは、ノードあたりの最小サイズは8VCPU、16GBです。
+* 4000ノードのHAインストールでは、ノードあたりの最小サイズは16VCPU、32GBです。
+====
+
+
+[NOTE]
+====
+トライアルセットアップは、3日間のリテンションと低いディスク容量要件で構成された10個の非HAセットアップです。
+====
+
+
+これらは、さまざまなインストールオプションで{stackstate-product-name} 、消費できるリソースの上限と下限にすぎない。実際のリソース使用量は、使用される機能、設定されたリソース制限、およびDeploymentまたはDaemonSetスケーリングなどの動的な使用パターンに依存します。Rancher Primeのお客様には、デフォルトの要件で開始し、{stackstate-product-name} コンポーネントのリソース使用量を監視することをお勧めします。
+
+[NOTE]
+====
+最小要件には、アプリケーションのスムーズなローリングアップデートを保証するための予備のCPU/メモリ容量は含まれていません。
+====
+
+
+=== ストレージ
+
+{stackstate-product-name} データを保存する必要があるサービスには、永続的ボリューム・クレームを使用する。コマンドラインまたは`values.yaml` ファイルで指定された値によって上書きされない限り、クラスタのデフォルト・ストレージ・クラスがすべてのサービスに使用されます。すべてのサービスには、使い始めに最適なボリュームサイズがあらかじめ設定されていますが、必要に応じて変数を使用して後でカスタマイズすることができます。
+
+[NOTE]
+====
+{stackstate-product-name} の場合、基礎となるストレージはフラッシュメモリー（SSD）かそれに近い性能のものでなければならない。
+====
+
+[NOTE]
+====
+本番環境では、データ破損の潜在的リスクがあるため、{stackstate-product-name} のストレージ・プロビジョニングには NFS は推奨されず、サポートされていません。
+====
+
+
+私たちのさまざまなインストールプロファイルでは、以下がデフォルトのストレージ要件です：
+
+|===
+|  | トライアル | 10ノンHA | 20ノンHA | 50ノンHA | 100ノンHA | 150 HA | 250 HA | 500 HA | 4000 HA
+
+| *保持日数（日）*
+| 3
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+| 30
+
+| *保管条件*
+| 125GB
+| 280GB
+| 420GB
+| 420GB
+| 600GB
+| 2TB
+| 2TB
+| 2.5TB
+| 5.5TB
+|===
+
+使用されるデフォルト値の詳細については、xref:/setup/install-stackstate/kubernetes_openshift/storage.adoc[ストレージの構成]ページを参照。
+
+=== ヘルム
+
+{stackstate-product-name} はHelmを通じてインストールされ、Helmの最低バージョンは3.13.1である必要がある。
+
+=== さまざまなコンポーネント
+
+==== {stackstate-product-name} サーバー
+
+これは、オンプレミスのホストサーバーのインストール部分である。観測データを保存するための一連のサービスが含まれている：
+
+* トポロジー（スタックグラフ）
+* メトリックス（ビクトリアメトリックス）
+* トレース（クリックハウス）
+* ログ（ElasticSearch）
+
+この次に、すべての観測可能なタスクのためのサービス・セットが含まれている。例えば、通知、状態管理、モニタリングなど。
+
+==== {stackstate-product-name} 代理店
+
+軽量な{stackstate-product-name} エージェントが、ダウンストリームのワーカーノードにインストールされます。メトリクス、イベント、トレース、ログを収集してレポートし、リアルタイムの観測可能性と洞察を提供することで、IT環境のプロアクティブなモニタリングとトラブルシューティングを可能にします。
+
+{stackstate-product-name} バージョンのエージェントも、すべてのワークロードとその通信を監視する軽量な方法として eBPF を使用しています。また、TCP、HTTP、TLS、Redisなどの一般的なL7プロトコルのほとんどについて、RED（Rate、Errors、Duration）シグナルをデコードする。
+
+==== Rancher Prime - Observability UIエクステンション
+
+これはRancher ManagerのUI拡張で、{stackstate-product-name} によって観測されたヘルスシグナルを統合する。リソースの健全性に直接アクセスでき、さらに詳細な調査のために{stackstate-product-name} のUIへのリンクを提供する。
+
+=== {stackstate-product-name} サーバをインストールする場所
+
+{stackstate-product-name} サーバは、Observability用のダウンストリームクラスタにインストールする必要があります。参考までに下の写真をご覧ください。
+
+{stackstate-product-name} が適切に機能するためには、それが必要だ：
+
+* https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/manage-clusters/create-kubernetes-persistent-storage[Kubernetes Persistent Storageを]observabilityクラスタで利用可能にし、メトリクスやイベントなどを保存する。
+* Rancher、{stackstate-product-name} ユーザー、{stackstate-product-name} エージェントに HTTPS URL で{stackstate-product-name} を公開する方法をサポートするための observability クラスタ。これは、イングレスコントローラーを使ったイングレス設定によって行うことができる。代わりに、{stackstate-product-name} サービス用の（クラウドの）ロードバランサーもこれを行うことができる。詳しくは、https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/kubernetes-resources-setup/load-balancer-and-ingress-controller[] Rancher参照。
+
+image::k8s/prime/SUSEObservabilityDeployment.png[建築]
+
+=== プレインストール
+
+{stackstate-product-name} サーバーをインストールする前に、{stackstate-product-name} サーバーがインストールされるクラスターにデフォルトのストレージ・クラスを設定する必要があります：
+
+* *k3の場合*：rancher.io/local-path型のlocal-pathストレージクラスはデフォルトで作成されます。
+* *EKS、AKS、GKE では*、デフォルトでストレージクラスが設定されます。
+* *RKE2ノードドライバの場合*：デフォルトではストレージ・クラスは作成されない。{stackstate-product-name} をインストールする前に作成する必要があります。
+
+== インストール {stackstate-product-name}
+
+[NOTE]
+====
+*知っておいて損はない*
+
+Rancher Managerを使用してクラスタを作成し、以下のプロビジョニングコマンドをWebターミナルではなくローカルターミナルから実行したい場合は、以下の画像を参照してクラスタダッシュボードからkubeconfigをコピーまたはダウンロードし、簡単に見つけられるファイル（~/.kube/config-rancherなど）に貼り付け（またはダウンロードしたファイルを配置）、環境変数KUBECONFIG=$HOME/.kube/config-rancherを設定します。
+====
+
+
+image::k8s/prime/rancher_cluster_dashboard.png[牧場主]
+
+前提条件を満たした後、インストールを進めることができます。インストールはまだアプリストアから入手できません。代わりに、クラスタのkubectlシェル経由で{stackstate-product-name} 。
+
+HAまたはNON-HAのセットアップについては、以下の指示に従ってください。
+
+[NOTE]
+====
+HAからNON-HAへのアップグレードやダウングレード、またその逆はまだサポートされていません。
+====
+
+
+=== インストール
+
+. ヘルムチャート
++
+.helm_repo.sh
+[,text]
+----
+helm repo add suse-observability https://charts.rancher.com/server-charts/prime/suse-observability
+helm repo update
+----
+
+. コンフィギュレーションの作成とデプロイ
++
+[tabs]
+====
+推奨方法::
++
+--
+[NOTE]
+=====
+`global.suseObservability` 設定方法は、バージョン`2.8.0` 以降で利用可能です。それ以前のバージョンの場合は、レガシー・メソッドを使用する。
+=====
+
+`values.yaml` ファイルを作成する：
+
+[source,yaml]
+----
+global:
+  # Optional: Override image registry (defaults to registry.rancher.com)
+  # Only needed for air-gapped environments or custom registries
+  # imageRegistry: "your-private-registry.example.com"
+
+  suseObservability:
+    # Required: Your {stackstate-product-name} license key
+    license: "YOUR-LICENSE-KEY"
+
+    # Required: Base URL for {stackstate-product-name}
+    baseUrl: "https://observability.example.com"
+
+    # Required: Sizing profile
+    # Available: trial, 10-nonha, 20-nonha, 50-nonha, 100-nonha,
+    #            150-ha, 250-ha, 500-ha, 4000-ha
+    sizing:
+      profile: "150-ha"
+
+    # Required: Plain text Admin password
+    adminPassword: "your-password"
+    # Instead of adminPassword you can provide a bcrypt hashed password with adminPasswordBcrypt
+    # Generate with: htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'
+    # adminPasswordBcrypt: "$2a$10$..."
+
+    # Optional: Receiver API key (auto-generated if not provided)
+    # receiverApiKey: "your-receiver-api-key"
+
+    # Optional: Affinity for pod scheduling (see affinity documentation)
+    # affinity:
+    #   nodeAffinity: ...
+    #   podAntiAffinity:
+    #     requiredDuringSchedulingIgnoredDuringExecution: true
+----
+
+`baseUrl` は、{stackstate-product-name} が Rancher、ユーザー、{stackstate-product-name} エージェントからアクセスできる URL でなければならない。URLにはスキームを含める必要があります。例えば、`https://observability.internal.mycompany.com` 。<<_accessing_suse_observability, {stackstate-product-name}>> への<<_accessing_suse_observability,アクセスも>>参照のこと。
+
+`sizing.profile` 、10-nonha、20-nonha、50-nonha、100-nonha、150-ha、250-ha、500-ha、4000-haのいずれかを試用する。このプロファイルに基づいて、リソースとコンフィギュレーションがHAまたは非HAモードに自動的に適用される。現在、非HA環境からHA環境へ移行することはできません。したがって、150ノード程度を監視する必要があると予想される環境では、すぐにHAプロファイルを選択してください。
+
+1つのコマンドでデプロイ：
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values values.yaml \
+    suse-observability \
+    suse-observability/suse-observability
+----
+
+あるいは、値ファイルを使わず、`--set` フラグを使って直接デプロイすることもできる：
+
+[,bash]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --set global.suseObservability.license="YOUR-LICENSE-KEY" \
+    --set global.suseObservability.baseUrl="https://observability.example.com" \
+    --set global.suseObservability.sizing.profile="150-ha" \
+    --set global.suseObservability.adminPassword='$2a$10$...' \
+    suse-observability \
+    suse-observability/suse-observability
+----
+
+[WARNING]
+=====
+{stackstate-product-name} を使い始めるには、デフォルトのパスワードを1つ使うのが良いが、本番環境ではxref:/setup/security/authentication/authentication_options.adoc[より安全な認証オプションが]利用できる。
+=====
+
+[NOTE]
+=====
+アフィニティの設定オプションについては、xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[Kubernetesアフィニティの設定を]参照してください。
+=====
+--
+レガシーメソッド（非推奨）::
++
+--
+[WARNING]
+=====
+このメソッドは非推奨。新規設置の場合は、上記の推奨方法を使用してください。この方法を使用している既存のインストールについては、新しい構成フォーマットに移行するためのxref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[移行ガイドを]参照してください。
+=====
+
+ヘルムチャート値ファイルを生成する：
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set baseUrl='<suse-observability-base-url>' \
+  --set rancherUrl='<rancher-prime-base-url>' \
+  --set sizing.profile='<sizing.profile>' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+`baseUrl` は、{stackstate-product-name} が Rancher、ユーザー、{stackstate-product-name} エージェントからアクセスできる URL でなければならない。URLにはスキームを含める必要があります。例えば、`https://observability.internal.mycompany.com` 。<<_accessing_suse_observability, {stackstate-product-name}>> への<<_accessing_suse_observability,アクセスも>>参照のこと。
+
+UI拡張機能を使ってRancherで健康情報を見るには、`rancherUrl` の値をRancherのURL（正確にはOrigin）に設定する。
+
+このコマンドは、{stackstate-product-name} Helmチャートをインストールするために必要なコンフィギュレーションを含むファイル`$VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml` 、`$VALUES_DIR/suse-observability-values/templates/sizing_values.yaml` 、`$VALUES_DIR/suse-observability-values/templates/affinity_values.yaml` を生成する。
+
+[NOTE]
+=====
+{stackstate-product-name} 管理者パスワードは上記のコマンドで自動生成され、生成された`basicConfig.yaml` ファイルにコメントとして出力される。詳しくはxref:/setup/security/authentication/single_password.adoc[シングルパスワードを]参照。
+実際の値には、これらのパスワードの`bcrypt` ハッシュが含まれており、クラスタ内のHelmリリースに安全に保存されます。
+=====
+
+[WARNING]
+=====
+{stackstate-product-name} を使い始めるには、デフォルトのパスワードを1つ使うのが良いが、本番環境ではxref:/setup/security/authentication/authentication_options.adoc[より安全な認証オプションが]利用できる。
+=====
+
+[NOTE]
+=====
+生成された`basicConfig.yaml` 、`sizing_values.yaml` 、`affinity_values.yaml` ファイルを安全に保管してください。これらのファイルをアップグレード時に再利用することで、時間を節約し、{stackstate-product-name} 、同じAPIキーを使い続けることができます。これは、エイジェントやその他のデータプロバイダー（{stackstate-product-name} ）を更新する必要がないことを意味するので、望ましいことである。
+これらのファイルは、`basicConfig.generate=false` と`sizing.generate=false` のスイッチを使って個別に再生成することができ、`output-dir` に前回生成したバージョンのファイルを保持したまま、いずれかのファイルを無効にすることができる。
+=====
+
+[NOTE]
+=====
+{stackstate-product-name} Values チャートは、ポッドのスケジューリング動作を制御するために、メインの{stackstate-product-name} チャートで使用できるアフィニティ構成を生成します。詳細については、xref:/setup/install-stackstate/kubernetes_openshift/affinity.adoc[Kubernetes Affinitiesの設定を]参照してください。
+=====
+
+. OIDCプロバイダーとしてRancherを使用するように{stackstate-product-name} 。
+
+    Generate the `oidc_values.yaml`. This guide assumes that you save it in the `$VALUES_DIR`
+
++
+.$VALUES_DIR/oidc_values.yaml
+[,yaml]
+----
+stackstate:
+  authentication:
+    rancher:
+      clientId: "<oidc-client-id>"
+      secret: "<oidc-secret>"
+      baseUrl: "<rancher-url>"
+----
++
+[NOTE]
+=====
+このステップは、Rancher RBACを使用してダウンストリームクラスターへの可視性をスコープする予定の場合に必要です。
+OIDCプロバイダとしてRancherを使用するための{stackstate-product-name} の設定方法に関する詳細な説明は、xref:/setup/security/authentication/oidc.adoc#_rancher[OIDCプロバイダとしてRancherを使用するための{stackstate-product-name} の設定を]参照してください。
+=====
+
+. 生成された値で{stackstate-product-name} ヘルムチャートを展開する：
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+    --values $VALUES_DIR/oidc_values.yaml \
+    suse-observability \
+    suse-observability/suse-observability
+----
+--
+====
+
+
+== アクセス {stackstate-product-name}
+
+{stackstate-product-name} Helmチャートには、クラスタ外から{stackstate-product-name} にアクセスできるようにするためのIngressリソースの作成がサポートされている。クラスタ内にイングレスコントローラーがある場合は、xref:/setup/install-stackstate/kubernetes_openshift/ingress.adoc[以下の]手順に従って設定してください。結果のURLが、自己署名証明書ではなく、有効な証明書を使ってTLSを使用していることを確認してください。
+
+イングレスの代わりにロードバランサーを使いたい場合は、`suse-observability-router` 。ロードバランサーのURLは、自己署名ではなく、有効なTLS証明書を使う必要がある。
+
+== UI拡張機能のインストール
+
+UIエクステンションをインストールするには、rancher UIからUIエクステンションを有効にします。
+
+image::k8s/prime/ui_extensions.png[インストール]
+
+UI拡張機能を有効にしたら、以下の手順に従ってください：
+
+. rancher UIで拡張機能に移動し、拡張機能の "Available "セクションの下にObservability拡張機能があります。
+. Observabilityエクステンションをインストールする。
+. インストールされると、ランチャーUIの左パネルに _{stackstate-product-name}_セクションが表示されます。
+. セクションに移動し _{stackstate-product-name}_セクションに移動し、"configurations "を選択する。このセクションでは、{stackstate-product-name} サーバーの詳細を追加し、接続することができます。
+. 以下の「_サービス・トークンの取得_」セクションに記載されている手順に従って、詳細を入力してください。
+
+=== サービス・トークンを取得する：
+
+. {stackstate-product-name} インスタンスにログインする。
+. 左上からCLIを選択。
+. APIトークンをメモし、{stackstate-product-name} cliをローカルマシンにインストールする。
+. を実行してサービス・トークンを作成する。
+
+
+----
+sts service-token create --name suse-observability-extension --roles stackstate-k8s-troubleshooter
+----
+
+
+=== {stackstate-product-name} Rancher UI拡張機能の互換性マトリックス
+
+|===
+| UI拡張バージョン | 対応Rancherバージョン
+
+| 0.x.x
+| 2.8
+
+| 1.x.x
+| 2.9
+
+| 2.x.x
+| 2.10 +
+2.11 +
+2.12
+|===
+
+== {stackstate-product-name} エージェントのインストール
+
+. {stackstate-product-name} UIでメインメニューを開き、StackPacksを選択します。
+. Kubernetes StackPackを選択する。
+. 新規インスタンスをクリックし、追加するダウンストリームクラスターのクラスター名を入力します。Rancherクラスタの名前とここで提供された名前が一致していることを確認してください。インストールをクリックする。
+. インストラクションのリストから、あなたのクラスタに最も適したセクションを見つける。
+. エージェントをインストールするために提供された手順を実行します。これらは、Rancher UIを介してクラスタ用に開くことができる`kubectl shell` 。しかし、Helmがインストールされ、クラスタへの接続が許可されていれば、ローカルマシンから実行することもできる。
+. エージェントをインストールすると、クラスタは{stackstate-product-name} UIおよび_SUSE Rancher - Observability UI拡張機能で_確認できます。
+
+== 必要な特権
+
+{stackstate-product-name} エージェントの展開には、以下のシステム権限が必要です：
+
+. `hostPID: true`:この特権は、プロセス識別子(PID)を対応する制御グループ(cgroups)に関連付けるために必要である。この関連付けは、プロセスをそれぞれのコンテナに正確にマッピングするために不可欠である。
+. `hostNetwork: true` (オプション）：デフォルトでは、ノード・エージェントは`hostNetwork: true` で実行され、追加のネットワーク・ポリシーを必要とせずに、ノード上のすべての構成済みポッドからオープン・メトリクス・データのスクレイピングを容易にします。無効の場合、エージェントが必要なエンドポイントにアクセスできるように、適切なネットワークポリシーを定義する必要があります。
+. `securityContext.privileged: true`:この昇格特権は、いくつかの重要な機能に必要である。主に、エージェントがeBPF（拡張バークレー・パケット・フィルター）プログラムを各ネットワーク・ネームスペースに注入し、監視することを可能にする。また、すべてのネットワーク・ネームスペースでコネクション・トラッキング（conntrack）テーブルを読み込むためにも必要である。このリストはすべてを網羅しているわけではないが、今後の開発では、実現可能な限り、この広範な特権をよりきめ細かなLinux機能に置き換えることを目指している。
+
+さらにエージェントは、コンテナー・ランタイム・ソケットがそのポッド内にマウントされている必要がある。この構成は、ホスト・システム上のすべてのコンテナからメトリクスとメタデータをスクレイピングするための前提条件である、コンテナ・ランタイム・デーモンとの直接通信を容易にするために不可欠である。
+
+== 牧場主限定PSAテンプレート
+
+`Rancher-restricted` 構成link:https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/authentication-permissions-and-global-configuration/psa-config-templates[（]）は、ポッドを保護するための現在のベストプラクティスに沿った、非常に制限的な設定です。
+
+デフォルトで制限的なセキュリティポリシーが適用されるKubernetesクラスタ上でRancherを実行する場合、SUSE Observability Helmチャートをインストールする方法は2つあります：
+
+* 他のlink:https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/authentication-permissions-and-global-configuration/psa-config-templates#exempting-required-rancher-namespaces[必要な Rancher 名前空間とともに]、*チャート名前空間全体を除外する*。
+* *特権を持つ Elasticsearch init コンテナを無効に*するには、`elasticsearch.sysctlInitContainer.enabled` を`false` に設定します。この場合、ノード上のlink:https://www.elastic.co/docs/deploy-manage/deploy/self-managed/vm-max-map-count[仮想メモリ設定](`vm.max_map_count`) を手動で増やす必要があります。xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_elasticsearch[Elasticsearch Required Permissions] も参照してください。
+
+SUSE Observability Agentは特権モードで実行する必要があるため、制限ポリシーから除外する予定のネームスペースにインストールすることをお勧めします。
+
+[NOTE]
+====
+すべてのSUSE Observability Helmチャートコンテナは、バージョン`v2.3.8` 以降、次の`securityContext` 設定で構成されます：
+
+. `securityContext.capabilities.drop` は `["ALL"]`
+. `securityContext.seccompProfile.type` は `"RuntimeDefault"`
+. `securityContext.runAsNonRoot` は `true`
+. `securityContext.allowPrivilegeEscalation` は `false`
+====
+
+== シングルサインオン
+
+独自の認証プロバイダーでシングルサインオンを有効にするには、xref:/setup/security/authentication/authentication_options.adoc[こちらを]ご覧ください。
+
+== よくある質問と観察：
+
+. UI拡張機能を追加する前に、{stackstate-product-name} エージェントをインストールする必要がありますか？
+ ** いいえ、これは必須ではありません。UIエクステンションは独立してインストールできます。
+. UI拡張を行う前に、{stackstate-product-name} Serverをインストールする必要がありますか？
+ ** コンフィギュレーションで{stackstate-product-name} エンドポイントを提供する必要があるので、これは必須です。
+. {stackstate-product-name} 、ローカルクラスタまたはダウンストリームクラスタにインストールできますか？
+ ** どちらの選択肢も可能だ。
+. 下流のクラスタを監視するには、アプリストアから{stackstate-product-name} エージェントをインストールするか、{stackstate-product-name} UI から新しいインスタンスを追加する必要がありますか？
+ ** ユーザーの好みに応じて、どちらのオプションも可能だ。
+
+== オープン・イシュー
+
+. Observability用のUIエクステンションをアンインストールして再インストールすると、サービス・トークンが削除されず、再インストール時に再利用されることに気づきました。拡張機能をアンインストールするときは、必ずサービス・トークンを削除する必要があります。
+ ** この情報は、UIエクステンションがアンインストールされると削除されるはずです。
+. 拡張機能がインストールされると、{stackstate-product-name} UIがRancher UIと同じタブで開きます。
+ ** Shiftキーを押しながらクリックすると、新しいタブで開くことができます。
+. HAからNON-HAへのアップグレードやダウングレード、またその逆はまだサポートされていません。
+
+== トラブルシューティング
+
+Observability用UIエクステンションのインストールに関するお問い合わせは、xref:/setup/install-stackstate/extension-troubleshooting.adoc[エクステンショントラブルシューティングガイドを]ご覧ください。
