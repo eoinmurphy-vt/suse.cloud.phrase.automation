@@ -82,8 +82,7 @@ def get_target_lang(phrase_folder):
     # EXCEPTIONS: Languages where Region is required
     exceptions = {
         "zh_sg": "zh-cn",
-        "zh_hk": "zh-tw",
-        "zh_cn": "zh-cn" 
+        "zh_hk": "zh-tw"
     }
     
     if folder in exceptions:
