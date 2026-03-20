@@ -1,0 +1,352 @@
+= Helm
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+:page-aliases: helm.adoc
+
+HelmはKubernetesのためのパッケージ管理ツールです。Helmチャートは、Kubernetes YAMLマニフェストドキュメントのテンプレート構文を提供します。Helmを使用することで、開発者やクラスター管理者は、静的なマニフェストを使用する代わりに、チャートとして知られる構成可能なテンプレートを作成できます。独自のチャートカタログを作成する方法についての詳細は、https://helm.sh/docs/intro/quickstart/.のドキュメントを参照してください。
+
+K3sは、Helmをサポートするために特別な設定を必要としません。xref:cluster-access.adoc[クラスターアクセス]のドキュメントに従って、kubeconfigパスが正しく設定されていることを確認してください。
+
+K3sには、Helmチャートのインストール、アップグレード/再構成、およびアンインストールを管理するhttps://github.com/k3s-io/helm-controller/[Helm Controller]が含まれています。xref:installation/packaged-components.adoc[自動デプロイするAddOnマニフェスト]と組み合わせることで、クラスターにHelmチャートをインストールすることは、ディスク上に単一のファイルを作成することで自動化できます。
+
+== Helm Controllerの使用
+
+https://github.com/k3s-io/helm-controller#helm-controller[HelmChartカスタムリソース]は、通常`+helm+`コマンドラインツールに渡すオプションのほとんどをキャプチャします。
+
+=== HelmChartフィールド定義
+
+[NOTE]
+====
+`+name+`フィールドは、Kubernetesのhttps://kubernetes.io/docs/concepts/overview/working-with-objects/names/[オブジェクト名とID]に関するルールに加えて、Helmチャートの命名規則に従う必要があります。詳細については、https://helm.sh/docs/chart_best_practices/conventions/#chart-names[Helmベストプラクティスのドキュメント]を参照してください。
+====
+
+|===
+| フィールド | デフォルト | 説明 | Helm引数/フラグの対応
+
+| metadata.name
+|
+| Helmチャート名
+| 名前
+
+| spec.chart
+|
+| リポジトリ内のHelmチャート名、またはチャートアーカイブ（.tgz）への完全なHTTPS URL
+| CHART
+
+| spec.chartContent
+|
+| Base64エンコードされたチャートアーカイブ.tgz - spec.chartを上書きします
+| CHART
+
+| spec.targetNamespace
+| default
+| Helmチャートのターゲットネームスペース
+| `+--namespace+`
+
+| spec.createNamespace
+| false
+| 存在しない場合はターゲットネームスペースを作成します
+| `+--create-namespace+`
+
+| spec.version
+|
+| Helmチャートのバージョン（リポジトリからインストールする場合）
+| `+--version+`
+
+| spec.repo
+|
+| HelmチャートリポジトリのURL
+| `+--repo+`
+
+| spec.repoCA
+|
+| このCAバンドルを使用してHTTPS対応サーバーの証明書を検証します。1つ以上のPEMエンコードされたCA証明書を含む文字列である必要があります。
+| `+--ca-file+`
+
+| spec.repoCAConfigMap
+|
+| Helmによって信頼されるCA証明書を含むConfigMapへの参照。`+repoCA+`と一緒に使用するか、または代わりに使用できます。
+| `+--ca-file+`
+
+| spec.plainHTTP
+| false
+| チャートのダウンロードに安全でないHTTP接続を使用します。
+| `+--plain-http+`
+
+| spec.insecureSkipTLSVerify
+| false
+| チャートのダウンロードに対してTLS証明書のチェックをスキップします。
+| `+--insecure-skip-tls-verify+`
+
+| spec.helmVersion
+| v3
+| 使用するHelmのバージョン。現在サポートされているのは`+v3+`のみです。
+|
+
+| spec.bootstrap
+| False
+| このチャートがクラスターの起動に必要な場合はTrueに設定します（Cloud Controller Managerなど）
+|
+
+| spec.jobImage
+|
+| Helmチャートをインストールする際に使用するイメージを指定します。例：rancher/klipper-helm:v0.3.0。
+|
+
+| spec.podSecurityContext
+|
+| Helmジョブポッドのカスタムhttps://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#podsecuritycontext-v1-core[`+v1.PodSecurityContext+`]。
+|
+
+| spec.securityContext
+|
+| Helmジョブポッドのコンテナ用のカスタム https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#securitycontext-v1-core[`+v1.SecurityContext+`]。
+|
+
+| spec.backOffLimit
+| 1000
+| ジョブが失敗と見なされる前の再試行回数を指定してください。
+|
+
+| spec.timeout
+| 300秒
+| Helm操作のタイムアウト、https://pkg.go.dev/time#ParseDuration[期間文字列] (`+300s+`, `+10m+`, `+1h+` など)
+| `+--timeout+`
+
+| spec.failurePolicy
+| 再インストール
+| `+abort+`に設定すると、Helm操作は中止され、オペレーターによる手動介入が必要になります。
+|
+
+| spec.authSecret
+|
+| Chartリポジトリの基本認証資格情報を保持するタイプ`+kubernetes.io/basic-auth+`のSecretへの参照。
+|
+
+| spec.authPassCredentials
+| false
+| すべてのドメインに基本認証資格情報を渡します。
+| `+--pass-credentials+`
+
+| spec.dockerRegistrySecret
+|
+| Chartリポジトリとして機能するOCIベースのレジストリのDocker認証資格情報を保持するタイプ`+kubernetes.io/dockerconfigjson+`のSecretへの参照。
+|
+
+| spec.set
+|
+| シンプルなデフォルトチャート値を上書きします。これらは、valuesContentを介して設定されたオプションよりも優先されます。
+| `+--set+` / `+--set-string+`
+
+
+| spec.valuesContent
+|
+| YAMLファイルの内容を介して複雑なデフォルトチャート値を上書きします。
+| `+--values+`
+
+| spec.valuesSecrets
+|
+| 外部Secretへの参照を介して複雑なチャート値を上書きします。
+| `+--values+`
+|===
+
+`+/var/lib/rancher/k3s/server/static/+`に配置されたコンテンツは、クラスター内のKubernetes APIServerを介して匿名でアクセスできます。このURLは、`+spec.chart+`フィールド内の特別な変数`+%{KUBERNETES_API}%+`を使用してテンプレート化できます。例えば、パッケージ化されたTraefikコンポーネントは、`+https://%{KUBERNETES_API}%/static/charts/traefik-VERSION.tgz+`からそのチャートを読み込みます。
+
+チャート値は、優先度が低い順から高い順に使用されます：
+
+. チャートのデフォルト値
+. HelmChart `+spec.valuesContent+`
+. HelmChart `+spec.valuesSecrets+` は、シークレット名とキーのリスト順です。
+. HelmChartConfig `+spec.valuesContent+`
+. HelmChartConfig `+spec.valuesSecrets+` は、シークレット名とキーのリスト順です。
+. HelmChart `+spec.set+`
+
+Bitnami チャートリポジトリから Apache をデプロイする方法の例を示します。デフォルトのチャート値の一部を上書きします。HelmChart リソース自体は `+kube-system+` 名前空間にありますが、チャートのリソースは同じマニフェストで作成される `+web+` 名前空間にデプロイされます。これは、HelmChart リソースをデプロイするリソースから分離しておきたい場合に便利です。
+
+[,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: apache
+  namespace: kube-system
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: apache
+  targetNamespace: web
+  valuesContent: |-
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: true
+      hostname: www.example.com
+    metrics:
+      enabled: true
+----
+
+認証付きのプライベートリポジトリから Helm チャートをデプロイする例：
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  namespace: kube-system
+  name: example-app
+spec:
+  targetNamespace: example-namespace
+  createNamespace: true
+  version: v1.2.3
+  chart: example-app
+  repo: https://secure-repo.example.com
+  authSecret:
+    name: example-repo-auth
+  repoCAConfigMap:
+    name: example-repo-ca
+  valuesContent: |-
+    image:
+      tag: v1.2.2
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: kube-system
+  name: example-repo-auth
+type: kubernetes.io/basic-auth
+stringData:
+  username: user
+  password: pass
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: kube-system
+  name: example-repo-ca
+data:
+  ca.crt: |-
+    -----BEGIN CERTIFICATE-----
+    <YOUR CERTIFICATE>
+    -----END CERTIFICATE-----
+----
+
+=== シークレットからのチャート値
+
+チャート値は、`+spec.set+` または `+spec.valuesContent+` フィールドに値を保存する代わりに、外部管理されたシークレットから読み取ることができます。これは、`+existingSecret+` パターンを介して既存のシークレットを参照することをサポートしていないチャートに機密情報（資格情報など）を渡す際に行うべきです。
+
+他のシークレット（`+spec.authSecret+` と `+spec.dockerRegistrySecret+`）と同様に、`+spec.valuesSecrets+` で参照されるシークレットは HelmChart と同じ名前空間に存在する必要があります。
+
+リストされた各`+valuesSecrets+`エントリには、以下のフィールドがあります：
+
+|===
+| フィールド | 説明
+
+| name
+| シークレットの名前。入力必須パラメータです。
+
+| キー
+| 値を読み取るためのキーのリスト。値はリスト順に使用されます。入力必須パラメータです。
+
+| ignoreUpdates
+| このシークレットをオプションとしてマークし、シークレットが変更された場合はチャートを更新しないでください。オプションで、デフォルトは `+false+` です。
+|===
+
+* `+ignoreUpdates+` が `+false+` に設定されているか、未指定の場合、シークレットとすべてのリストされたキーは存在する必要があります。参照された値のシークレットに変更があると、チャートは新しい値で更新されます。
+* `+ignoreUpdates+` が `+true+` に設定されている場合、チャートが作成されるときにシークレットが存在する場合に使用され、関連リソースの他の変更によって更新されます。シークレットの変更は、チャートの更新を引き起こしません。
+
+2つのキーを持つ既存のシークレットを使用してHelmチャートをデプロイする例：
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  namespace: kube-system
+  name: example-app
+spec:
+  targetNamespace: example-namespace
+  createNamespace: true
+  version: v1.2.3
+  chart: example-app
+  repo: https://repo.example.com
+  valuesContent: |-
+    image:
+      tag: v1.2.2
+  valuesSecrets:
+    - name: example-app-custom-values
+      ignoreUpdates: false
+      keys:
+        - someValues
+        - moreValues
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: kube-system
+  name: example-app-custom-values
+stringData:
+  moreValues: |-
+    database:
+      address: db.example.com
+      username: user
+      password: pass
+  someValues: |-
+    adminUser:
+      create: true
+      username: admin
+      password: secret
+----
+
+[#_customizing_packaged_components_with_helmchartconfig]
+== HelmChartConfigを使用したパッケージコンポーネントのカスタマイズ
+
+HelmCharts（Traefikなど）としてデプロイメントされるパッケージコンポーネントの値を上書きできるようにするために、K3sはHelmChartConfigリソースを介してデプロイメントのカスタマイズをサポートしています。HelmChartConfigリソースは、対応するHelmChartの名前とネームスペースと一致し、追加の`+valuesContent+`を提供することをサポートしており、これは`+helm+`コマンドに追加の値ファイルとして渡されます。
+
+### HelmChartConfigフィールド定義
+
+|===
+| フィールド | 説明
+
+| metadata.name
+| Helmチャート名 - HelmChartリソース名と一致する必要があります。
+
+| spec.valuesContent
+| YAMLファイルの内容を介して複雑なデフォルトチャート値を上書きします。
+
+| spec.valuesSecrets
+| 外部Secretを介して複雑なデフォルトチャート値を上書きします。
+
+| spec.failurePolicy
+| `+abort+`に設定すると、Helm操作は中止され、オペレーターによる手動介入が必要になります。
+|===
+
+[NOTE]
+====
+HelmChart `+spec.set+`の値は、上記に記載されているように、HelmChartおよびHelmChartConfig `+spec.valuesContent+`および`+spec.valuesSecrets+`の設定を上書きします。
+====
+
+たとえば、パッケージ化されたTraefikのingress設定をカスタマイズするには、`+/var/lib/rancher/k3s/server/manifests/traefik-config.yaml+`という名前のファイルを作成し、次の内容で埋めることができます：
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    image:
+      repository: docker.io/library/traefik
+      tag: 3.3.5
+    ports:
+      web:
+        forwardedHeaders:
+          trustedIPs:
+            - 10.0.0.0/8
+----
