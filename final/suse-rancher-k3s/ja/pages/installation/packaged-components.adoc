@@ -1,0 +1,77 @@
+= パッケージ化されたコンポーネントの管理
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+
+== 自動デプロイマニフェスト（AddOns）
+
+サーバーノードでは、`/var/lib/rancher/k3s/server/manifests` に見つかったファイルは、`kubectl apply` と同様の方法で Kubernetes に自動的にデプロイされ、起動時およびディスク上のファイルが変更されたときに適用されます。このディレクトリからファイルを削除しても、クラスターから対応するリソースは削除されません。
+
+マニフェストは、`AddOn` 名前空間内の `kube-system` カスタムリソースとして追跡されます。マニフェストファイルを適用する際に発生したエラーや警告は、対応する `kubectl describe` に対して `AddOn` を使用することで確認できるか、または `kubectl get event -n kube-system` を使用してその名前空間のすべてのイベントを表示することで確認できます。デプロイコントローラーからのイベントも含まれます。
+
+=== パッケージ化されたコンポーネント
+
+K3s には、マニフェストディレクトリを介して AddOns としてデプロイされるいくつかのパッケージ化されたコンポーネントが含まれています：`coredns`、`traefik`、`local-storage`、および `metrics-server`。組み込みの `servicelb` ロードバランサーコントローラーにはマニフェストファイルがありませんが、歴史的な理由から `AddOn` のように無効にすることができます。
+
+パッケージ化されたコンポーネントのマニフェストは K3s によって管理されており、変更すべきではありません。K3s が起動するたびに、ファイルはディスクに再書き込みされ、整合性が確保されます。
+
+=== ユーザー AddOns
+
+追加のファイルをマニフェストディレクトリに配置して、`AddOn` としてデプロイすることができます。各ファイルには、`---` YAML ドキュメントセパレーターで区切られた複数の Kubernetes リソースが含まれる場合があります。マニフェスト内のリソースの整理に関する詳細は、Kubernetes ドキュメントの https://kubernetes.io/docs/concepts/cluster-administration/manage-deployment/[リソースの管理] セクションを参照してください。
+
+==== ファイル名の要件
+
+マニフェストディレクトリ内の各ファイルの `AddOn` 名は、ファイルのベース名から派生しています。
+マニフェストディレクトリ内のすべてのファイル（または任意のサブディレクトリ内）の名前が一意であり、Kubernetes の https://kubernetes.io/docs/concepts/overview/working-with-objects/names/[オブジェクト名の制限] に従っていることを確認してください。
+デフォルトの K3s パッケージ化されたコンポーネントによって使用されている名前と衝突しないように注意する必要があります。たとえそれらのコンポーネントが無効になっていても。
+
+ファイル名にアンダースコアが含まれている場合に報告されるエラーの例は次のとおりです。
+
+____
+`設定の処理に失敗しました: /var/lib/rancher/k3s/server/manifests/example_manifest.yaml の処理に失敗しました:
+   Addon.k3s.cattle.io "example_manifest" は無効です: metadata.name:無効な値: "example_manifest":
+   小文字のRFC 1123サブドメインは、小文字の英数字、'-'または'.'で構成され、英数字で始まり、英数字で終わる必要があります
+   （例: 'example.com'、検証に使用される正規表現は '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')`
+____
+
+[WARNING]
+====
+複数のサーバーノードがある場合、追加のAddOnマニフェストを複数のサーバーに配置することは、これらのノード間でファイルが同期されることを保証する責任があります。K3sはノード間でAddOnコンテンツを同期せず、異なるサーバーが矛盾するマニフェストを展開しようとした場合の正しい動作を保証できません。
+====
+
+
+== マニフェストの無効化
+
+マニフェストディレクトリから特定のコンテンツの展開を無効にする方法は2つあります。
+
+[#_using_the_disable_flag]
+=== `--disable`フラグを使用する
+
+上記にリストされたパッケージ化されたコンポーネントのAddOnsに加えて、`manifests`ディレクトリに配置された追加のマニフェストのAddOnsは、`--disable`フラグで無効にできます。無効化されたAddOnsはクラスターから積極的にアンインストールされ、ソースファイルは`manifests`ディレクトリから削除されます。
+
+たとえば、新しいクラスターにtraefikをインストールしないようにするか、既存のクラスターからアンインストールしてマニフェストを削除するには、`--disable=traefik`でK3sを起動できます。複数のアイテムは、名前をカンマで区切るか、フラグを繰り返すことで無効にできます。
+
+=== .skipファイルを使用する
+
+`/var/lib/rancher/k3s/server/manifests`の下の任意のファイルについて、対応するマニフェストをK3sが無視するようにする`.skip`ファイルを作成できます。`.skip`ファイルの内容は重要ではなく、その存在のみがチェックされます。AddOnがすでに作成された後に`.skip`ファイルを作成しても、それを削除したり変更したりすることはなく、リソースも変更されません; ファイルは存在しないかのように扱われます。
+
+たとえば、K3sが初めて起動する前にマニフェストディレクトリに空の`traefik.yaml.skip`ファイルを作成すると、K3sは`traefik.yaml`の展開をスキップします:
+
+[,bash]
+----
+$ ls /var/lib/rancher/k3s/server/manifests
+ccm.yaml      local-storage.yaml  rolebindings.yaml  traefik.yaml.skip
+coredns.yaml  traefik.yaml
+
+$ kubectl get pods -A
+NAMESPACE     NAME                                     READY   STATUS    RESTARTS   AGE
+kube-system   local-path-provisioner-64ffb68fd-xx98j   1/1     Running   0          74s
+kube-system   metrics-server-5489f84d5d-7zwkt          1/1     Running   0          74s
+kube-system   coredns-85cb69466-vcq7j                  1/1     Running   0          74s
+----
+
+Traefikが`traefik.skip`ファイルを作成する前にすでにデプロイされていた場合、Traefikはそのままとなり、K3sがアップグレードされる際の将来の更新には影響を受けません。
+
+== Helm AddOns
+
+Helm チャートを自動デプロイするマニフェストの管理に関する情報については、xref:add-ons/helm.adoc[Helm.] に関するセクションを参照してください。
