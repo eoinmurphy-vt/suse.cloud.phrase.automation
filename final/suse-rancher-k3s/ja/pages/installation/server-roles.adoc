@@ -1,0 +1,64 @@
+= サーバの役割の管理
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+`--cluster-init`を使用してK3sサーバを起動すると、apiserver、controller-manager、scheduler、etcdを含むすべてのコントロールプレーンコンポーネントが実行されます。コントロールプレーンとetcdの役割を別々のノードに分割するために、特定のコンポーネントを無効にすることが可能です。
+
+[IMPORTANT]
+====
+この文書は、埋め込みetcdを使用する場合にのみ関連します。埋め込みetcdを使用しない場合、すべてのサーバはコントロールプレーンの役割を持ち、コントロールプレーンコンポーネントを実行します。
+====
+
+
+== 専用の`etcd`ノード
+
+`etcd`の役割のみを持つサーバを作成するには、すべてのコントロールプレーンコンポーネントを無効にしてK3sを起動します：
+
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --cluster-init --disable-apiserver --disable-controller-manager --disable-scheduler
+----
+ここで`INSTALL_K3S_ARTIFACT_URL`はhttps://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[プライムアーティファクトURL]です。
+
+この最初のノードはetcdを起動し、追加の`etcd`および/または`control-plane`ノードが参加するのを待ちます。追加のサーバが`control-plane`コンポーネントを有効にして参加するまで、クラスターは使用できません。
+
+== 専用の`control-plane`ノード
+
+[NOTE]
+====
+専用の`control-plane`ノードはクラスター内の最初のサーバになることはできません；専用の`control-plane`ノードに参加する前に、`etcd`の役割を持つ既存のノードが必要です。
+====
+
+
+`control-plane`の役割のみを持つサーバを作成するには、etcdを無効にしてK3sを起動します：
+
+[,bash]
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --token <token> --disable-etcd --server https://<etcd-only-node>:6443
+----
+
+専用のサーバノードを作成した後、選択した役割は`kubectl get node`に表示されます：
+
+[,bash]
+----
+$ kubectl get nodes
+NAME           STATUS   ROLES                       AGE     VERSION
+k3s-server-1   Ready    etcd                        5h39m   v1.20.4+k3s1
+k3s-server-2   Ready    control-plane,master        5h39m   v1.20.4+k3s1
+----
+
+== 既存のサーバに役割を追加する
+
+役割は、無効フラグを削除してK3sを再起動することで、既存の専用ノードに追加できます。例えば、専用の`etcd`ノードに`control-plane`の役割を追加したい場合、systemdユニットまたは設定ファイルから`--disable-apiserver --disable-controller-manager --disable-scheduler`フラグを削除し、サービスを再起動できます。
+
+== 設定ファイル構文
+
+他のすべてのCLIフラグと同様に、オプションをCLIフラグとして渡す代わりに、xref:installation/configuration.adoc#_configuration_file[設定ファイル]を使用してコンポーネントを無効にすることができます。例えば、専用の`etcd`ノードを作成するには、`/etc/rancher/k3s/config.yaml`に次の値を配置できます：
+
+[,yaml]
+----
+cluster-init: true
+disable-apiserver: true
+disable-controller-manager: true
+disable-scheduler: true
+----
