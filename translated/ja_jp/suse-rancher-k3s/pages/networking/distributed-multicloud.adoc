@@ -1,0 +1,134 @@
+= 分散型ハイブリッドまたはマルチクラウドクラスター
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-05-26
+:page-revdate: {revdate}
+
+K3sクラスターは、共通のプライベートネットワークを共有せず、直接接続されていないノード（例：異なるパブリッククラウドのノード）にもデプロイできます。これを実現するための2つのオプションがあります：組み込みのk3sマルチクラウドソリューションと`+tailscale+` VPNプロバイダーとの統合です。
+
+[CAUTION]
+====
+外部接続にはより多くのホップが必要なため、ノード間のレイテンシが増加します。これによりネットワークパフォーマンスが低下し、レイテンシが高すぎる場合はクラスターの健康にも影響を与える可能性があります。
+====
+
+
+[CAUTION]
+====
+このタイプのデプロイメントでは、組み込みetcdはサポートされていません。組み込みetcdを使用する場合、すべてのサーバーノードはプライベートIPを介して互いに到達可能でなければなりません。エージェントは複数のネットワークに分散することができますが、すべてのサーバーは同じ場所にあるべきです。
+====
+
+
+== 組み込みのk3sマルチクラウドソリューション
+
+K3sは、クラスターのトラフィックのためにVPNメッシュを確立するためにwireguardを使用します。ノードは、それぞれが到達可能なユニークなIP（通常はパブリックIP）を持っている必要があります。K3sのスーパーバイザートラフィックはウェブソケットトンネルを使用し、クラスター（CNI）トラフィックはwireguardトンネルを使用します。
+
+このタイプのデプロイメントを有効にするには、サーバーに次のパラメータを追加する必要があります：
+
+[,bash]
+----
+--node-external-ip=<SERVER_EXTERNAL_IP> --flannel-backend=wireguard-native --flannel-external-ip
+----
+
+エージェントには：
+
+[,bash]
+----
+--node-external-ip=<AGENT_EXTERNAL_IP>
+----
+
+ここで`+SERVER_EXTERNAL_IP+`はサーバーノードに到達するためのIPであり、`+AGENT_EXTERNAL_IP+`はエージェントノードに到達するためのIPです。エージェントの`+K3S_URL+`設定パラメータは、接続できるように`+SERVER_EXTERNAL_IP+`を使用する必要があることに注意してください。xref:installation/requirements.adoc#_networking[ネットワーキング要件]を確認し、内部および外部アドレスの両方でリストされたポートへのアクセスを許可することを忘れないでください。
+
+`+SERVER_EXTERNAL_IP+`と`+AGENT_EXTERNAL_IP+`の両方は互いに接続可能でなければならず、通常はパブリックIPです。
+
+[IMPORTANT]
+.動的IP
+====
+ノードに動的IPが割り当てられ、IPが変更された場合（例：AWSで）、新しいIPを反映するために`+--node-external-ip+`パラメータを修正する必要があります。K3sをサービスとして実行している場合は、`+/etc/systemd/system/k3s.service+`を修正してから、次のコマンドを実行する必要があります：
+
+[,bash]
+----
+systemctl daemon-reload
+systemctl restart k3s
+----
+====
+
+[#_integration_with_the_tailscale_vpn_provider_experimental]
+== Tailscale VPNプロバイダーとの統合（実験的）
+
+v1.27.3、v1.26.6、v1.25.11およびそれ以降のバージョンで利用可能です。
+
+K3sはhttps://tailscale.com/[Tailscale]と統合でき、ノードがTailscale VPNサービスを使用してノード間にメッシュを構築します。
+
+K3sをデプロイする前に、Tailscaleで行うべき4つのステップがあります。
+
+. Tailscaleアカウントにログインします。
+. `+Settings > Keys+`で、クラスター内のすべてのノードで再利用可能な認証キー（$AUTH-KEY）を生成します。
+. クラスターが使用するpodCIDRを決定します（デフォルトでは`+10.42.0.0/16+`です）。アクセス制御にCIDR（またはデュアルスタック用のCIDR）を追加し、次のスタンザを使用します。
++
+[,yaml]
+----
+"autoApprovers": {
+     "routes": {
+         "10.42.0.0/16":        ["your_account@xyz.com"],
+         "2001:cafe:42::/56": ["your_account@xyz.com"],
+     },
+ },
+----
+
+. ノードにTailscaleをインストールします。
++
+[,bash]
+----
+curl -fsSL https://tailscale.com/install.sh | sh
+----
+
+Tailscale統合を有効にしてK3sをデプロイするには、各ノードに次のパラメータを追加する必要があります。
+
+[,bash]
+----
+--vpn-auth="name=tailscale,joinKey=$AUTH-KEY"
+----
+
+または、その情報をファイルに提供し、次のパラメータを使用します。
+
+[,bash]
+----
+--vpn-auth-file=$PATH_TO_FILE
+----
+
+オプションとして、独自のTailscaleサーバー（例：headscale）を持っている場合は、vpn-authパラメータに`+,controlServerURL=$URL+`を追加して接続できます。
+
+次に、次のコマンドを使用してサーバーを作成できます。
+
+[,bash]
+----
+k3s server --token <token> --vpn-auth="name=tailscale,joinKey=<joinKey>" --node-external-ip=<TailscaleIPOfServerNode>
+----
+
+このコマンドを実行した後、Tailscale管理コンソールにアクセスして、Tailscaleノードとサブネットを承認します（自動承認者を通じてすでに承認されていない場合）。
+
+サーバーが設定されたら、エージェントを次のように接続します。
+
+[,bash]
+----
+k3s agent --token <token> --vpn-auth="name=tailscale,joinKey=<joinKey>" --server https://<TailscaleIPOfServerNode>:6443 --node-external-ip=<TailscaleIPOfAgentNode>
+----
+
+再度、サーバーのために行ったように、Tailscaleノードとサブネットを承認します。
+
+TailscaleでACLが有効になっている場合、ポッドが相互に通信できるように「accept」ルールを追加する必要があります。作成した認証キーが自動的にTailscaleノードにタグ`+testing-k3s+`を付けると仮定すると、ルールは次のようになります。
+
+[,yaml]
+----
+"acls": [
+    {
+        "action": "accept",
+        "src":    ["tag:testing-k3s", "10.42.0.0/16"],
+        "dst":    ["tag:testing-k3s:*", "10.42.0.0/16:*"],
+    },
+],
+----
+
+[CAUTION]
+====
+同じ Tailscale ネットワークを使用して複数の K3s クラスターを実行する予定がある場合は、IP の競合を避けるために適切な https://tailscale.com/kb/1018/acls/[ACL] を作成するか、各クラスターに異なる podCIDR サブネットを使用してください。
+====
