@@ -1,0 +1,121 @@
+= 网络服务
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+
+本页面解释了 CoreDNS、Traefik 入口控制器、网络策略控制器和 ServiceLB 负载均衡器控制器在 K3s 中的工作原理。
+
+有关 Flannel 配置选项和后端选择的详细信息，请参阅 xref:networking/basic-network-options.adoc[安装网络选项] 页面，或了解如何设置您自己的 CNI。
+
+有关 K3s 需要打开的端口的信息，请参阅 xref:installation/requirements.adoc#_networking[网络要求]。
+
+== CoreDNS
+
+CoreDNS 在服务器启动时自动部署。要禁用它，请在集群中的所有服务器上配置 `--disable=coredns` 选项。
+
+如果您不安装 CoreDNS，您需要自己安装集群 DNS 提供程序。
+
+== Traefik 入口控制器
+
+https://traefik.io/[Traefik] 是一个现代 HTTP 反向代理和负载均衡器，旨在轻松部署微服务。它简化了设计、部署和运行应用程序时的网络复杂性。
+
+Traefik 入口控制器部署一个使用 80 和 443 端口的负载均衡服务，并在其管理的 Ingress 资源的状态中宣传负载均衡服务的外部 IP。
+
+默认情况下，ServiceLB 将使用集群中的所有节点来托管 Traefik 负载均衡服务，这意味着 80 和 443 端口将无法用于其他 HostPort 或 NodePort pod，Ingress 资源的状态将显示所有集群成员的节点 IP。
+
+要限制 Traefik 使用的节点，以及在 Ingress 状态中展示的节点 IP，您可以按照下面 <<_controlling_servicelb_node_selection,控制 ServiceLB 节点选择>> 部分中的说明，限制 ServiceLB 运行的节点，或通过将某些节点加入负载均衡池，并在 Traefik HelmChartConfig 中设置匹配标签，将 Traefik 服务限制在该池中。
+
+Traefik 在启动服务器时默认部署。默认图表值可以在 `/var/lib/rancher/k3s/server/manifests/traefik.yaml` 中找到，但此文件不应手动编辑，因为 K3s 在启动时会用默认值替换该文件。相反，您应该通过在 `/var/lib/rancher/k3s/server/manifests` 中创建一个额外的 `HelmChartConfig` 清单来定制 Traefik。有关更多详细信息和示例，请参见 xref:add-ons/helm.adoc#_customizing_packaged_components_with_helmchartconfig[使用 HelmChartConfig 自定义打包组件]。有关可能的配置值的更多信息，请参阅您版本的 K3s 附带的 https://github.com/k3s-io/k3s-charts/tree/main/charts/traefik[Traefik Helm Chart] 的 `values.yaml`。
+
+要从集群中去除 Traefik，请使用 `--disable=traefik` 标志启动所有服务器。有关更多信息，请参见 xref:installation/packaged-components.adoc[管理打包组件]。
+
+有关 K3s 中包含的 Traefik 特定版本的详细信息，请查阅您版本的发布说明。
+
+* 从 **1.32** 开始的 K3s 版本包括 Traefik v3。当 K3s 升级时，现有的 Traefik v2 安装会自动升级到 v3。
+  Traefik v3 应与 v2 的配置兼容；有关更多信息，请查阅上游 https://doc.traefik.io/traefik/migrate/v2-to-v3/[v2 到 v3 的迁移] 文档。
+* K3s 版本 **1.21** 到 **1.31** 包含 Traefik v2，除非发现现有的 Traefik v1 安装，在这种情况下，Traefik 并未升级到 v2。
+* K3s 版本 **1.20** 和 **更早** 包含 Traefik v1。
+
+== 网络策略控制器
+
+K3s 包含一个嵌入式网络策略控制器。底层实现是 https://github.com/cloudnativelabs/kube-router[kube-router 的] netpol 控制器库（没有其他 kube-router 功能），可以在 https://github.com/k3s-io/k3s/tree/main/pkg/agent/netpol[这里] 找到。
+
+要禁用它，请使用 `--disable-network-policy` 标志启动每个服务器。
+
+[NOTE]
+====
+如果 K3s 配置更改为禁用网络策略控制器，则不会删除网络策略 iptables 规则。要在禁用网络策略控制器后清理配置的 kube-router 网络策略规则，请使用 `k3s-killall.sh` 脚本，或使用 `iptables-save` 和 `iptables-restore` 清理它们。这些步骤必须在集群中的所有节点上手动运行。
+
+----
+iptables-save | grep -v KUBE-ROUTER | iptables-restore
+ip6tables-save | grep -v KUBE-ROUTER | ip6tables-restore
+----
+====
+
+[#_service_load_balancer]
+== 服务负载均衡器
+
+可以将任何 LoadBalancer 控制器部署到您的 K3s 集群中。默认情况下，K3s 提供一个称为 https://github.com/k3s-io/klipper-lb[ServiceLB] 的负载均衡器（以前称为 Klipper LoadBalancer），它使用可用的主机端口。
+
+上游 Kubernetes 允许创建类型为 LoadBalancer 的服务，但不包括默认的负载均衡器实现，因此这些服务将保持 `pending`，直到安装一个。许多托管服务需要云提供商，例如 Amazon EC2 或 Microsoft Azure，以提供外部负载均衡器实现。相比之下，K3s 的 ServiceLB 使得可以在没有云提供商或任何额外配置的情况下使用 LoadBalancer 服务。
+
+=== ServiceLB 的工作原理
+
+ServiceLB 控制器监视 Kubernetes https://kubernetes.io/docs/concepts/services-networking/service/[服务]，其 `spec.type` 字段设置为 `LoadBalancer`。
+
+对于每个 LoadBalancer 服务，在 `kube-system` 命名空间中创建一个 link:https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/[守护程序]。该守护进程集反过来在每个节点上创建带有 `svc-` 前缀的 ServiceLB Pod。这些 Pod 利用主机端口使用服务端口，因此它们只会部署在具有该端口可用的节点上。如果没有任何节点具有该端口可用，LB 将保持待处理状态。请注意，可以在同一节点上公开多个服务，只要它们使用不同的端口。
+
+当 ServiceLB Pod 在配置了外部 IP 的节点上运行时，节点的外部 IP 会填充到服务的 `status.loadBalancer.ingress` 地址列表中，带有 `ipMode: VIP`。否则，将使用节点的内部 IP。
+
+如果流量到外部 IP 受到 link:https://en.wikipedia.org/wiki/Network_address_translation[网络地址转换 (NAT)] 的影响 - 例如在公有云中使用节点的公共 IP 作为外部 IP - 流量通过主机端口路由到 ServiceLB Pod。然后，Pod 使用 iptables 将流量转发到服务的 ClusterIP 地址和端口。如果流量不受 NAT 影响，而是以与 LoadBalancer 地址匹配的目标地址到达，则流量会被拦截（通常由 kube-proxy iptables 链或 ipvs 拦截）并转发到服务的 ClusterIP 地址和端口。
+
+=== 用法
+
+在 K3s 中创建一个 https://kubernetes.io/docs/concepts/services-networking/service/#loadbalancer[类型为 LoadBalancer 的服务]。
+
+[WARNING]
+.已知问题
+====
+如果外部流量通过 NAT 到达节点（例如在公共云中），并且您需要 `externalTrafficPolicy=local` 以实现客户端源 IP 保留等目的，请不要为任何节点定义 k3s 配置 `node-external-ip`，因为那样将无法正常工作。
+====
+
+=== 控制 ServiceLB 节点选择
+
+将 `svccontroller.k3s.cattle.io/enablelb=true` 标签添加到一个或多个节点会将 ServiceLB 控制器切换到允许列表模式，只有带有该标签的节点才有资格托管 LoadBalancer Pod。未标记的节点将被排除在 ServiceLB 的使用之外。
+
+[NOTE]
+====
+默认情况下，节点没有标签。只要所有节点保持未标记状态，所有具有可用端口的节点将被 ServiceLB 使用。
+====
+
+
+=== 创建 ServiceLB 节点池
+
+要选择特定的节点子集以托管负载均衡器的 Pods，请将 `enablelb` 标签添加到所需的节点，并在节点和服务上设置匹配的 `lbpool` 标签值。例如：
+
+. 将节点 A 和节点 B 标记为 `svccontroller.k3s.cattle.io/lbpool=pool1` 和 `svccontroller.k3s.cattle.io/enablelb=true`
+. 将节点 C 和节点 D 标记为 `svccontroller.k3s.cattle.io/lbpool=pool2` 和 `svccontroller.k3s.cattle.io/enablelb=true`
+. 在端口 443 上创建一个带有标签 `svccontroller.k3s.cattle.io/lbpool=pool1` 的负载均衡器服务。此服务的守护程序仅将 Pods 部署到节点 A 和节点 B。
+. 在端口 443 上创建另一个带有标签 `svccontroller.k3s.cattle.io/lbpool=pool2` 的负载均衡器服务。守护程序仅会将 Pods 部署到节点 C 和节点 D。
+
+=== 禁用 ServiceLB
+
+要禁用 ServiceLB，请为集群中的所有服务器配置 `--disable=servicelb` 标志。
+
+如果您希望运行不同的负载均衡器，例如 MetalLB，这一点是必要的。
+
+== 部署外部云控制器管理器
+
+K3s 提供了一个嵌入式云控制器管理器 (CCM)，其功能如下：
+
+* 托管 <<_service_load_balancer, 服务负载均衡器>> 负载均衡器控制器。
+* 清除 `node.cloudprovider.kubernetes.io/uninitialized` 污点。
+* 根据 `--node-ip`、`--node-external-ip`、`--node-internal-dns` 和 `--node-external-dns` 标志设置节点地址字段。
+
+在部署外部 CCM 之前，您必须使用 `--disable-cloud-controller` 标志启动所有 K3s 服务器以禁用嵌入式 CCM。使用外部 CCM 时，节点地址将由云提供商实例元数据 API 提供，而不是 K3s 标志值。
+
+[NOTE]
+====
+如果您禁用内置 CCM 而不部署并正确配置外部替代品，节点将保持被污点标记且无法调度。
+====
+
