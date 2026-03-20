@@ -1,0 +1,118 @@
+= 高可用性外部データベース
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+このセクションでは、外部データベースを使用した高可用性{k3s-product-name}クラスターのインストール方法について説明します。
+
+[NOTE]
+====
+大規模なHAクラスターを迅速にデプロイするには、xref:related-projects.adoc[関連プロジェクト]を参照してください。
+====
+
+
+単一サーバークラスターはさまざまなユースケースに対応できますが、Kubernetesコントロールプレーンのアップタイムが重要な環境では、HA構成でK3sを実行できます。HA K3sクラスターは以下で構成されています：
+
+* Kubernetes APIを提供し、他のコントロールプレーンサービスを実行する2つ以上の*サーバーノード*
+* 単一サーバーセットアップで使用される組み込みSQLiteデータストアとは対照的な*外部データストア*
+* オプション:アプリやサービスを実行するために指定されたゼロまたはそれ以上の*エージェントノード*
+* オプション:エージェントノードがクラスターに登録するための*固定登録アドレス*
+
+これらのコンポーネントがどのように連携するかの詳細については、xref:architecture.adoc#_high_availability_k3s[アーキテクチャセクション]を参照してください。
+
+== インストール概要
+
+HAクラスターのセットアップには、以下の手順が必要です：
+
+=== 1.外部データストアを作成する
+
+まず、クラスター用の外部データストアを作成する必要があります。詳細については、xref:datastore/datastore.adoc[クラスターデータストアオプション]のドキュメントを参照してください。
+
+=== 2.サーバーノードを起動する
+
+このHA構成には、{k3s-product-name}が2つ以上のサーバーノードを必要とします。最小マシン要件については、xref:installation/requirements.adoc[要件]ガイドを参照してください。
+
+これらのノードで`+k3s server+`コマンドを実行する際には、K3sが外部データストアに接続する方法を知るために`+datastore-endpoint+`パラメータを設定する必要があります。`+token+`パラメータは、ノードを追加する際に決定論的トークンを設定するためにも使用できます。空の場合、このトークンは自動的に生成され、今後使用されます。
+
+例えば、次のようなコマンドを使用して、外部データストアとしてMySQLデータベースを持つK3sサーバーをインストールすることができます。xref:cli/server.adoc#_cluster_options[トークンを設定する]：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name" \
+  --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+ここで、`+INSTALL_K3S_ARTIFACT_URL+`はhttps://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[プライムアーティファクトのURL]です。
+
+データストアエンドポイントの形式は、データベースの種類に基づいて異なります。詳細については、xref:datastore/datastore.adoc#_datastore_endpoint_format_and_functionality[データストアエンドポイント形式に関するセクションを参照してください。]
+
+サーバーノードを起動する際にTLS証明書を構成するには、xref:datastore/datastore.adoc#_external_datastore_configuration_parameters[データストア構成ガイドを参照してください。]
+
+[NOTE]
+====
+単一サーバーインストールで利用可能な同じインストールオプションは、高可用性インストールでも利用可能です。詳細については、xref:installation/configuration.adoc[設定オプション]のドキュメントを参照してください。
+====
+
+
+デフォルトでは、サーバーノードはスケジュール可能であり、そのためワークロードを起動できます。ユーザーのワークロードが実行されない専用のコントロールプレーンを持ちたい場合は、テイントを使用できます。`+node-taint+`パラメータを使用すると、例えば`+--node-taint CriticalAddonsOnly=true:NoExecute+`のように、テイントを持つノードを構成できます。
+
+すべてのサーバーノードで`+k3s server+`プロセスを起動したら、クラスターが正しく立ち上がったことを`+k3s kubectl get nodes+`で確認してください。サーバーノードが準備完了状態にあることが確認できるはずです。
+
+=== 3.オプション:追加のサーバーノードを参加させる
+
+ステップ2の同じ例のコマンドを使用して、追加のサーバーノードに参加させることができます。この場合、最初のノードからのトークンを使用する必要があります。
+
+最初のサーバーノードが`+--token+` CLIフラグまたは`+K3S_TOKEN+`変数なしで起動された場合、トークン値はすでにクラスターに参加している任意のサーバーから取得できます：
+
+[,bash]
+----
+cat /var/lib/rancher/k3s/server/token
+----
+
+その後、追加のサーバーノードをxref:cli/server.adoc#_cluster_options[トークンを使用して]追加できます：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name"
+----
+
+すべてのサーバーノードで同じでなければならないいくつかの構成フラグがあります：
+
+* ネットワーク関連のフラグ：`+--cluster-dns+`、`+--cluster-domain+`、`+--cluster-cidr+`、`+--service-cidr+`
+* 特定のコンポーネントのデプロイメントを制御するフラグ: `+--disable-helm-controller+`, `+--disable-kube-proxy+`, `+--disable-network-policy+` および `+--disable+` に渡される任意のコンポーネント
+* 機能に関連するフラグ: `+--secrets-encryption+`
+
+[NOTE]
+====
+このトークンのコピーを保持することを確認してください。バックアップから復元し、ノードを追加する際に必要です。以前は、K3sは外部SQLデータストアを使用する際にトークンの使用を強制していませんでした。
+====
+
+
+=== 4.オプション:固定登録アドレスを設定する
+
+エージェントノードは、登録するためのURLが必要です。これは、任意のサーバーノードのIPまたはホスト名である可能性がありますが、多くの場合、時間とともに変更されることがあります。たとえば、スケーリンググループをサポートするクラウドでクラスターを実行している場合、ノードは時間とともに作成および削除され、初期のサーバーノードのセットから異なるIPに変更されることがあります。時間とともに変更されない安定したエンドポイントをサーバーノードの前に持つことが最善です。このエンドポイントは、例えば次のようないくつかの方法で設定できます:
+
+* レイヤー4（TCP）ロードバランサー
+* Round-robin DNS
+* 仮想または弾力的IPアドレス
+
+例の設定については、xref:datastore/cluster-loadbalancer.adoc[クラスター負荷分散装置]を参照してください。
+
+このエンドポイントは、Kubernetes APIにアクセスするためにも使用できます。したがって、たとえば、特定のノードではなく、これを指すようにhttps://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/[kubeconfig]ファイルを変更できます。
+
+このような構成で証明書エラーを回避するために、サーバーを`+--tls-san=YOUR_IP_OR_HOSTNAME_HERE+`オプションで設定する必要があります。このオプションは、TLS証明書のサブジェクト代替名に追加のホスト名またはIPを追加し、IPとホスト名の両方でアクセスしたい場合は複数回指定できます。
+
+=== 5.オプション:エージェントノードに参加する
+
+K3sサーバーノードはデフォルトでスケジュール可能であるため、HA K3sクラスターにはエージェントノードは必要ありません。ただし、アプリやサービスを実行するために専用のエージェントノードを用意することもできます。
+
+HAクラスタにエージェントノードを参加させることは、単一サーバークラスタにエージェントノードを参加させることと同じです。エージェントが登録すべきURL（サーバーのIPのいずれかまたは固定の登録アドレス）と使用すべきトークンを指定するだけで済みます。
+
+[,bash]
+----
+K3S_TOKEN=SECRET k3s agent --server https://server-or-fixed-registration-address:6443
+----
