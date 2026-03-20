@@ -1,0 +1,717 @@
+= CIS安全强化指南
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-12-31
+:page-revdate: {revdate}
+
+本文件提供了对K3s生产环境安装的安全强化指导。它概述了为满足互联网安全中心（CIS）的Kubernetes基准控制所需的配置和控制措施。
+
+K3s默认应用并启用了一些安全缓解措施，并且在不修改的情况下将通过多个Kubernetes CIS控制。有一些显著的例外情况需要手动干预以完全符合CIS基准：
+
+. K3s不会修改主机操作系统。任何主机级别的修改都需要手动完成。
+. 某些CIS策略控制针对`NetworkPolicies`和`PodSecurityStandards`（在v1.24及更早版本中为`PodSecurityPolicies`）将限制集群的功能。您必须选择让K3s通过将适当的选项（启用准入插件）添加到命令行标志或配置文件中来配置这些，并手动应用适当的策略。进一步的细节将在下面的章节中呈现。
+
+CIS基准的第一部分（1.1）主要关注pod清单的权限和所有权。K3s不为核心组件使用这些，因为所有内容都打包成一个单一的二进制文件。
+
+== 主机级别要求
+
+主机级别要求有两个方面：内核参数和etcd进程/目录配置。这些在本节中进行了概述。
+
+=== 确保`protect-kernel-defaults`已设置
+
+这是一个kubelet标志，如果所需的内核参数未设置或设置为与kubelet的默认值不同的值，kubelet将退出。
+
+NOTE: `protect-kernel-defaults`作为K3s的顶级标志暴露。
+
+==== 设置内核参数
+
+创建一个名为`/etc/sysctl.d/90-kubelet.conf`的文件，并添加下面的代码片段。然后运行 `sysctl -p /etc/sysctl.d/90-kubelet.conf`.
+
+[,bash]
+----
+vm.panic_on_oom=0
+vm.overcommit_memory=1
+kernel.panic=10
+kernel.panic_on_oops=1
+----
+
+== Kubernetes 组件的配置
+
+下面的配置应放置在 xref:installation/configuration.adoc#_configuration_file[配置文件] 中，并包含所有必要的补救措施，以增强 Kubernetes 组件的安全性。
+
+[tabs,sync-group-id=pod-sec]
+======
+v1.29 及更新版本::
++
+[,yaml]
+----
+protect-kernel-defaults: true
+secrets-encryption: true
+kube-apiserver-arg:
+  - "enable-admission-plugins=NodeRestriction,EventRateLimit"
+  - 'admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml'
+  - 'audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+  - 'audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+  - 'audit-log-maxage=30'
+  - 'audit-log-maxbackup=10'
+  - 'audit-log-maxsize=100'
+  - 'service-account-extend-token-expiration=false' 
+kube-controller-manager-arg:
+  - 'terminated-pod-gc-threshold=100'
+kubelet-arg:
+  - 'streaming-connection-idle-timeout=5m'
+  - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+----
+
+v1.25 - v1.28::
++
+[,yaml]
+----
+protect-kernel-defaults: true
+secrets-encryption: true
+kube-apiserver-arg:
+  - "enable-admission-plugins=NodeRestriction,EventRateLimit"
+  - 'admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml'
+  - 'audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+  - 'audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+  - 'audit-log-maxage=30'
+  - 'audit-log-maxbackup=10'
+  - 'audit-log-maxsize=100'
+kube-controller-manager-arg:
+  - 'terminated-pod-gc-threshold=10'
+kubelet-arg:
+  - 'streaming-connection-idle-timeout=5m'
+  - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+----
+
+v1.24 及旧版本::
++
+[,yaml]
+----
+protect-kernel-defaults: true
+secrets-encryption: true
+kube-apiserver-arg:
+  - 'enable-admission-plugins=NodeRestriction,PodSecurityPolicy,NamespaceLifecycle,ServiceAccount'
+  - 'audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+  - 'audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+  - 'audit-log-maxage=30'
+  - 'audit-log-maxbackup=10'
+  - 'audit-log-maxsize=100'
+kube-controller-manager-arg:
+  - 'terminated-pod-gc-threshold=10'
+kubelet-arg:
+  - 'streaming-connection-idle-timeout=5m'
+  - 'make-iptables-util-chains=true'
+  - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+----
+======
+
+== Kubernetes 运行时要求
+
+符合 CIS 基准的运行时要求主要集中在 Pod 安全性（通过 PSP 或 PSA）、网络策略和 API 服务器审计日志。这些在本节中进行了概述。
+
+默认情况下，K3s 不包括任何 Pod 安全性或网络策略。然而，K3s 附带一个控制器，如果创建了网络策略，它将强制执行这些策略。K3s 默认不启用审计，因此审计日志配置和审计策略必须手动创建。默认情况下，K3s 启用 `PodSecurity` 和 `NodeRestriction` 两个准入控制器，以及其他控制器。
+
+=== Pod 安全性
+
+[tabs,sync-group-id=pod-sec]
+======
+v1.25 及更新版本::
++
+--
+K3s v1.25 及更新版本支持 https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod 安全准入 (PSAs)] 来控制 Pod 安全性。通过将以下标志传递给 K3s 服务器来启用 PSAs：
+
+----
+--kube-apiserver-arg="admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml"
+----
+
+该策略应写入名为 `psa.yaml` 的文件，位于 `/var/lib/rancher/k3s/server` 目录。
+
+以下是一个合规的 PSA 示例：
+
+[,yaml]
+----
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: PodSecurity
+  configuration:
+    apiVersion: pod-security.admission.config.k8s.io/v1beta1
+    kind: PodSecurityConfiguration
+    defaults:
+      enforce: "restricted"
+      enforce-version: "latest"
+      audit: "restricted"
+      audit-version: "latest"
+      warn: "restricted"
+      warn-version: "latest"
+    exemptions:
+      usernames: []
+      runtimeClasses: []
+      namespaces: [kube-system, cis-operator-system]
+----
+--
+
+v1.24 及旧版本::
++
+--
+K3s v1.24 及旧版本支持 https://kubernetes.io/docs/concepts/security/pod-security-policy/[Pod 安全策略 (PSPs)] 来控制 Pod 安全性。通过将以下标志传递给 K3s 服务器来启用 PSPs：
+
+----
+--kube-apiserver-arg="enable-admission-plugins=NodeRestriction,PodSecurityPolicy"
+----
+
+这将保持 `NodeRestriction` 插件的有效性，并启用 `PodSecurityPolicy`。
+
+当启用PSP时，可以应用策略以满足CIS基准第5.2节中描述的必要控制。
+
+以下是一个合规的PSP示例：
+
+[,yaml]
+----
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: restricted-psp
+spec:
+  privileged: false                # CIS - 5.2.1
+  allowPrivilegeEscalation: false  # CIS - 5.2.5
+  requiredDropCapabilities:        # CIS - 5.2.7/8/9
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'csi'
+    - 'persistentVolumeClaim'
+    - 'ephemeral'
+  hostNetwork: false               # CIS - 5.2.4
+  hostIPC: false                   # CIS - 5.2.3
+  hostPID: false                   # CIS - 5.2.2
+  runAsUser:
+    rule: 'MustRunAsNonRoot'       # CIS - 5.2.6
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: false
+----
+
+为了使上述PSP有效，我们需要创建一个ClusterRole和一个ClusterRoleBinding。我们还需要包含一个"系统无限制策略"，该策略对于需要额外权限的系统级Pod是必需的，以及一个允许sysctls正常工作的额外策略。
+
+将上述配置与下一节中描述的<<_networkpolicies,网络策略>>结合，可以将单个文件放置在`/var/lib/rancher/k3s/server/manifests`目录。以下是一个`policy.yaml`文件的示例：
+
+[,yaml]
+----
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: restricted-psp
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'csi'
+    - 'persistentVolumeClaim'
+    - 'ephemeral'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: false
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: system-unrestricted-psp
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: '*'
+spec:
+  allowPrivilegeEscalation: true
+  allowedCapabilities:
+  - '*'
+  fsGroup:
+    rule: RunAsAny
+  hostIPC: true
+  hostNetwork: true
+  hostPID: true
+  hostPorts:
+  - max: 65535
+    min: 0
+  privileged: true
+  runAsUser:
+    rule: RunAsAny
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: RunAsAny
+  volumes:
+  - '*'
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: svclb-psp
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: '*'
+spec:
+  allowPrivilegeEscalation: false
+  allowedCapabilities:
+  - NET_ADMIN
+  allowedUnsafeSysctls:
+  - net.ipv4.ip_forward
+  - net.ipv6.conf.all.forwarding
+  fsGroup:
+    rule: RunAsAny
+  hostPorts:
+  - max: 65535
+    min: 0
+  runAsUser:
+    rule: RunAsAny
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    rule: RunAsAny
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: psp:restricted-psp
+rules:
+- apiGroups:
+  - policy
+  resources:
+  - podsecuritypolicies
+  verbs:
+  - use
+  resourceNames:
+  - restricted-psp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: psp:system-unrestricted-psp
+rules:
+- apiGroups:
+  - policy
+  resources:
+  - podsecuritypolicies
+  resourceNames:
+  - system-unrestricted-psp
+  verbs:
+  - use
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: psp:svclb-psp
+rules:
+- apiGroups:
+  - policy
+  resources:
+  - podsecuritypolicies
+  resourceNames:
+  - svclb-psp
+  verbs:
+  - use
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: default:restricted-psp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: psp:restricted-psp
+subjects:
+- kind: Group
+  name: system:authenticated
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system-unrestricted-node-psp-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: psp:system-unrestricted-psp
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:nodes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: system-unrestricted-svc-acct-psp-rolebinding
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: psp:system-unrestricted-psp
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:serviceaccounts
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: svclb-psp-rolebinding
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: psp:svclb-psp
+subjects:
+- kind: ServiceAccount
+  name: svclb
+---
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: intra-namespace
+  namespace: kube-system
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: kube-system
+---
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: intra-namespace
+  namespace: default
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: default
+---
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: intra-namespace
+  namespace: kube-public
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: kube-public
+----
+--
+======
+
+NOTE: Kubernetes的关键组件，如CNI、DNS和Ingress，作为Pod在`kube-system`名称空间中运行。因此，该名称空间将具有一个不那么严格的策略，以便这些组件能够正常运行。
+
+=== NetworkPolicies
+
+CIS要求所有名称空间都应用网络策略，以合理限制流量进入名称空间和Pod。
+
+网络策略应放置在`/var/lib/rancher/k3s/server/manifests`目录，启动时将自动部署。
+
+以下是一个合规的网络策略示例。
+
+[,yaml]
+----
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: intra-namespace
+  namespace: kube-system
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+----
+
+在应用限制的情况下，DNS将被阻止，除非特别允许。以下是一个网络策略，将允许DNS的流量存在。
+
+[,yaml]
+----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-network-dns-policy
+  namespace: <NAMESPACE>
+spec:
+  ingress:
+  - ports:
+    - port: 53
+      protocol: TCP
+    - port: 53
+      protocol: UDP
+  podSelector:
+    matchLabels:
+      k8s-app: kube-dns
+  policyTypes:
+  - Ingress
+----
+
+如果没有创建允许访问的网络策略，metrics-server和Traefik ingress控制器将默认被阻止。确保您使用下面的示例yaml：
+
+[,yaml]
+----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-metrics-server
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      k8s-app: metrics-server
+  ingress:
+  - {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-svclbtraefik-ingress
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      svccontroller.k3s.cattle.io/svcname: traefik
+  ingress:
+  - {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-traefik-v121-ingress
+  namespace: kube-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  ingress:
+  - {}
+  policyTypes:
+  - Ingress
+---
+----
+
+[IMPORTANT]
+====
+操作员必须像正常一样管理为创建的其他名称空间的网络策略。
+====
+
+
+=== API服务器审计配置
+
+CIS要求1.2.22到1.2.25与API服务器的审计日志配置相关。K3s默认不创建日志目录和审计策略，因为审计要求特定于每个用户的策略和环境。
+
+理想情况下，日志目录必须在启动K3s之前创建。建议使用限制性访问权限，以避免泄露潜在的敏感信息。
+
+[,bash]
+----
+sudo mkdir -p -m 700 /var/lib/rancher/k3s/server/logs
+----
+
+下面提供了一个初始审计策略，用于记录请求元数据。该策略应写入名为 `audit.yaml` 的文件，位于 `/var/lib/rancher/k3s/server` 目录。有关API服务器的策略配置的详细信息，请参阅Kubernetes https://kubernetes.io/docs/tasks/debug-application-cluster/audit/[文档]。
+
+[,yaml]
+----
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+- level: Metadata
+----
+
+这两个配置必须作为参数传递给API服务器，如下所示：
+
+[tabs]
+======
+config::
++
+[,yaml]
+----
+kube-apiserver-arg:
+  - 'admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml'
+  - 'audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+  - 'audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+  - 'audit-log-maxage=30'
+  - 'audit-log-maxbackup=10'
+  - 'audit-log-maxsize=100'
+----
+
+cmdline::
++
+[,bash]
+----
+--kube-apiserver-arg='audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+--kube-apiserver-arg='audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+----
+======
+
+必须重新启动K3s以加载新配置。
+
+[,bash]
+----
+sudo systemctl daemon-reload
+sudo systemctl restart k3s.service
+----
+
+== 手动操作
+以下是K3s在应用上述配置时当前未通过的控制项。这些控制项需要手动干预才能完全符合CIS基准。
+
+=== 控制 1.1.20
+
+确保Kubernetes PKI证书文件权限设置为600或更严格（手动）
+
+.修正
+[%collapsible]
+======
+K3s PKI证书文件存储在`/var/lib/rancher/k3s/server/tls/`，权限为644。
+要修复，请运行以下命令：
+
+[,bash]
+----
+chmod -R 600 /var/lib/rancher/k3s/server/tls/*.crt
+----
+======
+
+=== 控制 1.2.9
+
+确保已设置准入控制插件EventRateLimit。
+
+.修正
+[%collapsible]
+======
+请遵循https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#eventratelimit[Kubernetes文档]并在配置文件中设置所需的限制。
+对于此及其他psa配置，本文档使用/var/lib/rancher/k3s/server/psa.yaml。
+然后，编辑K3s配置文件/etc/rancher/k3s/config.yaml并设置以下参数。
+
+[,yaml]
+----
+kube-apiserver-arg:
+  - "enable-admission-plugins=NodeRestriction,EventRateLimit"
+  - "admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml"
+----
+======
+
+=== 控制 1.2.11
+
+确保已设置准入控制插件AlwaysPullImages。
+
+.修正
+[%collapsible]
+======
+根据CIS指南，宽松的设置，"此设置可能会影响离线或隔离的集群，这些集群已预加载镜像，并且没有访问注册表以拉取正在使用的镜像。此设置不适用于使用此配置的集群。
+编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并设置以下参数。
+
+[,yaml]
+----
+kube-apiserver-arg:
+  - "enable-admission-plugins=...,AlwaysPullImages,..."
+----
+======
+
+=== 控制 1.2.21
+
+确保 -- request-timeout 参数设置得当。
+
+.修正
+[%collapsible]
+======
+根据 CIS 指南，建议将此限制设置为适当值，仅在必要时更改默认限制 60 秒。
+如果需要，编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并设置以下参数。例如，
+
+[,yaml]
+----
+kube-apiserver-arg:
+  - "request-timeout=300s"
+----
+======
+
+=== 控制 4.2.13 
+
+确保对 pod PIDs 设置了限制。
+
+.修正
+[%collapsible]
+======
+决定此参数的适当级别并进行设置，如果使用 K3s 配置文件 /etc/rancher/k3s/config.yaml，请编辑该文件将 `podPidsLimit` 设置为。
+
+[,yaml]
+----
+kubelet-arg:
+  - "pod-max-pids=<value>"
+----
+======
+
+=== 控制 5.X
+
+所有 5.X 控制与 Kubernetes 策略配置相关。这些控制在 K3s 中默认未强制执行。
+
+有关如何创建和应用这些策略的更多信息，请参阅 xref:security/self-assessment-1.8.adoc#_5_1_rbac_and_service_accounts[CIS 1.8 第 5 节]。
+
+==== 控制 5.1.5
+
+[NOTE]
+====
+为了获得通过评分，只有在 cis-1.9 中需要进行补救。
+====
+
+.修正
+[%collapsible]
+======
+在 Kubernetes 工作负载需要特定访问 Kubernetes API 服务器的地方创建显式服务帐户。
+至少，补丁以下内容：
+
+[,bash]
+----
+kubectl patch serviceaccount --namespace default default --patch '{"automountServiceAccountToken": false}'
+kubectl patch serviceaccount --namespace kube-node-lease default --patch '{"automountServiceAccountToken": false}'
+kubectl patch serviceaccount --namespace kube-public default --patch '{"automountServiceAccountToken": false}'
+----
+======
+
+== 结论
+
+如果您遵循了本指南，您的 K3s 集群将配置为符合 CIS Kubernetes 基准。您可以查看 xref:security/self-assessment-1.11.adoc[CIS 1.11 自我评估指南] 以了解基准检查的期望以及如何在您的集群上做到这一点。
