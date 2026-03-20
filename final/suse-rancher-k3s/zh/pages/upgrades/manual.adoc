@@ -1,0 +1,103 @@
+= 手动升级
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+您可以通过使用安装脚本或手动安装所需版本的二进制文件来升级 K3s。
+
+[NOTE]
+====
+在升级时，首先逐个升级服务器节点，然后再升级任何代理节点。
+====
+
+[#_release_channels]
+== 发布渠道
+
+通过安装脚本或使用我们的 xref:upgrades/automated.adoc[自动升级] 功能进行的升级可以与不同的发布渠道相关联。可用的渠道如下：
+
+|===
+| 通道 | 说明
+
+| 稳定
+| （默认）稳定版推荐用于生产环境。这些版本经过了一段时间的社区测试。
+
+| 最新
+| 最新始终指向可用的最高非预发布版本，按照 semver 排序规则确定。这些版本尚未经过社区测试。
+
+| v1.33（示例）
+| 每个 Kubernetes 次要版本都有一个与之相关的发布渠道，包括已终止服务的版本。这些渠道选择该次要版本可用的最新版本，不一定是稳定版本。
+|===
+
+要获取完整且最新的渠道列表，您可以访问 https://update.k3s.io/v1-release/channels[k3s 渠道服务 API]。有关渠道工作原理的更多技术细节，请参见 https://github.com/rancher/channelserver[channelserver 项目]。
+
+[TIP]
+====
+在尝试升级到新版本的 K3s 时，适用 https://kubernetes.io/docs/setup/release/version-skew-policy/[Kubernetes 版本偏差策略]。确保您的计划在升级时不会跳过中间的次要版本。系统升级控制器本身不会保护不支持的 Kubernetes 版本更改。
+====
+
+
+== 使用安装脚本升级K3s
+
+要从旧版本升级K3s，您可以使用与最初运行安装脚本时相同的配置选项重新运行安装脚本。
+
+[IMPORTANT]
+.脚注
+====
+`INSTALL_K3S_EXEC`变量、`K3S_`变量和尾随的外壳参数都由安装脚本使用，以生成 systemd 单元和环境文件。
+如果您在最初运行安装脚本时设置了配置，但在重新运行安装脚本时没有再次设置，则原始值将丢失。
+
+xref:installation/configuration.adoc#_configuration_file[配置文件]的内容不由安装脚本管理。
+如果您希望您的配置独立于安装脚本，您应该使用配置文件，而不是将环境变量或参数传递给安装脚本。
+====
+
+
+运行安装脚本将：
+
+. 下载新的 k3s 二进制文件
+. 更新 systemd 单元或 openrc init 脚本，以反映传递给安装脚本的参数。
+. 重启k3s服务
+
+[NOTE]
+====
+即使K3s停止，Pods的容器仍会继续运行。安装脚本在重启K3s之前不会排空或隔离节点。如果您的工作负载对短暂的API服务器中断敏感，您应该在重新运行安装脚本以升级K3s或修改配置之前，手动https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[排空并隔离]节点`kubectl`，并在之后取消隔离。
+====
+
+例如，要升级到当前的稳定版本：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+如果您想在特定通道（例如最新）中升级到较新版本，可以指定该通道：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_CHANNEL=latest <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+如果您想升级到特定版本，可以运行以下命令：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Z+k3s1 <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+[TIP]
+====
+如果您想下载新的k3s版本，但不启动它，可以使用`INSTALL_K3S_SKIP_START=true`环境变量。
+====
+
+
+== 使用二进制文件升级K3s
+
+要手动升级K3s，您可以下载所需版本的K3s二进制文件，并用新文件替换现有的二进制文件。
+
+. 从https://github.com/k3s-io/k3s/releases[发布]下载所需版本的K3s二进制文件
+. 将下载的二进制文件复制到`/usr/local/bin/k3s`（或您希望的位置）
+. 重启 k3s 或 k3s-agent 服务，或重启 k3s 进程（binary）。
+
+[NOTE]
+====
+即使K3s停止，Pods的容器仍会继续运行。通常可以在不排空Pod和不隔离节点的情况下安全重启K3s。如果您的工作负载对短暂的API服务器中断敏感，您应该在重启K3s之前手动使用对节点进行https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[排空和隔离]`kubectl`，并在之后取消隔离。
+====

@@ -1,0 +1,77 @@
+= 高可用性嵌入式etcd
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+[CAUTION]
+====
+嵌入式etcd（HA）在使用SD卡的树莓派等较慢的磁盘上可能会出现性能问题。
+====
+
+.为什么要使用奇数个服务器节点？
+[%collapsible]
+======
+HA嵌入式etcd集群必须由奇数个服务器节点组成，以便etcd维持法定人数。对于一个有n个服务器的集群，法定人数为(n/2)+1。对于任何奇数大小的集群，添加一个节点将始终增加法定人数所需的节点数。尽管向奇数大小的集群添加一个节点似乎更好，因为机器更多，但容错能力更差，因为恰好相同数量的节点可能会失败而不失去法定人数，但可以失败的节点更多。
+======
+
+一个带有嵌入式etcd的HA K3s集群由以下部分组成：
+
+* 三个或更多*服务器节点*，它们将提供Kubernetes API并运行其他控制平面服务，同时托管嵌入式etcd数据存储。
+* 可选：零个或多个*代理节点*，它们被指定用于运行您的应用和服务。
+* 可选：一个*固定注册地址*，供代理节点向集群注册。
+
+[NOTE]
+====
+要快速部署大型HA集群，请参见xref:related-projects.adoc[相关项目]。
+====
+
+
+要开始，首先启动一个服务器节点，并使用`cluster-init`标志启用集群，以及一个将用作共享密钥的词元，以便将其他服务器加入集群。
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --cluster-init \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+在启动第一个服务器后，使用共享密钥将第二和第三个服务器加入集群：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --server https://<ip or hostname of server1>:6443 \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+其中`INSTALL_K3S_ARTIFACT_URL`是https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[主要工件URL]。
+
+检查第二和第三个服务器是否现在是集群的一部分：
+
+[,bash]
+----
+$ kubectl get nodes
+NAME        STATUS   ROLES                       AGE   VERSION
+server1     Ready    control-plane,etcd,master   28m   vX.Y.Z
+server2     Ready    control-plane,etcd,master   13m   vX.Y.Z
+server3     Ready    control-plane,etcd,master   10m   vX.Y.Z
+----
+
+现在您拥有一个高可用性的控制平面。任何成功集群的服务器都可以在`--server`参数中用于加入其他服务器和代理节点。将其他代理节点加入集群的过程与服务器相同：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - agent --server https://<ip or hostname of server>:6443
+----
+
+所有服务器节点中必须相同的配置标志有几个：
+
+* 与网络相关的标志：`--cluster-dns`、`--cluster-domain`、`--cluster-cidr`、`--service-cidr`
+* 控制某些组件部署的标志：`--disable-helm-controller`、`--disable-kube-proxy`、`--disable-network-policy`和传递给`--disable`的任何组件
+* 与功能相关的标志：`--secrets-encryption`
+
+== 现有的单节点集群
+
+如果您有一个使用默认嵌入式SQLite数据库的现有集群，您可以通过简单地使用`--cluster-init`标志重新启动K3s服务器将其转换为etcd。完成后，您将能够按照上述描述添加其他实例。
+
+如果在磁盘上找到etcd数据存储，无论是因为该节点已经初始化还是加入了集群，数据存储参数（`--cluster-init`、`--server`、`--datastore-endpoint`等）将被忽略。
