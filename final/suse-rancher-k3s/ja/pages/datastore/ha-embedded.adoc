@@ -1,0 +1,77 @@
+= 高可用性埋め込みetcd
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+[CAUTION]
+====
+埋め込みetcd（HA）は、SDカードで動作するRaspberry Piのような遅いディスクでパフォーマンスの問題が発生する可能性があります。
+====
+
+.なぜ奇数のサーバーノードが必要なのか？
+[%collapsible]
+======
+HA埋め込みetcdクラスターは、etcdが過半数を維持するために奇数のサーバーノードで構成されなければなりません。n台のサーバーを持つクラスターの場合、過半数は(n/2)+1です。奇数サイズのクラスターにノードを追加すると、常に過半数に必要なノードの数が増加します。奇数サイズのクラスターにノードを追加することは、より多くのマシンがあるため良いように見えますが、過半数を失うことなく同じ数のノードが故障する可能性があるため、耐障害性は悪化します。
+======
+
+埋め込みetcdを持つHA K3sクラスターは、以下で構成されています：
+
+* Kubernetes APIを提供し、他のコントロールプレーンサービスを実行し、埋め込みetcdデータストアをホストする3台以上の*サーバーノード*。
+* オプション:アプリやサービスを実行するために指定されたゼロ台以上の*エージェントノード*。
+* オプション:エージェントノードがクラスターに登録するための*固定登録アドレス*。
+
+[NOTE]
+====
+大規模なHAクラスターを迅速にデプロイするには、xref:related-projects.adoc[関連プロジェクト]を参照してください。
+====
+
+
+始めるには、まずクラスターを有効にするための`cluster-init`フラグを持つサーバーノードを起動し、クラスターに追加のサーバーを参加させるための共有秘密として使用されるトークンを指定します。
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --cluster-init \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+最初のサーバーを起動した後、共有秘密を使用して2台目と3台目のサーバーをクラスターに参加させます：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --server https://<ip or hostname of server1>:6443 \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+ここで`INSTALL_K3S_ARTIFACT_URL`はhttps://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[プライムアーティファクトURL]です。
+
+2台目と3台目のサーバーが現在クラスターの一部であることを確認してください：
+
+[,bash]
+----
+$ kubectl get nodes
+NAME        STATUS   ROLES                       AGE   VERSION
+server1     Ready    control-plane,etcd,master   28m   vX.Y.Z
+server2     Ready    control-plane,etcd,master   13m   vX.Y.Z
+server3     Ready    control-plane,etcd,master   10m   vX.Y.Z
+----
+
+これで、高可用性のコントロールプレーンが構築されました。正常にクラスター化されたサーバーは、追加のサーバーおよびエージェントノードに参加するための`--server`引数で使用できます。追加のエージェントノードをクラスターに参加させる手順は、サーバーと同じです：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - agent --server https://<ip or hostname of server>:6443
+----
+
+すべてのサーバーノードで同じでなければならないいくつかの設定フラグがあります：
+
+* ネットワーク関連のフラグ：`--cluster-dns`、`--cluster-domain`、`--cluster-cidr`、`--service-cidr`
+* 特定のコンポーネントのデプロイメントを制御するフラグ：`--disable-helm-controller`、`--disable-kube-proxy`、`--disable-network-policy`および`--disable`に渡された任意のコンポーネント
+* 機能関連のフラグ：`--secrets-encryption`
+
+== 既存の単一ノードクラスター
+
+デフォルトの埋め込みSQLiteデータベースを使用している既存のクラスターがある場合、`--cluster-init`フラグを使用してK3sサーバーを再起動するだけでetcdに変換できます。それを行うと、上記のように追加のインスタンスを追加できるようになります。
+
+ディスク上にetcdデータストアが見つかった場合、そのノードが初期化済みであるか、すでにクラスターに参加している場合のいずれかであるため、データストアの引数（`--cluster-init`、`--server`、`--datastore-endpoint`など）は無視されます。
