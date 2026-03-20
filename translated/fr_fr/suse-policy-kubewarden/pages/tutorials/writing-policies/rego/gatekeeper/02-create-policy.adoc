@@ -1,0 +1,108 @@
+include::partial$variables.adoc[]
+= Création d'une nouvelle stratégie Rego pour Gatekeeper
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Implémentez des stratégies Rego pour Gatekeeper afin de rejeter les ressources ciblant l'espace de noms par défaut en créant et en testant une nouvelle stratégie.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["écriture-de-stratégies", "Rego", "gatekeeper", "créer-stratégie"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "stratégie Rego Gatekeeper"]
+:sidebar_label: Créer une nouvelle stratégie
+:current-version: {page-origin-branch}
+
+Pour ce tutoriel, vous allez mettre en œuvre la même stratégie que vous avez écrite avec xref:tutorials/writing-policies/rego/open-policy-agent/02-create-policy.adoc[Open Policy Agent].
+À savoir, une stratégie qui rejette une ressource si elle cible l'espace de noms `+default+`.
+
+[NOTE]
+====
+Il existe un https://github.com/kubewarden/gatekeeper-policy-template[modèle de dépôt] que vous pouvez utiliser comme base pour porter une stratégie existante.
+====
+
+
+== Configuration requise
+
+Vous avez besoin des outils suivants :
+
+* `+opa+`
+* `+kwctl+`
+
+== La stratégie
+
+Les stratégies de Gatekeeper doivent retourner aucun ou plusieurs objets de violation.
+Si aucune violation n'est signalée, la demande est acceptée.
+Si une ou plusieurs violations sont signalées, la demande est rejetée.
+
+Créez un nouveau répertoire, nommé `+rego-policy+`.
+À l'intérieur, créez un fichier `+policy.rego+` avec le contenu suivant :
+
+[,rego]
+----
+package policy
+
+violation[{"msg": msg}] {
+        input.review.object.metadata.namespace == "default"
+        msg := "it is forbidden to use the default namespace"
+}
+----
+
+Dans ce cas, le point d'entrée est `+policy/violation+`, et en raison du fonctionnement de Rego, la stratégie peut avoir les résultats suivants :
+
+* Retourner 1 violation : l'objet examiné cible l'espace de noms par défaut.
+* Retourner 0 violations : l'objet examiné est conforme à la stratégie.
+
+Prenez un moment pour comparer cette stratégie avec celle écrite dans la section Open Policy Agent.
+Celle-ci devait construire l'ensemble de la réponse `+AdmissionReview+`, et les entrées étaient légèrement différentes.
+Dans le mode Gatekeeper, l'objet `+AdmissionRequest+` est fourni avec l'attribut `+input.review+`.
+Tous les attributs de `+AdmissionRequest+` sont lisibles avec `+object+`.
+
+Maintenant, vous pouvez créer les requêtes à évaluer dans la section suivante.
+
+Vous devez d'abord créer un fichier `+default-ns.json+` avec le contenu suivant dans le répertoire `+data+` :
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "default",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+Maintenant, créez un autre objet `+AdmissionReview+` qui, cette fois, cible un espace de noms différent de celui de `+default+`.
+Nommez ce fichier `+other-ns.json+`.
+Il a le contenu suivant :
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "other",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+Vous pouvez voir que cela simule une autre demande de création de pod, cette fois sous un espace de noms appelé `+other+`.
