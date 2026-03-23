@@ -1,0 +1,506 @@
+= バックアップの復元
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+[NOTE]
+====
+このページは{stackstate-product-name} v2.7.0以降に適用されます。
+====
+
+== 概要
+
+このページでは、バックアップCLIを使用して{stackstate-product-name} データストアのバックアップをリストアする方法について説明します。
+
+[WARNING]
+====
+*バックアップからの復元は、既存のデータを消去または上書きします。この操作は元に戻せない。*
+
+リストア操作を確認する前に、必ずバックアップ名とネームスペースを確認してください。
+
+*GitOpsワークフローへの影響*このバックアップ・ツールは、クラスタ内のK8sリソースを直接変更します：
+
+- StatefulSets/Deploymentsを0レプリカにスケールする。
+- 復元追跡のための注釈を追加
+
+これらの変更は、Gitベースの照合をバイパスするため、GitOpsのワークフローと衝突することになります。GitOpsコントローラーは、バックアップ操作中にこれらの変更を元に戻そうとすることがある。
+*重要だ：*SUSE Observability Helmチャート展開の自動照合は、競合を防止するため、バックアップのリストア時に無効にする必要があります。
+====
+
+[NOTE]
+====
+*CLIを使用する前に、以下を確認してください：*
+
+* 最新バージョンのバックアップCLIを使用しています。
+* CLIは、SUSE Observabilityがインストールされているクラスタへの現在のコンテキストを持つkubeconfigを期待します。
+====
+
+== バックアップCLIのダウンロード
+
+以下のプラットフォーム用のコマンドを使用して、最新バージョンのバックアップCLIをダウンロードします。バイナリの名前は`+sts-backup+` 。
+
+[tabs]
+====
+macOS（アップルシリコン）::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.darwin-arm64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.darwin-arm64.tar.gz
+----
+
+--
+macOS (インテル)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.darwin-x86_64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.darwin-x86_64.tar.gz
+----
+
+--
+Linux (ARM64)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.linux-arm64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.linux-arm64.tar.gz
+----
+
+--
+Linux (x86_64)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.linux-x86_64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.linux-x86_64.tar.gz
+----
+
+--
+Windows (x86_64)::
++
+--
+
+[,powershell]
+----
+$VERSION = (Invoke-RestMethod -Uri "https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest").tag_name
+Invoke-WebRequest -Uri "https://github.com/StackVista/stackstate-backup-cli/releases/download/$VERSION/stackstate-backup-cli-$($VERSION.TrimStart('v')).windows-x86_64.zip" -OutFile "stackstate-backup-cli.zip"
+Expand-Archive -Path "stackstate-backup-cli.zip" -DestinationPath "."
+----
+
+--
+====
+
+[TIP]
+====
+便宜上、`+sts-backup+` のバイナリを`+$PATH+` のディレクトリ（Linux/macOSでは`+/usr/local/bin+` など）にコピーしておくと、フルパスを指定しなくてもどこからでも実行できる。
+====
+
+== コンフィギュレーションとトポロジーデータ（StackGraph）
+
+=== StackGraphのバックアップをリストアップする
+
+StackGraphのバックアップを一覧表示するには、以下のコマンドを実行する：
+
+[,bash]
+----
+sts-backup stackgraph list --namespace <NAMESPACE>
+----
+
+`+<NAMESPACE>+` を、{stackstate-product-name} がインストールされているネームスペースに置き換える。
+
+出力は次のようになるはずだ：
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Stackgraph backups in bucket 'sts-stackgraph-backup'...
+NAME                            LAST MODIFIED            SIZE
+sts-backup-20251128-0300.graph  2025-11-28 03:08:42 UTC  2GiB
+----
+
+バックアップが取られた時のタイムスタンプはバックアップ名の一部である。
+
+
+=== StackGraphバックアップのリストア
+
+StackGraphのバックアップをリストアするには、以下のいずれかの方法を使用する：
+
+==== 特定のバックアップを復元する
+
+[,bash]
+----
+sts-backup stackgraph restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== 最新のバックアップを復元する
+
+[,bash]
+----
+sts-backup stackgraph restore --namespace <NAMESPACE> --latest
+----
+
+==== 一般的な旗
+
+* `+--yes+` または`+-y+` - 確認プロンプトをスキップ (自動化に便利)
+* `+--background+` - 完了を待たずにバックグラウンドでリストアを実行
+
+==== バックグラウンド・リストア
+
+`+--background+` を使用する場合、リストアは非同期で実行されます。リストア開始後、以下のコマンドを使用してステータスを確認し、確定します：
+
+[,bash]
+----
+sts-backup stackgraph check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+`+check-and-finalize+` ：
+
+* リストアジョブのステータスをチェックする
+* `+--wait+` フラグで、ジョブの完了を待つ
+* リストア中にスケールダウンされたデプロイメントを自動的にスケールアップします。
+* 完了後にリソースをクリーンアップする
+
+[NOTE]
+====
+`+--background+` なしで実行中のリストアが（Ctrl+C などで）中断された場合は、`+check-and-finalize+` を実行してデプロイメントをスケールアップし、リソースをクリーンアップする必要があります。
+====
+
+== 設定
+
+設定のバックアップには、インストール済みのStackPacksとその設定、およびモニター、カスタムビュー、サービストークンなど、ユーザーが作成したその他のカスタマイズが含まれます。設定バックアップは軽量で（通常数メガバイト）、ダウンタイムを最小限に抑えながら素早く復元できる。
+
+=== リスト設定のバックアップ
+
+設定のバックアップを一覧表示するには、以下のコマンドを実行します：
+
+[,bash]
+----
+sts-backup settings list --namespace <NAMESPACE>
+----
+
+`+<NAMESPACE>+` は、SUSE Observabilityがインストールされている名前空間に置き換えてください。
+
+出力は次のようになるはずだ：
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Settings backups in bucket 'sts-configuration-backup'...
+NAME                          LAST MODIFIED            SIZE
+sts-backup-20251128-1328.sty  2025-11-28 13:29:12 UTC  2MiB
+----
+
+バックアップが取られたタイムスタンプはバックアップ名の一部です。
+
+=== 設定バックアップの復元
+
+[CAUTION]
+====
+設定のバックアップを復元すると、ヘルス状態、アラート、トポロジー履歴を含むすべてのトポロジーも削除されます。
+====
+
+設定のバックアップを復元するには、以下のいずれかの方法を使用します：
+
+==== 特定のバックアップを復元する
+
+[,bash]
+----
+sts-backup settings restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== 最新のバックアップを復元する
+
+[,bash]
+----
+sts-backup settings restore --namespace <NAMESPACE> --latest
+----
+
+==== 一般的な旗
+
+* `+--yes+` または`+-y+` - 確認プロンプトをスキップ (自動化に便利)
+* `+--background+` - 完了を待たずにバックグラウンドでリストアを実行
+
+==== バックグラウンド・リストア
+
+`+--background+` を使用する場合、リストアは非同期で実行されます。リストア開始後、以下のコマンドを使用してステータスを確認し、確定します：
+
+[,bash]
+----
+sts-backup settings check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+`+check-and-finalize+` ：
+
+* リストアジョブのステータスをチェックする
+* `+--wait+` フラグで、ジョブの完了を待つ
+* リストア中にスケールダウンされたデプロイメントを自動的にスケールアップします。
+* 完了後にリソースをクリーンアップする
+
+[NOTE]
+====
+`+--background+` なしで実行中のリストアが（Ctrl+C などで）中断された場合、`+check-and-finalize+` を実行してデプロイメントをスケールアップし、リソースをクリーンアップする必要があります。
+====
+
+== メトリックス（ヴィクトリア・メトリックス）
+
+プロファイル、`+nonha+` または`+ha+` によって、Victoria Metrics は異なるモードで展開される：
+
+* *nonha profile*- シングルノードモード、Victoria Metricsインスタンス1つ (`+victoria-metrics-0+`)
+* *ha profile*- 2つのVictoria Metricsインスタンス(`+victoria-metrics-0+` と`+victoria-metrics-1+`)によるHA(ミラー)モード
+
+=== ビクトリア・メトリクスのバックアップ一覧
+
+Victoria Metrics のバックアップを一覧表示するには、以下のコマンドを実行する：
+
+[,bash]
+----
+sts-backup victoria-metrics list --namespace <NAMESPACE>
+----
+
+`+<NAMESPACE>+` は、SUSE Observabilityがインストールされている名前空間に置き換えてください。
+
+==== シングルノード・モード出力（ノンハ・プロファイル）
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing VictoriaMetrics backups in bucket ...
+NAME ({bucket}/{instance}-{created})                           UPDATED
+sts-victoria-metrics-backup/victoria-metrics-0-20251030152500  2025-11-28 09:25:05 UTC
+----
+
+==== HAモード出力（HAプロファイル）
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing VictoriaMetrics backups in bucket ...
+NAME ({bucket}/{instance}-{created})                           UPDATED
+sts-victoria-metrics-backup/victoria-metrics-1-20251030152500  2025-11-28 09:35:08 UTC
+sts-victoria-metrics-backup/victoria-metrics-0-20251030152500  2025-11-28 09:25:04 UTC
+
+NOTE: In HA mode, backups from both instances (victoria-metrics-0 and victoria-metrics-1) are listed.
+      The restore command accepts either backup to restore both instances.
+----
+
+HAモードでは、異なる接頭辞（`+victoria-metrics-0+` と`+victoria-metrics-1+` ）を持つ両方のインスタンスに対してバックアップが作成される。リストアする際、どちらかのバックアップを指定できます。リストア操作は、選択したバックアップを両方のインスタンスにリストアします。
+
+=== Victoria Metricsバックアップのリストア
+
+[NOTE]
+====
+すべての新しいメトリクスは、リストア処理中に`+vmagent+` によってキャッシュされます。`+vmagent+` 、メトリクスをキャッシュするのに十分なメモリがあることを確認する。
+====
+
+Victoria Metrics のバックアップをリストアするには、以下のいずれかの方法を使用します：
+
+==== 特定のバックアップを復元する
+
+[,bash]
+----
+sts-backup victoria-metrics restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== 最新のバックアップを復元する
+
+[,bash]
+----
+sts-backup victoria-metrics restore --namespace <NAMESPACE> --latest
+----
+
+==== 一般的な旗
+
+* `+--yes+` または`+-y+` - 確認プロンプトをスキップ (自動化に便利)
+* `+--background+` - 完了を待たずにバックグラウンドでリストアを実行
+
+==== バックグラウンド・リストア
+
+`+--background+` を使用する場合、リストアは非同期で実行されます。リストア開始後、以下のコマンドを使用してステータスを確認し、確定します：
+
+[,bash]
+----
+sts-backup victoria-metrics check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+`+check-and-finalize+` ：
+
+* リストアジョブのステータスをチェックする
+* `+--wait+` フラグで、ジョブの完了を待つ
+* リストア中にスケールダウンされたステートフルセットを自動的にスケールアップします。
+* 完了後にリソースをクリーンアップする
+
+[NOTE]
+====
+`+--background+` 、実行中のリストアが（Ctrl+Cなどで）中断された場合は、`+check-and-finalize+` 、StatefulSetsのスケールアップとリソースのクリーンアップを実行する必要があります。
+====
+
+== オープンテレメトリー（クリックハウス）
+
+=== ClickHouseバックアップ一覧
+
+ClickHouseのバックアップを一覧表示するには、以下のコマンドを実行します：
+
+[,bash]
+----
+sts-backup clickhouse list --namespace <NAMESPACE>
+----
+
+`+<NAMESPACE>+` は、SUSE Observabilityがインストールされている名前空間に置き換えてください。
+
+出力は次のようになるはずだ：
+
+[,bash]
+----
+Setting up port-forward to suse-observability-clickhouse-backup:7171 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Clickhouse backups...
+NAME                             CREATED              SIZE
+incremental_2025-11-28T09-45-00  2025-11-28 09:45:03  65MiB
+incremental_2025-11-28T08-45-00  2025-11-28 08:45:03  223MiB
+full_2025-11-28T00-45-00         2025-11-28 00:45:03  3GiB
+incremental_2025-11-27T23-45-00  2025-11-27 23:45:03  118MiB
+----
+
+`+full_+` で始まるバックアップ名はフルバックアップで、`+incremental_+` で始まるバックアップ名は増分バックアップです。
+
+=== ClickHouseのバックアップを復元する
+
+[NOTE]
+====
+リストアプロセスは、データを生成するワークロード（OpenTelemetry エクスポーターなど）を自動的にスケールダウンし、リストア中のデータ損失を防ぎます。
+====
+
+ClickHouse バックアップをリストアするには、以下のいずれかの方法を使用します：
+
+==== 特定のバックアップを復元する
+
+[,bash]
+----
+sts-backup clickhouse restore --namespace <NAMESPACE> --snapshot <BACKUP_NAME>
+----
+
+==== 最新のバックアップを復元する
+
+[,bash]
+----
+sts-backup clickhouse restore --namespace <NAMESPACE> --latest
+----
+
+==== 一般的な旗
+
+* `+--yes+` または`+-y+` - 確認プロンプトをスキップ (自動化に便利)
+* `+--background+` - 完了を待たずにバックグラウンドでリストアを実行
+
+==== バックグラウンド・リストア
+
+`+--background+` を使用する場合、リストアは非同期で実行されます。リストア開始後、以下のコマンドを使用してステータスを確認し、確定します：
+
+[,bash]
+----
+sts-backup clickhouse check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
+----
+
+`+check-and-finalize+` ：
+
+* リストア操作の状態をチェックする
+* `+--wait+` フラグがある場合、動作完了を待つ
+* リストア後のSQLコマンドを実行する
+* リストア中にスケールダウンされたステートフルセットを自動的にスケールアップします。
+* 完了後にリソースをクリーンアップする
+
+[NOTE]
+====
+`+--background+` なしで実行中のリストアが中断された場合（Ctrl+C など）、操作 ID を指定して`+check-and-finalize+` を実行し、StatefulSets をスケールアップしてリソースをクリーンアップする必要があります。
+====
+
+== テレメトリーデータ（Elasticsearch）
+
+=== Elasticsearch スナップショットの一覧
+
+Elasticsearchのスナップショットを一覧表示するには、以下のコマンドを実行します：
+
+[,bash]
+----
+sts-backup elasticsearch list --namespace <NAMESPACE>
+----
+
+`+<NAMESPACE>+` は、SUSE Observabilityがインストールされている名前空間に置き換えてください。
+
+出力は次のようになるはずだ：
+
+[,bash]
+----
+Setting up port-forward to suse-observability-elasticsearch-master-headless:9200 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Fetching snapshots from repository 'sts-backup'...
+SNAPSHOT                                         STATE    START TIME                DURATION (ms)  FAILURES
+sts-backup-20251128-1135-dpkj2dqrszo6cscpgfhrhg  SUCCESS  2025-11-28T11:35:10.967Z  329158         0
+----
+
+スナップショットが取られたタイムスタンプはスナップショット名の一部です。
+
+=== Elasticsearchスナップショットのリストア
+
+[NOTE]
+====
+リストア処理では、スナップショットをリストアする前に、すべてのSTSインデックス（パターン`+sts*+` に一致）が自動的に削除されます。これには、データストリームのロールオーバーも含まれる。
+====
+
+Elasticsearchスナップショットをリストアするには、以下のいずれかの方法を使用します：
+
+==== 特定のスナップショットを復元する
+
+[,bash]
+----
+sts-backup elasticsearch restore --namespace <NAMESPACE> --snapshot <SNAPSHOT_NAME>
+----
+
+==== 最新のスナップショットを復元する
+
+[,bash]
+----
+sts-backup elasticsearch restore --namespace <NAMESPACE> --latest
+----
+
+==== 一般的な旗
+
+* `+--yes+` または`+-y+` - 確認プロンプトをスキップ (自動化に便利)
+* `+--background+` - 完了を待たずにバックグラウンドでリストアを実行
+
+==== バックグラウンド・リストア
+
+`+--background+` を使用する場合、リストアは非同期で実行されます。リストア開始後、以下のコマンドを使用してステータスを確認し、確定します：
+
+[,bash]
+----
+sts-backup elasticsearch check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
+----
+
+`+check-and-finalize+` ：
+
+* リストア操作の状態をチェックする
+* `+--wait+` フラグがある場合、動作完了を待つ
+* リストア中にスケールダウンされたデプロイメントを自動的にスケールアップします。
+* 完了後にリソースをクリーンアップする
+
+[NOTE]
+====
+`+--background+` なしで実行中のリストアが中断された場合（Ctrl+C など）、デプロイメントをスケールアップしてリソースをクリーンアップするには、操作 ID（スナップショット名）を指定して`+check-and-finalize+` を実行する必要があります。
+====
