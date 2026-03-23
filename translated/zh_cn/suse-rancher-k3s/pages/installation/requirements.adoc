@@ -1,0 +1,407 @@
+= 要求
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2025-12-31
+:page-revdate: {revdate}
+
+K3s 非常轻便，但有以下一些最低要求。
+
+无论将 K3s 配置为在容器中运行还是作为本机 Linux 服务运行，运行 K3s 的每个节点都应满足以下最低要求。这些要求是 K3s 及其打包组件的基准要求，不包括工作负载本身消耗的资源。
+
+== 先决条件
+
+两个节点不能有相同的主机名。
+
+如果多个节点将使用相同的主机名，或者自动配置系统可能重复使用主机名，可使用`+--with-node-id+` 选项为每个节点添加一个随机后缀，或者为添加到群集的每个节点设计一个唯一的名称，与`+--node-name+` 或`+$K3S_NODE_NAME+` 一起传递。
+
+== 建筑学
+
+K3s 可用于以下架构：
+
+* x86_64
+* armhf
+* arm64/aarch64
+
+[CAUTION]
+.ARM64 页大小
+====
+
+在 2023 年 5 月发布的版本（v1.24.14+k3s1、v1.25.10+k3s1、v1.26.5+k3s1、v1.27.2+k3s1）之前，在`+aarch64/arm64+` 系统上，内核必须使用 4k 页面。*RHEL9*、*Ubuntu*、*Raspberry PI OS* 和*SLES*都符合这一要求。
+====
+
+[#_operating_systems]
+== 操作系统
+
+K3s 预计可在大多数现代 Linux 系统上运行。
+
+某些操作系统有额外的设置要求：
+
+[tabs,sync-group-id=os,id=os]
+======
+SUSE Linux Enterprise / openSUSE::
++
+--
+[#_sle_opensuse_firewalld]
+[pass]
+<h3><a class="anchor" id="_sle_opensuse_firewalld" href="#_sle_opensuse_firewalld"></a>Firewalld</h3>
+
+建议关闭 firewalld：
+
+[,bash]
+----
+systemctl disable firewalld --now
+----
+
+如果希望保持启用 firewalld，默认情况下需要使用以下规则：
+
+[,bash]
+----
+firewall-cmd --permanent --add-port=6443/tcp #apiserver
+firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 #pods
+firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 #services
+firewall-cmd --reload
+----
+
+根据您的设置，可能需要打开其他端口。更多信息，请参阅 "<<_inbound_rules_for_k3s_nodes,入站规则>>"。如果更改 pod 或服务的默认 CIDR，则需要相应地更新防火墙规则。
+--
+
+Red Hat Enterprise Linux / CentOS / Fedora::
++
+--
+[#_rhel10]
+[pass]
+<h3><a class="anchor" id="_rhel10" href="#_rhel10"></a>RHEL 10</h3>
+
+在 RHEL 10 上，需要额外的软件包：
+
+[,bash]
+----
+sudo dnf install -y kernel-modules-extra
+----
+
+[#_rhel_centos_fedora_firewalld]
+[pass]
+<h3><a class="anchor" id="_rhel_centos_fedora_firewalld" href="#_rhel_centos_fedora_firewalld"></a>Firewalld</h3>
+
+建议关闭 firewalld：
+
+[,bash]
+----
+systemctl disable firewalld --now
+----
+
+如果希望保持启用 firewalld，默认情况下需要使用以下规则：
+
+[,bash]
+----
+firewall-cmd --permanent --add-port=6443/tcp #apiserver
+firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 #pods
+firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 #services
+firewall-cmd --reload
+----
+
+根据您的设置，可能需要打开其他端口。更多信息，请参阅 "<<_inbound_rules_for_k3s_nodes,入站规则>>"。如果更改 pod 或服务的默认 CIDR，则需要相应地更新防火墙规则。
+
+[WARNING]
+.较早的 RHEL/CentOS 版本
+====
+RHEL 8.4 之前的操作系统版本的 NetworkManager 存在一个已知错误，会干扰 K3 的联网。如果使用的是旧版本，则需要禁用 nm-cloud-setup 并重新启动节点：
+
+[,bash]
+----
+systemctl disable nm-cloud-setup.service nm-cloud-setup.timer
+reboot
+----
+====
+--
+
+Ubuntu / Debian::
++
+--
+[#_ubuntu_debian_ufw]
+[pass]
+<h3><a class="anchor" id="_ubuntu_debian_ufw" href="#_ubuntu_debian_ufw"></a>UFW</h3>
+
+旧版本的 Debian 可能存在一个已知的 iptables 漏洞。请参见xref:known-issues.adoc#_iptables[已知问题]。
+
+建议关闭 ufw（简易防火墙）：
+
+[,bash]
+----
+ufw disable
+----
+
+如果您希望默认启用 ufw，则需要使用以下规则：
+
+[,bash]
+----
+ufw allow 6443/tcp #apiserver
+ufw allow from 10.42.0.0/16 to any #pods
+ufw allow from 10.43.0.0/16 to any #services
+----
+
+根据您的设置，可能需要打开其他端口。更多信息，请参阅 "<<_inbound_rules_for_k3s_nodes,入站规则>>"。如果更改 pod 或服务的默认 CIDR，则需要相应地更新防火墙规则。
+--
+
+[#os_tab_raspberry_pi]
+树莓派::
++
+--
+Raspberry Pi 操作系统基于 Debian，可能存在已知的 iptables bug。请参见xref:known-issues.adoc#_iptables[已知问题]。
+
+[#_cgroups]
+[pass]
+<h3><a class="anchor" id="_cgroups" href="#_cgroups"></a>C 组</h3>
+
+标准 Raspberry Pi 操作系统安装时不会启用`+cgroups+` 。**K3S**需要`+cgroups+` 才能启动 systemd 服务。`+cgroups+`可通过在`+/boot/firmware/cmdline.txt+` 后添加`+cgroup_memory=1 cgroup_enable=memory+` 来启用。
+
+[NOTE]
+====
+在 Debian 11 和更早的 Pi OS 版本中，cmdline.txt 位于`+/boot/cmdline.txt+` 。
+====
+
+cmdline.txt 示例：
+
+----
+console=serial0,115200 console=tty1 root=PARTUUID=58b06195-02 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait cgroup_memory=1 cgroup_enable=memory
+----
+
+[#_ubuntu_vxlan_module]
+[pass]
+<h3><a class="anchor" id="_ubuntu_vxlan_module" href="#_ubuntu_vxlan_module"></a>Ubuntu Vxlan 模块</h3>
+
+从 Ubuntu 21.10 到 Ubuntu 23.10，树莓派上的 vxlan 支持被移到了一个单独的内核模块中。Ubuntu 24.04 及更高版本不需要此步骤。
+
+[,bash]
+----
+sudo apt install linux-modules-extra-raspi
+----
+--
+======
+
+有关使用 Rancher 管理的 K3s 集群测试哪些操作系统的详细信息，请参阅https://rancher.com/support-maintenance-terms/[支持和维护条款。] Rancher
+
+== 硬件
+
+硬件需求可根据部署规模进行扩展。最低要求是
+
+|===
+| 节点 | CPU | RAM
+
+| 服务器
+| 2 个内核
+| 2 GB
+
+| 代理
+| 1 个核心
+| 512 MB
+|===
+
+xref:reference/resource-profiling.adoc[资源剖析]捕获测试和分析结果，以确定 K3s 代理、有工作负载的 K3s 服务器以及有一个代理的 K3s 服务器的最低资源需求。
+
+=== 磁盘
+
+K3 的性能取决于数据库的性能。为确保最佳速度，我们建议尽可能使用固态硬盘。
+
+如果在 Raspberry Pi 或其他 ARM 设备上部署 K3，建议使用外置 SSD。
+
+=== 服务器规模指南
+
+当服务器（控制平面 + etcd）节点的 CPU 和内存有限时，在标准工作负载条件下可加入的代理节点数量就会受到限制。
+
+|===
+| 服务器 CPU | 服务器内存 | 代理数量
+
+| 2
+| 4 GB
+| 0-350
+
+| 4
+| 8 GB
+| 351-900
+
+| 8
+| 16 GB
+| 901-1800
+
+| 16+
+| 32 GB
+| 1800+
+|===
+
+[TIP]
+.高可用性规模
+====
+当使用 3 个服务器节点的高可用性设置时，代理的数量大约可以比上表中的~多 50%。例如，3 台配备 4 vCPU/8 GB 的服务器可扩展到~1200 个代理。
+====
+
+建议以 50 个或更少的批次加入代理节点，以便让 CPU 释放空间，因为节点加入时会出现峰值。如果需要超过 255 个节点，请记住修改默认`+cluster-cidr+` ！
+
+xref:reference/resource-profiling.adoc#_server_sizing_requirements_for_k3s[资源剖析]》包含更多关于如何发现这些建议的信息。
+
+[#_networking]
+== 联网
+
+K3s 服务器需要 6443 端口才能被所有节点访问。
+
+使用 Flannel VXLAN 后端时，节点需要能够通过 UDP 端口 8472 与其他节点连接；使用 Flannel WireGuard 后端时，节点需要能够通过 UDP 端口 51820（如果使用 IPv6，则为 51821）与其他节点连接。节点不应监听任何其他端口。K3s 使用反向隧道技术，节点向外连接服务器，所有 kubelet 流量都通过该隧道运行。但是，如果您不使用 Flannel，而是提供自己的自定义 CNI，那么 K3 就不需要 Flannel 所需的端口。
+
+如果要使用度量服务器，所有节点必须可以通过 10250 端口相互访问。
+
+如果计划使用嵌入式 etcd 实现高可用性，服务器节点之间必须可以通过端口 2379 和 2380 进行访问。
+
+[TIP]
+.重要
+====
+节点上的 VXLAN 端口不应该暴露给外界，因为这样会使群集网络开放，任何人都可以访问。在禁止访问 8472 端口的防火墙/安全组后运行节点。
+====
+
+
+[WARNING]
+====
+Flannel 依靠https://www.cni.dev/plugins/current/main/bridge/[Bridge CNI 插件]来创建交换流量的 L2 网络。具有`+NET_RAW+` 功能的流氓 pod 可滥用 L2 网络发起攻击，如 ARP 欺骗。因此，如https://kubernetes.io/docs/concepts/security/pod-security-standards/[Kubernetes 文档]中所述，请设置一个受限配置文件，在不可信任的 pod 上禁用`+NET_RAW+` 。
+====
+
+[#_inbound_rules_for_k3s_nodes]
+=== K3s 节点的入站规则
+
+|===
+| 规程 | 港口 | 资料来源 | 目的地 | 说明
+
+| TCP
+| 2379-2380
+| 服务器
+| 服务器
+| 仅在使用嵌入式 etcd 的 HA 中需要
+
+| TCP
+| 6443
+| 代理商
+| 服务器
+| K3s 监控程序和 Kubernetes API 服务器
+
+| UDP
+| 8472
+| 所有节点
+| 所有节点
+| 仅 Flannel VXLAN 需要
+
+| TCP
+| 10250
+| 所有节点
+| 所有节点
+| Kubelet 指标
+
+| UDP
+| 51820
+| 所有节点
+| 所有节点
+| 只有使用 IPv4 的法兰绒布线护网才需要
+
+| UDP
+| 51821
+| 所有节点
+| 所有节点
+| 只有使用 IPv6 的法兰绒线卫才需要
+
+| TCP
+| 5001
+| 所有节点
+| 所有节点
+| 仅嵌入式分布式注册表需要 (Spegel)
+
+| TCP
+| 6443
+| 所有节点
+| 所有节点
+| 仅嵌入式分布式注册表需要 (Spegel)
+|===
+
+通常情况下，允许所有出站流量。
+
+根据所使用的操作系统，可能需要对防火墙进行额外更改。
+
+== 大集群
+
+硬件要求取决于 K3s 集群的规模。对于生产和大型集群，我们建议使用外部数据库的高可用性设置。建议在生产中使用以下外部数据库选项：
+
+* MySQL
+* PostgreSQL
+* etcd
+
+=== CPU 和内存
+
+以下是高可用性 K3s 服务器节点对 CPU 和内存的最低要求：
+
+[cols="^,^,^,^"]
+|===
+| 部署规模 | 节点 | vCPU | RAM
+
+| 小型
+| 最多 10
+| 2
+| 4 GB
+
+| 中型
+| 高达 100
+| 4
+| 8 GB
+
+| 大型
+| 最多 250
+| 8
+| 16 GB
+
+| X 大号
+| 最多 500
+| 16
+| 32 GB
+
+| XX 大号
+| 500+
+| 32
+| 64 GB
+|===
+
+=== 磁盘
+
+集群性能取决于数据库性能。为确保最佳速度，我们建议始终使用固态硬盘来备份 K3s 集群。对于云提供商，您还需要使用允许最大 IOPS 的最小大小。
+
+=== 网络
+
+您应该考虑增加群集 CIDR 的子网大小，以免 pod 的 IP 用完。您可以在启动 K3s 服务器时通过`+--cluster-cidr+` 选项来实现这一点。
+
+=== 数据库
+
+K3s 支持不同的数据库，包括 MySQL、PostgreSQL、MariaDB 和 etcd。 更多信息，请参阅xref:datastore/datastore.adoc[群集数据存储]。
+
+以下是运行大型集群所需的数据库资源规模指南：
+
+[cols="^,^,^,^"]
+|===
+| 部署规模 | 节点 | vCPU | RAM
+
+| 小型
+| 最多 10
+| 1
+| 2 GB
+
+| 中型
+| 高达 100
+| 2
+| 8 GB
+
+| 大型
+| 最多 250
+| 4
+| 16 GB
+
+| X 大号
+| 最多 500
+| 8
+| 32 GB
+
+| XX 大号
+| 500+
+| 16
+| 64 GB
+|===
