@@ -1,0 +1,80 @@
+= 导入图像
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+:page-aliases: import-images.adoc
+
+容器镜像由 containerd 镜像存储在每个节点上本地缓存。镜像可以根据 pod 的需要从注册表中提取，也可以通过镜像拉取预加载，或从镜像压缩包中导入。
+
+== 按需提取图像
+
+默认情况下，如果节点上还没有映像，Kubernetes 会在 Pod 需要时自动拉取映像。这种行为可以通过使用 Pod 的https://kubernetes.io/docs/concepts/containers/images/#image-pull-policy[图像拉动策略]字段进行更改。使用默认`+IfNotPresent+` 策略时，containerd 会从上游（默认）或xref:installation/private-registry.adoc[私有注册表]中提取镜像，并将其存储在镜像存储区中。用户无需进行任何额外配置，即可按需提取图像。
+
+
+== 预导入图像
+
+[IMPORTANT]
+.版本闸门
+====
+在 K3s 运行时预导入图像的功能在 2025 年 1 月发布的版本中可用：v1.32.0+k3s1、v1.31.5+k3s1、v1.30.9+k3s1、v1.29.13+k3s1。在此之前，K3s 只在启动时预导入镜像。
+====
+
+如果将 Kubernetes 的`+imagePullPolicy+` 配置为`+Never+` ，则必须预先将映像导入节点。这样做可能是出于安全考虑，也可能是为了缩短 K3s 节点的启动时间。
+
+K3s 包含两种将镜像预先导入 containerd 镜像存储的机制：
+
+[tabs,sync-group-id=import-images]
+======
+在线图像导入::
++
+--
+
+用户可以通过在`+/var/lib/rancher/k3s/agent/images+` 目录中放置一个包含图像名称的文本文件（每行一个），触发将图像拉入 containerd 图像存储。文本文件可以在 K3s 启动前放置，也可以在 K3s 运行时创建或修改。K3s 通过 CRI API 依次提取图像，可选择使用xref:installation/private-registry.adoc[registries.yaml]配置。
+
+例如
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+cp example.txt /var/lib/rancher/k3s/agent/images
+----
+
+其中`+example.txt+` 包含：
+
+----
+docker.io/library/redis:latest
+docker.io/library/mysql:latest
+----
+
+几秒钟后，节点的 containerd 映像存储中就会出现`+redis+` 和`+mysql+` 映像。
+
+使用`+sudo k3s ctr images list+` 查询 containerd 映像存储。
+--
+
+离线图像导入::
++
+--
+用户可以通过将镜像压缩包放在`+/var/lib/rancher/k3s/agent/images+` 目录中，直接将镜像导入 containerd 镜像存储。可以在 K3s 启动前放置 tar 包，也可以在 K3s 运行时创建或修改 tar 包。必要时，K3s 会解压镜像压缩包，提取镜像，并将其加载到 containerd 镜像存储中。
+
+例如
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+curl  https://github.com/k3s-io/k3s/releases/download/v1.33.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst -O  /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+----
+
+几秒钟后，节点的 containerd 映像存储中就会出现包含在映像压缩包中的映像。
+
+使用`+sudo k3s ctr images list+` 查询 containerd 映像存储。
+
+这是在气隙环境中使用的方法。详细信息请参阅xref:installation/airgap.adoc[气隙安装文件]。
+--
+======
+
+== 设置图像注册表
+
+K3s 支持两种图像注册方式：
+
+* xref:installation/private-registry.adoc[专用注册表配置]包括使用`+registries.yaml+` 配置容器映像注册表验证和镜像。
+* xref:installation/registry-mirror.adoc[嵌入式注册表镜像]显示如何启用嵌入式分布式图像注册表镜像，以实现节点间图像的点对点共享。
