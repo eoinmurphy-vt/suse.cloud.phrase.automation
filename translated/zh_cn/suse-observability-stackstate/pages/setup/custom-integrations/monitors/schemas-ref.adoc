@@ -1,0 +1,150 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= 监测器的模式和参考
+:revdate: 2026-01-09
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 概述
+
+本页介绍了`+Monitor+` 的模式，以及对构造、表达式语法和语义的详细解释。
+
+== 监控器模式
+
+监控器指定了监控函数的运行频率和参数。
+
+[,yaml]
+----
+_type: "Monitor"
+name: string
+description?: string
+function: string
+arguments:
+  <dependent on monitor function>
+intervalSeconds: integer
+remediationHint?: string
+status?: "ENABLED" | "DISABLED"       # defaults to "DISABLED"
+tags:
+  <key>: <value>
+identifier?: string
+----
+
+* `+_type+`：{stackstate-product-name} 需要知道这是一个监视器，因此，值始终需要是 `+Monitor+`
+* `+name+`:监视器名称
+* `+description+`:监视器的说明。
+* `+function+`:执行监控的监控函数的引用。
+* `+intervalSeconds+`:监视器的执行间隔。对于常规实时指标，建议使用 30 秒。对于运行时间较长的分析指标查询，建议使用更大的时间间隔。
+* `+remediationHint+`:说明当监控器出现故障时，用户可以做些什么。格式为 markdown，可选择使用 handlebars 变量，根据时间序列或其他数据自定义提示xref:use/alerting/k8s-add-monitors-cli.adoc#_write_the_remediation_hint[（更多解释见下文]）。
+* `+status+`:`+"DISABLED"+` 或`+"ENABLED"+` 。决定监视器是否运行。
+* `+tags+`:为监视器添加标签，以帮助在{stackstate-product-name} 实例的监视器概览中对其进行组织、 http://your-instance/#/monitors
+* `+identifier+`:`+urn:stackpack:<stackpack-name>:monitor:....+` 形式的标识符，用于在更新配置时唯一标识监视器。
+
+== 监控功能
+
+=== 阈值
+
+当指定指标查询超过给定阈值时，触发健康状态。xref:/use/alerting/k8s-override-monitor-arguments.adoc[在注释的帮助下]，可以对特定资源设置不同的阈值。
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:threshold" }}
+arguments:
+  metric:
+    query: string
+    unit: string
+    aliasTemplate: string
+  comparator: GTE | GT | LTE | LT     # how to compare metric value to threshold
+  threshold: double
+  failureState: CRITICAL | DEVIATING | UNKNOWN
+  urnTemplate: string
+  titleTemplate: string
+----
+
+* `+query+`:PromQL 查询。使用{stackstate-product-name} 实例的xref:/use/metrics/k8sTs-explore-metrics.adoc[度量资源管理器] http://your-instance/#/metrics, ，并用它来构建相关度量的查询。
+* `+unit+`:查询返回的时间序列中数值的单位，用于渲染图表的 Y 轴。有关所有单位，请参阅xref:/develop/reference/k8sTs-chart-units.adoc[支持的单位]参考。
+* `+aliasTemplate+`:度量图表中时间序列的别名。这是一个模板，可以使用`+${my_label}+` 占位符替代时间序列中的标签。
+* `+comparator+`:从 LTE/LT/GTE/GT 中选择一个，将阈值与指标进行比较。`+<metric> <comparator> <threshold>+` 成立的时间序列将产生失效状态。
+* `+threshold+`:要与之比较的数字阈值。
+* `+failureState+`:要么是 "关键"，要么是 "偏离"。"CRITICAL" 将显示为{stackstate-product-name} ，"DEVIATING" 显示为橙色，以表示不同的严重程度。
+* `+urnTemplate+`:模板，用于构建监控结果将xref:use/alerting/k8s-add-monitors-cli.adoc#_bind_the_results_of_the_monitor_to_the_correct_components[绑定的]组件的瓮。
+* `+titleTemplate+`:监测结果的标题。由于多个监控结果可以绑定到同一个组件，因此可以使用`+${my_label}+` 占位符替代时间序列标签。
+
+=== 派生状态
+
+从组件的依赖关系中推导出其状态，而组件的健康状态是基于观测结果的。它会产生最重要的依赖关系的最关键状态。
+有关详情，请参阅xref:/setup/custom-integrations/monitors/derived-state-monitors.adoc[派生状态监控器]页面。
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:derived-state-monitor" }}
+arguments:
+  componentTypes: string
+----
+
+* `+componentTypes+`:有助于衍生状态的组件类型。 指定为`+,+` （逗号）分隔值的单个字符串
+
+=== 拓扑阈值
+
+当指定指标查询超过给定阈值时，触发健康状态。度量查询可从拓扑查询返回的组件中引用名称、标记和属性。xref:/use/alerting/k8s-override-monitor-arguments.adoc[在注释的帮助下]，可以对特定资源设置不同的阈值。
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:topological-threshold"  }}
+arguments:
+  queries:
+    topologyQuery: string
+    promqlQuery: string
+    aliasTemplate: string
+    unit: string
+  comparator: GTE | GT | LTE | LT     # how to compare metric value to threshold
+  threshold: double
+  failureState: CRITICAL | DEVIATING | UNKNOWN
+  titleTemplate: string
+----
+
+* `+queries+`:要执行的查询
+** `+topologyQuery+`:选择组件的 STQL 查询
+** `+promqlQuery+`:PromQL 查询可使用组件的标签和属性来选择时间序列
+** `+unit+`:查询返回的时间序列中数值的单位，用于渲染图表的 Y 轴。有关所有单位，请参阅xref:/develop/reference/k8sTs-chart-units.adoc[支持的单位]参考。
+** `+aliasTemplate+`:度量图表中时间序列的别名。这是一个模板，可以使用`+${my_label}+` 占位符替代时间序列中的标签。
+* `+comparator+`:从 LTE/LT/GTE/GT 中选择一个，将阈值与指标进行比较。`+<metric> <comparator> <threshold>+` 成立的时间序列将产生失效状态。
+* `+threshold+`:要与之比较的数字阈值。
+* `+failureState+`:要么是 "关键"，要么是 "偏离"。"CRITICAL" 将显示为{stackstate-product-name} ，"DEVIATING" 显示为橙色，以表示不同的严重程度。
+* `+titleTemplate+`:监测结果的标题。由于多个监控结果可以绑定到同一个组件，因此可以使用`+${my_label}+` 占位符替代时间序列标签。
+
+=== 动态阈值
+
+当当前值超出预测基线区间时发出警报，预测基线区间是根据历史数据动态计算的，并考虑了每周和每天的季节性模式。
+该监控功能只有在安装了自主异常探测器背包时才可用。
+
+有关详情，请参阅xref:/setup/custom-integrations/monitors/dynamic-threshold-monitors.adoc[动态阈值监控器]页面。
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:aad-v2:shared:monitor-function:dt" }}
+arguments:
+  telemetryQuery:
+    query: string
+    unit: string
+    aliasTemplate: string
+  topologyQuery: string
+  falsePositiveRate: float
+  checkWindowMinutes: integer
+  historicWindowMinutes: integer
+  historySizeWeeks: 1 | 2 | 3 (integer)
+  includePreviousDay: boolean
+  removeTrend: boolean
+----
+
+* `+telemetryQuery+`遥测技术：遥测技术用于评估
+** `+query+`:用于基线和异常检测的 PromQL 查询
+** `+unit+`:查询返回的时间序列中数值的单位，用于渲染图表的 Y 轴。有关所有单位，请参阅xref:/develop/reference/k8sTs-chart-units.adoc[支持的单位]参考。
+** `+aliasTemplate+`:度量图表中时间序列的别名。这是一个模板，可以使用`+${my_label}+` 占位符替代时间序列中的标签。
+* `+topologyQuery+`:选择组件的 STQL 查询
+* `+falsePositiveRate+``+!!float 1e-8+` - 监视器对偏差行为的敏感度。 较低的值会抑制更多（假）阳性结果，但也可能导致假阴性结果（未察觉的异常）。
+* `+checkWindowMinutes+`例如`+10+` 分钟 - 检查窗口需要在快速警报（数值小）和正确识别异常（数值大）之间取得平衡。 少数几个数据点在实践中效果很好。
+* `+historicWindowMinutes+`例如：`+120+` （2 小时）\--以当前时间为括号，然后是一个或多个星期之前的时间\--因此从当前时间之前 1 小时到之后 1 小时。 此外，还使用了检查窗口前的 2 个小时。 动态阈值监控器将此历史数据的分布与检查窗口中的数据点进行比较。
+* `+historySizeWeeks+`例如：`+2+` - 从历史数据中提取的周数。 可以是`+1+`, `+2+` 或`+3+` 。
+* `+removeTrend+`平均值：对于具有趋势行为的指标（如请求数），其绝对值每周都不同，这种趋势（平均值）可以考虑在内。
+* `+includePreviousDay+`：通常为`+false+` - 对于没有每周模式而只有每日模式的指标，可以使用较新的数据
+
+endif::[]
