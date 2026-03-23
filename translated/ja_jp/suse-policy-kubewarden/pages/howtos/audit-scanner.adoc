@@ -1,0 +1,139 @@
+include::partial$variables.adoc[]
+
+= 監査スキャナー
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} 内の Audit Scanner 機能を使用してクラスタのコンプライアンス状態を検証し、クラスタが適切に構成されていることを確認します。
+:doc-persona: ["kubewarden-operator"、"kubewarden-distributor"、"kubewarden-integrator"]]。
+:doc-topic: ["howto", "audit-scanner-installation"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "audit scanner" ]。
+:sidebar_label: 監査スキャナー
+:sidebar_position: 70
+:current-version: {page-origin-branch}
+
+バージョン`+v1.7.0+` 以降、{project-name} には「Audit Scanner」と呼ばれる新機能が追加された。audit-scanner "と呼ばれる新しいコンポーネントは、クラスタ内で宣言されたリソースを常にチェックし、デプロイされた{project-name} ポリシーに準拠していないものにフラグを立て、その結果を特定のレポート "Custom Resources "に保存する。
+
+ポリシーは時間とともに進化する。新しいポリシーを導入し、既存のポリシーを更新する。バージョンもコンフィギュレーション設定も変わる。これにより、すでにクラスタ内にあるリソースが準拠しなくなる事態が発生する可能性がある。
+
+監査スキャナ機能は、Kubernetes管理者にクラスタのコンプライアンス状態を一貫して検証するツールを提供する。
+
+Audit Scannerは、その結果をlink:https://openreports.io[openreports.ioの]Custom Resource Definitions (CRDs) OpenReports（v1.33以降のデフォルト設定）またはlink:https://github.com/kubernetes-sigs/wg-policy-prototypes[]KubernetesPolicyReports（v1.30以降非推奨とマークされ、v1.30以降デフォルトではインストールも作成もされず、将来のリリースで削除される予定）のいずれかで保存できます。
+
+== インストール
+
+監査スキャナーのコンポーネントは、{short-project-name} `+v1.7.0+` から利用可能です。
+したがって、Helmチャートをアプリのバージョン`+v1.7.0+` 以上でインストールしていることを確認してください。
+
+. `+kubewarden-crds+` Helmチャートをインストールする。チャートはデフォルトで必要な`+PolicyReport+` CRD をインストールする。
++
+[subs="+attributes",console]
+----
+helm install kubewarden-crds kubewarden/kubewarden-crds
+----
++
+
+[NOTE]
+====
+Kubewarden 1.33 では、監査スキャナ機能はデフォルトで [openreports.io](https://openreports.io) から OpenReports CRD にレポートを保存します。
+
+K8s Policyワーキンググループのlink:https://htmlpreview.github.io/?https://github.com/kubernetes-sigs/wg-policy-prototypes/blob/045372e558b896695b2daae92e8c7a04d4d40282/policy-report/docs/index.html[PolicyReport]CRDは、デフォルトではインストールされず、非推奨とマークされ、将来のリリースで削除される予定です。
+
+非推奨のPolicyReports、つまり、1.33以前の動作を使用し続けたいユーザは、以下を行う必要があります：-`+.Values.install.installPolicyReportCRDs+` の`+kubewarden-crds+` Helm chart 値を`+true+` に変更する。 -`+.Values.auditScanner.reportCRDsKind+` の`+kubewarden-controller+` Helm chart 値を`+openreports+` から`+policyreport+` に変更する。
+====
++
+[CAUTION]
+====
+ポリシー レポートの結果を保存するには、PolicyReport カスタム リソース定義 (CRD) を使用できるようにする必要があります。必要なPolicyReport CRDがすでにクラスタ内にある場合は、kubewarden-crdsチャートを使用してインストールできません。その場合、チャートで`+installOpenReportCRDs+` を`+false+` に設定する（非推奨の PolicyReports を使用している場合は`+installPolicyReportCRDs+` を`+false+` に設定する）ことで、OpenReport CRD のインストールを無効にすることができます。
+つまり、KubewardenスタックはこれらのCRDを管理せず、責任は管理者にある。
+
+CRDの詳細については、link:https://github.com/kubernetes-sigs/wg-policy-prototypes[ポリシー作業グループリポジトリを]参照のこと。
+
+====
+
+
+. `+kubewarden-controller+` Helmチャートをインストールする。
++
+[subs="+attributes",console]
+----
+helm install kubewarden-controller kubewarden/kubewarden-controller
+----
++
+
+[NOTE]
+====
+監査スキャナーはデフォルトで有効になっている。無効にするには、`+auditScanner.enable=false+` を設定する。
+====
++
+[NOTE]
+====
+Audit Scanner のレポートをデフォルトの OpenReports CRD ではなく PolicyReports CRD (非推奨) に保存する場合は、`+auditScanner.reportCRDsKind="policyreport"+` を設定します。
+====
+
+{short-project-name} のインストールの詳細については、xref:quick-start.adoc[クイックスタートガイドを]参照してください。
+
+デフォルトでは、Audit Scannerの実装はhttps://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs[]Cronjobとして60分ごとにトリガーされます。kubewarden-controller charthttps://github.com/kubewarden/helm-charts/blob/main/charts/kubewarden-controller/values.yaml[values.yamlを]変更することで、この設定やその他の監査スキャナ設定を調整できる。
+
+監査スキャナーの詳細はxref:explanations/audit-scanner/audit-scanner.adoc[こちらを]ご覧ください。
+
+=== ポリシーレポーターUI（オプション）
+
+`+kubewarden-controller+` チャートには、https://kyverno.github.io/policy-reporter[ポリシー・レポーターの]サブチャートが付属している。デフォルトでは無効で、`+auditScanner.policyReporter=true+` を設定することで有効になる。Policy Reporter サブチャートの値は、`+kubewarden-controller+` 値の`+policyReporter+` キーの下にあります。
+
+これは、クラスタ内のPolicyReportsとClusterPolicyReportsの視覚化を提供するUIであるPolicy Reporterアップストリームチャートの一部のみをインストールします。Policy Reporter UI の詳細については、「xref:explanations/audit-scanner/audit-scanner.adoc[監査スキャナ]」を参照してください。
+
+`+kubewarden-controller-ui+` デフォルトでは、Policy Reporter UIはClusterIPサービスとしてのみ公開されます。
+
+`+kubewarden-controller+` チャートが設置された。
+
+==== イングレス
+
+ユーザーは独自のIngressコンフィギュレーションを提供することができ、またサブチャート・コンフィギュレーションhttps://github.com/kyverno/policy-reporter/blob/policy-reporter-2.19.4/charts/policy-reporter/charts/ui/values.yaml#L172-L189[、ここで]Ingressを有効にすることもできる。
+
+サブチャートによるIngressコンフィギュレーションの例をご覧ください：
+
+[subs="+attributes",yaml]
+----
+auditScanner:
+  policyReporter: true
+policy-reporter: # subchart values settings
+  ui:
+    enabled: true
+    ingress:
+      enabled: true
+      hosts:
+        - host: "*.local" # change this to your appropriate domain
+          paths:
+            - path: /
+              pathType: ImplementationSpecific
+----
+
+==== ポートフォワーディング
+
+手っ取り早く見たり、デバッグしたりするために、ポートフォワーディングをセットアップすることができる：
+
+[subs="+attributes",console]
+----
+kubectl port-forward service/kubewarden-controller-ui 8082:8080 -n kubewarden
+----
+
+これにより、Policy ReporterのUIは`+\http://localhost:8082+` 。
+
+== 手動運転のトリガー
+
+監査スキャナーの実装は、デフォルトで60分ごとに実行されるCronjobである。以下のコマンドを実行することで、手動ランを発動させることができる：
+
+[subs="+attributes",bash]
+----
+kubectl create job \
+    --namespace kubewarden \
+    --from cronjob/audit-scanner \
+    audit-scanner-manual-$(date +%Y-%m-%d-%H-%M-%S)
+----
+
+でジョブのステータスをチェックできる：
+
+[subs="+attributes",console]
+----
+kubectl get -n kubewarden jobs
+----
