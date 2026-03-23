@@ -1,0 +1,132 @@
+= 请求跟踪
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 通过负载平衡器、服务网格和集群之间的可观察性
+
+SUSE Observability 可观察不同集群中服务和 pod 之间的连接，或连接通过服务网格或负载平衡器时的情况。观察这些连接可通过`+request tracing+` 进行。跟踪的请求将在xref:/use/views/k8s-topology-perspective.adoc[拓扑视角]中产生连接，以便深入了解整个应用程序的依赖关系，并帮助找到事件的根本原因。
+
+== 它是如何工作的
+
+请求跟踪是通过在所有 HTTP 流量中注入一个独特的标头（`+X-Request-ID+` 标头）来实现的。通过与 SUSE Observability Agent 一起安装的 eBPF 探测器，可在客户端和服务器上观察到这一独特的标头。这些观察结果会被发送到 SUSE Observability，后者会利用这些观察结果来了解哪些客户端和服务器已连接。
+
+`+X-Request-Id+` 标头由 SUSE Observability Agent 自动<<_enabling_the_trace_header_injection_sidecar,注入的>>sidecar 代理注入。https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#_mutatingadmissionwebhook[突变网络钩子]会注入侧卡，并将侧卡注入每个定义了`+http-header-injector.stackstate.io/inject: enabled+` 注释的 pod。OpenShift 不支持 Sidecar 注入。
+
+如果<<_instrument_your_application,您>>的应用程序<<_add_the_trace_header_id_to_an_existing_proxy,已经有一个代理或 LoadBalancer>>，或已部署到启用了<<_add_the_trace_header_id_with_envoy_filter,Istio 服务网格的>>Kubernetes 集群，也可以添加`+X-Request-Id+` 标头。这样做的好处是不需要额外的辅助代理。
+
+== 启用跟踪标头注入功能
+
+启用跟踪标头注入需要两个步骤：
+
+. 在安装 SUSE Observability 代理时，在 helm upgrade 调用中添加`+--set httpHeaderInjectorWebhook.enabled=true+` ，将突变网络钩子安装到集群中。默认情况下，侧载注入器会生成自己的自签名证书，需要群集角色将这些证书安装到群集中。也可以在更受限制的环境中xref:/setup/agent/k8sTs-agent-request-tracing-certificates.adoc[管理自己的证书]。
+. 如果每个 pod 都有一个处理 http(s) 请求的端点，请将注解`+http-header-injector.stackstate.io/inject: enabled+` ，以便注入侧载。
+
+[CAUTION]
+====
+*启用突变网络钩子只会在重新启动 pod 时生效*
+
+如果注释是在安装网络钩子之前添加的，则会出现以下问题在重新启动 pod 之前，安装 webhook 没有任何作用。
+====
+
+
+=== 禁用跟踪标头注入
+
+禁用跟踪头注入可以通过相反的过程完成：
+
+. 从所有 pod 中移除`+http-header-injector.stackstate.io/inject: enabled+` 注释。
+. 在没有`+--set httpHeaderInjectorWebhook.enabled=true+` 设置的情况下重新部署 SUSE Observability Agent。
+
+[CAUTION]
+====
+*禁用突变网络钩子只会在重新启动 pod 时生效*
+
+如果跳过步骤 1，只禁用了突变网络钩子，则需要重启所有 pod 才能移除侧挂。
+====
+
+
+=== 高架
+
+请求跟踪会为注入和观察的每个 HTTP 请求头增加少量固定的 CPU 开销。具体数量取决于运行的系统，因此建议首先在验收环境中启用该功能，以观察其影响，然后再转入生产环境。侧车代理在部署时，每个 pod 占用的内存最小为 25Mb，最大为 40Mb。
+
+== 将跟踪标头 ID 添加到现有代理中
+
+要从现有代理中添加`+X-Request-Id+` 标头，有两个属性很重要：
+
+. 每个请求/响应对都必须有一个唯一的 ID。
+. `+X-Request-Id+` 标头应同时添加到请求和响应中，以便客户端和服务器都能观察到。
+
+=== 在 envoy 中添加跟踪头 ID
+
+在 envoy 中，可通过为https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto[连接] http设置`+generate_request_id: true+` 和`+always_set_request_id_in_response: true+` 来启用`+X-Request-Id+` 标头
+
+== Istio
+
+https://istio.io/latest/docs/reference/config/networking/envoy-filter/[Envoy 过滤器]可用于设置 Envoy 的跟踪标题。
+
+=== 使用 envoy 过滤器添加跟踪标头 ID
+
+使用`+kubectl+` 将以下定义应用到 Kubernetes 集群、
+
+[,yaml]
+----
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: responsed-x-request-id-always
+  namespace: istio-system
+spec:
+  configPatches:
+    - applyTo: NETWORK_FILTER
+      match:
+        context: ANY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            '@type': >-
+              type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            always_set_request_id_in_response: true
+            generate_request_id: true
+            preserve_external_request_id: true
+  priority: 0
+----
+
+== 为您的应用程序配备仪器
+
+也可以在客户端为每个请求添加`+X-Request-Id+` 标头，或在服务器端为每个响应添加 标头。必须确保每个请求/响应都有一个唯一的`+X-Request-Id+` 值。此外，`+X-Request-Id+` 还要求，如果请求中已包含一个 ID，则响应中也应包含相同的 ID。
+
+== 支持的系统/技术
+
+* 带 keepAlive 的 HTTP/1.0 和 HTTP/1.1
+* 对未加密流量进行跟踪头注入和跟踪观察
+* 对 OpenSSL 加密流量的跟踪观测
+* 与 LinkerD 一起跟踪头注入情况
+* 任何在请求和响应中转发`+X-Request-Id+` 标头的负载平衡器
+* 任何在请求和响应中转发`+X-Request-Id+` 标头的跨集群网络解决方案
+
+== 已知问题
+
+=== 我的吊舱没有注塑侧梁
+
+要确保设置正常，首先要验证以下步骤是否已执行：
+
+* `+--set httpHeaderInjectorWebhook.enabled=true+` 标志是在安装代理时设置的
+* 吊舱已设置`+http-header-injector.stackstate.io/inject: enabled+` 
+* 重新启动了 pod
+
+如果这样还不能解决问题，可能是以下原因造成的：
+
+==== 集群联网政策
+
+集群可以设置网络策略，防止 kubernetes 控制平面 apiserver 与注入 sidecar 的 mutatingvalidationwebhook 联系。要验证这一点，请查看 kube-apiserver 的日志，该日志位于 kube-system 命名空间中，或者由云提供商管理。这些日志中应该会出现类似以下的错误：
+
+----
+Failed calling webhook, failing open stackstate-agent-http-header-injector-webhook.stackstate.io: failed calling webhook "stackstate-agent-http-header-injector-webhook.stackstate.io": failed to call webhook: Post "https://stackstate-agent-http-header-injector.monitoring.svc:8443/mutate?timeout=10s": context deadline exceeded
+----
+
+如果出现这种情况，请务必调整群集网络策略，使 apiserver 可以访问 mutatingvalidationwebhook。
