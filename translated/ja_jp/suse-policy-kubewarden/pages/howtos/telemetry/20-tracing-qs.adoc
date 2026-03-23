@@ -1,0 +1,367 @@
+include::partial$variables.adoc[]
+= トレースクイックスタート
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: このクイックスタートガイドを使用してPolicy Serverのトレースサポートを有効にすると、ポリシーの評価に関する詳細な情報が収集され、SUSE Security Admissionの問題のデバッグに使用できます。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "telemetry", "tracing", "quick-start"]
+:doc-type: ["howto"]
+:keywords: ["kubewarden", "kubernetes", "tracing", "quickstart"]
+:sidebar_label: トレース
+:current-version: {page-origin-branch}
+
+このセクションでは、Policy Serverのトレースサポートを有効にする方法を示します。
+
+[NOTE]
+====
+
+続行する前に、このドキュメントの前のxref:howtos/telemetry/10-opentelemetry-qs.adoc#_install_opentelemetry[OpenTelemetry]セクションを完了したことを確認してください。このセクションを正しく機能させるために必要です。
+
+====
+
+
+トレースにより、ポリシー評価に関する詳細な情報を収集することができます。これは、{project-name} のデプロイメントとポリシーの問題をデバッグするのに便利なツールです。
+
+トレースイベントの受信、保存、視覚化に使用されるhttps://www.jaegertracing.io/[] Jaeger-- を使用します。
+
+== イェーガーをインストールする
+
+https://github.com/jaegertracing/jaeger-operator[イェーガー・オペレーターを使って]、さまざまなイェーガーのコンポーネントを管理します。ヘルムチャートを使ってイェーガーオペレーターをインストールすることができます。
+
+[NOTE]
+====
+
+本稿執筆時点（2022-06-21）では、特定のバージョンのイェーガーのみがCert Manager,https://github.com/jaegertracing/helm-charts/blob/main/charts/jaeger-operator/COMPATIBILITY.md と互換性があります[互換性表を参照]。
+
+====
+
+ヘルムチャートをインストールする：
+
+[subs="+attributes",console]
+----
+helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+
+helm upgrade -i --wait \
+  --namespace jaeger \
+  --create-namespace \
+  --version 2.49.0 \
+  jaeger-operator jaegertracing/jaeger-operator \
+  --set rbac.clusterRole=true
+----
+
+[CAUTION]
+====
+
+これは*本番配備には適さない*。イエーガーのhttps://www.jaegertracing.io/docs/latest/kubernetes/[公式ドキュメント]を読むべきだ。
+
+====
+
+イェーガー・リソースを作成する：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: my-open-telemetry
+  namespace: jaeger
+spec: {}
+EOF
+----
+
+イエーガー・オペレーターのリソースを作成した後、`+my-open-telemetry-collector.jaeger.svc.cluster.local+` の下にサービスがあります。Jaeger Query UI は`+jaeger+` Namespace の`+my-open-telemetry-query+` Service によって公開されています。
+
+== インストール {short-project-name}
+
+これで、通常の方法で{short-project-name} 。
+
+[NOTE]
+====
+
+`+cert-manager+` は OpenTelemetry の要件ですが、このドキュメントの前のセクションですでにインストール済みです。
+
+====
+
+最初のステップとして、{short-project-name} を含む Helm リポジトリを追加します：
+
+[subs="+attributes",console]
+----
+helm repo add kubewarden https://charts.kubewarden.io
+----
+
+次に、{short-project-name} で定義されたカスタムリソース定義（CRD）をインストールします：
+
+[subs="+attributes",console]
+----
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  kubewarden-crds kubewarden/kubewarden-crds
+----
+
+これで、{short-project-name} スタックの残りの部分をデプロイできる。`+kubewarden-defaults+` の公式ヘルムチャートでは、`+default+` という名前の PolicyServer が作成されます。この PolicyServer インスタンスでトレースを有効にします。
+
+そのためには、`+kubewarden-controller+` チャートにいくつかの特別な値を指定する必要がある。以下の内容で`+values.yaml+` ：
+
+[subs="+attributes",yaml]
+----
+telemetry:
+  mode: sidecar
+  tracing: True
+  sidecar:
+    tracing:
+      jaeger:
+        endpoint: "my-open-telemetry-collector.jaeger.svc.cluster.local:4317"
+        tls:
+          insecure: true
+----
+
+[CAUTION]
+====
+
+簡単にするために、OpenTelemetryコレクタとJaegerエンドポイント間の通信の暗号化はない。
+
+繰り返すが、これは*本番配備には適さない*。イエーガーのhttps://www.jaegertracing.io/docs/latest/kubernetes/[公式ドキュメントを]参照してください。
+
+====
+
+その後、ヘルムチャートのインストールを進めてください：
+
+[subs="+attributes",console]
+----
+helm install --wait --namespace kubewarden --create-namespace \
+  --values values.yaml \
+  kubewarden-controller kubewarden/kubewarden-controller
+
+helm install --wait --namespace kubewarden --create-namespace \
+  kubewarden-defaults kubewarden/kubewarden-defaults
+----
+
+これにより、`+PolicyServer+` の`+default+` インスタンスが作成される：
+
+[subs="+attributes",console]
+----
+kubectl get policyservers.policies.kubewarden.io
+NAME      AGE
+default   3m7s
+----
+
+PolicyServerインスタンスを実行しているPodをよく見ると、2つのコンテナが入っていることがわかる。`+policy-server+` と OpenTelemetry Collector サイドカー`+otc-container+`.
+
+== ポリシーの実施
+
+https://github.com/kubewarden/safe-labels-policy[safe-labels]ポリシーを展開することから始める。
+
+このポリシーは、`+production+` の値を持つラベル`+environment+`を持つ Namespaces でのみ適用されます。
+
+そのようなラベルを持つネームスペースへ：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-alpha-prod
+  labels:
+    environment: production
+EOF
+----
+
+次に、ClusterAdmissionPolicyを定義します：
+
+[subs="+attributes",yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: safe-labels
+spec:
+  module: registry://ghcr.io/kubewarden/policies/safe-labels:v0.1.6
+  settings:
+    mandatory_labels:
+    - owner
+  rules:
+    - apiGroups:
+        - apps
+      apiVersions:
+        - v1
+      resources:
+        - deployments
+      operations:
+        - CREATE
+        - UPDATE
+  namespaceSelector:
+    matchExpressions:
+    - key: environment
+      operator: In
+      values: ["production"]
+  mutating: false
+EOF
+----
+
+保険が有効になるのを待つ必要がある：
+
+[subs="+attributes",console]
+----
+kubectl wait --for=condition=PolicyActive clusteradmissionpolicy/safe-labels
+----
+
+ポリシーがアクティブになれば、試すことができる：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: team-alpha-prod
+  labels:
+    owner: octocat
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+ポリシーに違反しないので、ポリシーはこのDeploymentオブジェクトの作成を許可する。
+
+ポリシーはこの配置オブジェクトをブロックする：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-without-labels
+  namespace: team-alpha-prod
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+このポリシーは、別のNamespaceでは適用されません。
+
+このコマンドは、`+team-alpha-staging+` という新しいネームスペースを作成します：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-alpha-staging
+  labels:
+    environment: staging
+EOF
+----
+
+このポリシーは、`+team-alpha-staging+` Namespace に、ラベルのない Deployment リソースの作成を許可します：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-without-labels
+  namespace: team-alpha-staging
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+予想通り、このリソースは正常に作成された。
+
+== イェーガーのUIを探る
+
+PolicyServerインスタンスからJaegerに送信されたトレースイベントは、UIにリストされた新しいサービス`+kubewarden-policy-server+` ：
+
+image::jaeger-ui-home.png[ジャガー・ダッシュボード]
+
+Jaeger コレクターは PolicyServer によって生成されたトレースを受信しています。
+
+前のガイドでTraefikをインストールした場合は、この`+Ingress+` を使ってJaeger Query UIを公開してください：
+
+[,yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-open-telemetry-query
+  namespace: jaeger
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-open-telemetry-query
+                port:
+                  number: 16686
+EOF
+----
+
+TraefikでイェーガーのUIにアクセスするには、以下を実行する：
+
+[,console]
+----
+kubectl -n traefik port-forward service/traefik 8080:80
+----
+
+そして、`+\http://localhost:8080+` 。
+
+Traefikをバイパスしたい場合は、直接イェーガーにアクセスする：
+
+[,console]
+----
+kubectl -n jaeger port-forward service/my-open-telemetry-query 16686
+----
+
+そして、`+\http://localhost:16686+` 。
