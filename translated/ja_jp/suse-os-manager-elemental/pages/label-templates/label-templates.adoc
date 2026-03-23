@@ -1,0 +1,153 @@
+= ラベルテンプレートの概要
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Elemental では、xref:references/machineregistration-reference.adoc[MachineRegistration]リソースの`+spec.machineInventoryLabels+` と`+spec.machineInventoryAnnotations+` セクションで_ラベルテンプレートを_指定できます。
+
+そのフォーマットは、Kubernetesのラベルとアノテーションで使用される`+key+`:``+value+``の正規形である。
+
+これらのラベル・テンプレートは、xref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[マシンのオンボーディング]段階で作成されたxref:references/machineinventory-reference.adoc[各MachineInventory]リソースに添付される実際のラベルとアノテーションに変換されます。
+
+出来上がったラベルと注釈は、ラベルテンプレートと同じ`+key+` 。
+
+関連する`+value+` ：
+
+* * <<_label_templates_variables,`+label template variables+`>> をレンダリングする*（存在する場合）
+* *`+sanitizing+`* 結果の値（ラベルのみの場合）
+
+[IMPORTANT]
+====
+Elementalのテンプレート機能は、xref:references/machineregistration-reference.adoc[MachineRegistration] `+spec.machineName+` フィールドもカバーする。このフィールドは、結果として登録されるマシンのホスト名と、関連するxref:references/machineinventory-reference.adoc[MachineInventory]リソースの`+name+` を定義する。
+
+詳細は<<_custom_machine_names,マシン名の>>項を参照。
+====
+
+
+== ラベルテンプレートの変数
+
+Elemental Label Templatingは、xref:references/machineregistration-reference.adoc[MachineRegistrationで]指定された_ラベル_テンプレートの`+value+` 内部で使用できる、定義済みの変数のセットを含んでいます。
+
+ラベル・テンプレートの変数を指定するために使われる構文は以下の通りです：
+
+`+${ _VARFAMILY_ \/ _VARPATH_ }+`
+
+ここで、_VARFAMILY_はサポートされる変数のグループ（ファミリー）を定義し、_VARPATH_は属するファミリーグループ内の実際の変数名を定義します。
+
+Elementalは現在、以下の_テンプレート変数ファミリーを_サポートしている：
+
+* xref:label-templates/label-templates-bios.adoc[*BIOS*]:*${ BIOS \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-baseboard.adoc[*ベースボード*]:*${ BaseBoard \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-cpu.adoc[*CPU*]:*${ CPU \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-chassis.adoc[*シャーシ*]:*${ Chassis \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-gpu.adoc[*GPU*]:*${ GPU \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-memory.adoc[*メモリ*]*メモリー*
+* xref:label-templates/label-templates-network.adoc[*ネットワーク*]:*${ Network \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-product.adoc[*製品*]:*${ 製品名 /* _VARPATH_ *}*.
+* xref:label-templates/label-templates-runtime.adoc[*ランタイム*]:*${ Runtime \/* _VARPATH_ *}*.
+* xref:label-templates/label-templates-storage.adoc[*ストレージ*]*ストレージ*
+
+[CAUTION]
+====
+すべての_テンプレート変数ファミリー_（ただし _`+Random+`_)は、xref:references/machineregistration-reference.adoc[MachineRegistrationの] `+elemental.registration.no-smbios+` フィールドが`+false+` （デフォルト）に設定されている場合にのみ有効になる。
+
+`+elemental.registration.no-smbios+` フィールドが`+true+` に設定されている場合、登録マシンはテンプレート変数のレンダリングに必要なデータを送信しないので、変数は利用できない。
+
+*ランダム*変数は演算子側に組み込まれているので、常に利用可能である。また、これらの変数は一度しか計算されないので特別です。詳細はxref:label-templates/label-templates-random.adoc[ランダムテンプレート変数の]セクションを参照してください。
+====
+
+
+テンプレート変数は、静的テキストと混合して、xref:references/machineinventory-reference.adoc[（MachineInventories]）に割り当てられた実際のラベルを形成することができます。
+
+[NOTE]
+.レンダリング例
+====
+
+* 登録ホストのCPUコア数を追跡するラベルテンプレート（ホストは4コアと仮定）：
+ ** オリジナル・ラベル:*CPU: ${CPU\/TotalCores}*-cores
+ ** レンダーラベル：*CPU：4コア*
+* 登録ホストのSMBIOS UUIDを追跡するラベルテンプレート：
+ ** オリジナルラベル:*sbios-UUID: ${Product\/UUID}*
+ ** レンダリングされたラベル：*sbios-UUID：fd95324a-c26b-4e28-8727-1dcec293a0ec*
+====
+
+
+== 消毒
+
+ラベルテンプレートの値が、含まれる<<_label_templates_variables,ラベルテンプレート変数に従って>>レンダリングされると、結果の値は、結果のラベルに割り当てられる前に、`+sanitized+` 。
+
+* `+sanitization+` は、ラベル値に文字（大文字でも小文字でも）、数字、ハイフン（`+-+`* ）*、ポイント（`+.+`* ）*、アンダースコア（`+_+` ）のみを含めることを強制*します：
+
+含まれない文字はすべてハイフンで代用される。
+
+ラベル値の最初と最後の文字は、文字か数字でなければならない。そうでない場合は落選となる。
+
+連続する2つのハイフンは1つに置き換えられる。
+
+[NOTE]
+.レンダリング例
+====
+
+* 禁止文字をサニタイズしたラベルテンプレート：
+ ** オリジナルラベル：*サニタイズド：this:needs--サニタイズド！*
+ ** レンダリングされたラベル:*除菌: This-needs-sanitizing*
+====
+
+
+== ラベルテンプレートの使用
+
+ラベルテンプレートを使用すると、ホストがElemental Operatorに登録するたびに、各ホストのxref:references/machineinventory-reference.adoc[MachineInventoryに]ラベルと注釈を自動的に添付して更新できます。
+
+[IMPORTANT]
+====
+登録はxref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[オンボーディングフェーズだけ]でなく、各ホストは30分ごとに（そしてリブートするたびに）再登録を行う。再登録の間、関連するxref:references/machineregistration-reference.adoc[MachineRegistrationの]ラベルテンプレートは再評価され、xref:references/machineinventory-reference.adoc[MachineInventoryに]追加/更新される。
+====
+
+
+ラベル・テンプレートが役立つ主なケースは3つある：
+
+* ハードウェアのデータをエレメンタル・カタログに添付する。
+* を追加して、クラスタプロビジョニング用のホストをピックアップするセレクタを追加します。
+* を使用して、マシン名のカスタムテンプレートを定義します。
+
+=== Elementalカタログのハードウェアデータ
+
+Label Templatesの変数を使用して、xref:references/machineinventory-reference.adoc[各MachineInventory]リソース（Elemental Catalogを形成する）にハードウェアデータを添付することができる。
+
+この場合、値はサニタイズされないので、アノテーションの方が良い選択かもしれない。
+
+=== クラスタ・プロビジョニングのセレクタ
+
+`+Label Templates+` 、新しいKubernetesクラスタを形成するために、特別なハードウェアプロパティを持つマシンを識別して選択するために使用されるラベルを生成するために使用することができます。
+
+xref:references/machineinventory-reference.adoc[各MachineInventoryに]アタッチされたラベルは、xref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate]リソースの_セレクタの_対象となります（詳細については、xref:rancher-os-management/architecture/services/architecture-clusterdeployment.adoc[Kubernetesクラスタのプロビジョニングの]セクションを参照してください）。
+
+=== カスタムマシン名
+
+オンボーディング・マシンのホスト名は、xref:references/machineregistration-reference.adoc[MachineRegistration] `+spec.machineName+` フィールドを使って指定できる。
+
+`+spec.machineName+` の値は、`+spec.machineInventoryLabels+` フィールドに予約されているのと同じ`+Label Templates' variables+` と`+sanitization+` の処理を受ける。
+
+[CAUTION]
+====
+xref:references/machineregistration-reference.adoc[MachineRegistration] `+spec.machineName+` フィールドと`+spec.machineInventorylabels+` フィールドの間には、1つ特筆すべき違いがある。<<_sanitization,サニタイズ>>処理中、アンダースコア（`+_+` ）は、他の禁止文字として置き換えられる（すなわち、ハイフンで置き換えられる：`+-+` ）。linuxのホスト名ではアンダースコアは使用できないので、これは必須である。
+====
+
+
+Elementalホストのホスト名を定義する方法の詳細については、xref:installation/hostname.adoc[HowTo/Customize hostname]セクションを参照してください。
+
+[NOTE]
+.レンダリング例
+====
+* `+SLE-Micro-[random string of 6 hexadecimal values]+` のようなホスト名テンプレートを定義する：
+ ** MachineRegistration spec:*machineName：SLE-Micro-${Random\/Hex\/6}*
+ ** マシンインベントリ名：*SLE-Micro-32ad41*
+====
+
+
+== ラベルテンプレート例
+
+.ラベルテンプレートの変数を使った登録例
+[,yaml]
+----
+include::example$quickstart/registration-hardware-dhcphostname.yaml[]
+----
