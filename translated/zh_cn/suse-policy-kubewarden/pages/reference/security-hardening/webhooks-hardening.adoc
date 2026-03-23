@@ -1,0 +1,218 @@
+include::partial$variables.adoc[]
+= 加固{short-project-name} 网络钩子
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:sidebar_label: 网络钩子
+:description: 配置网络策略和身份验证，以限制对 Kubernetes 集群中 webhooks 的访问，特别是限制无效调用者的连接。
+:keywords: kubewarden、Kubernetes、安全
+:doc-persona: kubewarden-operator, kubewarden-integrator
+:doc-type: 参照
+:doc-topic: 参考、安全
+
+{project-name} 堆栈使用 webhooks 在 Kubernetes 集群中执行策略。
+每个`+PolicyServer+` 实例都会暴露一个 webhook，Kubernetes API 服务器会调用它来验证和更改资源。此外，`+kubewarden-controller+`还提供网络钩子，用于验证和更改{short-project-name} 项目提供的自定义资源。
+
+为了减少它们的攻击面，你应该限制对这些网络钩子的访问，只允许它们的有效呼叫者访问：
+
+* Kubernetes API 服务器
+* xref:/explanations/audit-scanner/audit-scanner.adoc[审计扫描仪]组件。
+
+您可以单独或同时使用网络策略和身份验证来加固网络钩子，以抵御攻击。
+
+== 使用网络策略阻止外部流量
+
+Webhooks 只接受来自 Kubernetes API 服务器和审计扫描组件的请求。但默认情况下，网络钩子可以接受来自任何来源的流量。如果使用的是支持网络策略的容器网络接口 (CNI)，则可以创建一个策略来阻止非来自 API 服务器的流量。
+
+Kubernetes 内置的 NetworkPolicy 资源无法阻止或接受来自群集主机的流量。此外，`+kube-apiserver+` 进程始终在主机网络上运行。因此，您必须使用正在使用的 CNI 中的高级网络策略资源。下面是 Calico 和 Cilium 的示例。详情请查阅 CNI 文档。
+
+=== 花布
+
+使用`+crd.projectcalico.org/v1+` API 组中的 NetworkPolicy 资源，定义类似以下的网络策略：
+
+[source,yaml]
+----
+apiVersion: crd.projectcalico.org/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-k8s-and-audit-scanner
+  namespace: kubewarden
+spec:
+  selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+  types:
+    - Ingress
+  ingress:
+    - action: Allow
+      protocol: TCP
+      source:
+        nets:
+        - 192.168.42.0/24
+      destination:
+        selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+    - action: Allow
+      protocol: TCP
+      source:
+        namespaceSelector: 'kubernetes.io/metadata.name == "kubewarden"'
+      destination:
+        selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+----
+
+[NOTE]
+====
+
+该网络策略使用{short-project-name} 1.23.0 中引入的标签选择器。如果您使用的是旧版本，请更新策略中的标签，使其与您的部署相匹配。
+
+更具体地说，编写
+
+[source,yaml]
+----
+selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+----
+
+选择器为
+
+[source,yaml]
+----
+selector: 'app.kubernetes.io/name == "kubewarden-controller" || has(kubewarden/policy-server)'
+----
+====
+
+=== 纤毛
+
+使用`+cilium.io/v2+` API 组中的 CiliumNetworkPolicy 资源定义类似以下的网络策略：
+
+[source,yaml]
+----
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-k8s-and-audit-scanner
+  namespace: kubewarden
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - policy-server
+          - controller
+  ingress:
+    - fromEntities:
+      - host
+      - remote-node
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kubewarden
+----
+
+[NOTE]
+====
+
+该网络策略使用{short-project-name} 1.23.0 中引入的标签选择器。如果您使用的是旧版本，请更新策略中的标签，使其与您的部署相匹配。
+
+更具体地说，编写
+
+[source,yaml]
+----
+matchExpressions:
+  - key: app.kubernetes.io/component
+    operator: In
+    values:
+      - policy-server
+      - controller
+----
+
+表达为
+
+[source,yaml]
+----
+endpointSelector:
+matchExpressions:
+  - key: app.kubernetes.io/name
+    operator: In
+    values:
+      - kubewarden-controller
+  - key: kubewarden/policy-server
+    operator: Exists
+----
+====
+
+== 要求 Kubernetes API 服务器对网络钩子进行身份验证
+
+[TIP]
+====
+
+请参阅xref:/howtos/security-hardening/webhook-mtls.adoc[webook mTLS 如何]配置 K3s 的 Kubernetes API 服务器以验证 webhook 的分步指南。
+
+====
+
+{short-project-name} 堆栈暴露的网络钩子只能接受来自 Kubernetes API 服务器或审计扫描组件的请求。默认情况下，这些网络钩子不要求客户端对其进行身份验证。他们接受任何请求。
+
+您可以将网络钩子配置为需要凭据，这样只有 API 服务器和审计扫描程序才能访问它们。更多信息请参阅https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#authenticate-apiservers[Kubernetes 文档]。
+
+. 配置 API 服务器，向 webhook 发送客户端证书，指向`+AdmissionConfiguration+` 文件，以配置`+ValidatingAdmissionWebhook+` 和`+MutatingAdmissionWebhook+` 插件：
++
+创建一个名为`+admission.yaml+` 的文件，内容如下：
++
+[source,yaml]
+----
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: ValidatingAdmissionWebhook
+ configuration:
+   apiVersion: apiserver.config.k8s.io/v1
+   kind: WebhookAdmissionConfiguration
+   kubeConfigFile: "/etc/k8s/admission/kubeconfig"
+- name: MutatingAdmissionWebhook
+ configuration:
+   apiVersion: apiserver.config.k8s.io/v1
+   kind: WebhookAdmissionConfiguration
+   kubeConfigFile: "/etc/k8s/admission/kubeconfig"
+----
++
+该配置文件与用于配置其他插件（如`+PodSecurity+` ）的配置文件相同。如果您的发行版或设置使用了额外的入场插件，也应配置这些插件。
+
+. `+kubeconfig+` {short-project-name} 仅支持客户证书验证，因此需要生成 TLS 密钥对，并将 kubeconfig 设置为使用客户证书和客户密钥或客户证书数据和客户密钥数据。
++
+例如
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Config
+users:
+- name: '*.kubewarden.svc'
+  user:
+    client-certificate: /path/to/client/cert
+    client-key: /path/to/client/key
+----
+
+. 以指向`+AdmissionConfiguration+`文件的`+--admission-control-config-file+` 标志启动`+kube-apiserver+` 二进制文件。这样做的方法因发行版而异，而且并非普遍支持，例如托管 Kubernetes 提供商。请查阅 Kubernetes 发行版的文档。
+
+. 将签发 API 服务器客户端证书的根 CA 的证书提供给{short-project-name} 协议栈。
++
+使用名为`+client-ca.crt+` 的键，将其内容放入`+kubewarden+`命名空间下的`+ConfigMap+` 中。
++
+假设根 CA 位于`+/etc/k8s/admission/certs/rootCA.crt+` ，请使用以下命令创建`+ConfigMap+` ：
++
+[source,console]
+----
+kubectl create configmap -n kubewarden api-server-mtls \
+   --from-file=client-ca.crt=/etc/k8s/admission/certs/rootCA.crt
+----
+
+. 最后，在安装`+kubewarden-controller+` Helm 图表时，请确保启用以下值：
++
+- 将`+mTLS.enable+` 设置为`+true+` 。
+- 将`+mTLS.configMapName+` 设置为之前创建的`+ConfigMap+` 的名称。
++
+`+ConfigMap+` 的名称是`+api-server-mtls+` ，因此安装`+kubewarden-controller+` 的 Helm 命令是
++
+[source,console]
+----
+helm install --wait -n kubewarden kubewarden-controller kubewarden/kubewarden-controller \
+   --set mTLS.enable=true \
+   --set mTLS.configMapName=api-server-mtls
+----
++
+{short-project-name} 控制器创建客户证书，供审计扫描组件使用。必要时，控制器会自动旋转证书。
