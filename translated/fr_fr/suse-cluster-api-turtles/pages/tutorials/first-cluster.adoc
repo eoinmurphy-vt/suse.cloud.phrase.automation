@@ -1,0 +1,110 @@
+= Créer et importer votre premier cluster
+:revdate: 2025-11-20
+:page-revdate: {revdate}
+
+Cette section vous guidera dans la création de votre premier cluster et son importation dans Rancher Manager. Deux méthodes alternatives pour le provisionnement des clusters sont présentées : l'**utilisation d'un flux de travail GitOps avec Fleet** et l'**application manuelle des manifestes via `+kubectl+`**.
+
+== Conditions préalables
+
+* Cluster Rancher Manager
+* Fournisseurs d'API de cluster installés pour votre scénario - nous utiliserons l' Docker https://github.com/kubernetes-sigs/cluster-api/tree/main/test/infrastructure/docker[infrastructure] et https://github.com/rancher/cluster-api-provider-rke2[bootstrap/control plane] RKE2 providers dans ces instructions - voir xref:../reference/capiprovider.adoc[Initialization for common providers using Turtles]' ( xref:../reference/capiprovider.adoc[Initialisation pour les fournisseurs communs utilisant Turtles]'). xref:../reference/capiprovider.adoc[ `+CAPIProvider+`]
+
+== Approvisionnement d'un cluster de charge de travail CAPI
+
+[tabs]
+======
+GitOps avec Fleet::
++
+--
+*Configurez votre référentiel Fleet*
+
+Pour simplifier le processus de provisionnement des clusters, nous utiliserons une série d'exemples préconfigurés que vous pouvez trouver dans le référentiel https://github.com/rancher/turtles/tree/main/examples.. En inspectant le contenu de ce référentiel, vous trouverez :
+
+. Un dossier d'*applications* pour les applications supplémentaires qui peuvent être déployées à l'aide de Fleet (CNI, CSI, CPI).
+. Un dossier *clusterclasses* avec un certain nombre d'exemples de ClusterClass.
+. Un dossier *clusters/docker/rke2* avec un exemple de définition de cluster Docker.
++
+[NOTE]
+Si vous préférez, vous pouvez créer votre propre référentiel Fleet en utilisant la même structure de base.
+
+*Utilisez l'interface utilisateur de Rancher pour ajouter votre référentiel Fleet.*
+
+Maintenant que les définitions des clusters sont déposées dans un dépôt git, elles peuvent être utilisées pour provisionner les clusters. Pour ce faire, ils devront être importés dans le cluster Rancher Manager (qui agit également en tant que cluster de gestion de l'API Cluster) en utilisant la fonctionnalité *Continuous Delivery* (qui utilise Fleet).
+
+. Aller au Rancher Manager
+. Sélectionnez *Continuous Delivery* dans le menu :image:sidebar.png[sidebar]
+. Sélectionnez *fleet-local* comme espace de noms dans le menu en haut à droiteimage:ns.png[namespace]
+. Sélectionnez *Git Repos* dans la barre latérale
+. Cliquez sur *Ajouter un référentiel*
+. Saisir *clusters* comme nom
+. Obtenez l'URL de clonage *HTTPS* de votre repo gitimage:gh_clone.png[clone url] git
+. Ajouter l'URL dans le champ *URL du référentiel* 
+. Modifier le nom de la branche en " *main"*.
+. Ajoutez les chemins suivants pour spécifier les répertoires à déployer :
++
+image:paths.png[Configuration des chemins de la flotte]
++
+----
+examples/clusterclasses/docker/rke2
+examples/applications/cni/calico
+examples/applications/lb/docker
+examples/clusters/docker/rke2
+----
+. Cliquez sur *Suivant*
+. Cliquez sur *Créer*
+. Cliquez sur le nom de la *grappe* 
+. Voir les ressources se préparer
+. Sélectionnez *Gestion des clusters* dans le menu
+. Vérifiez que votre cluster a été importé
+--
+
+Utilisation manuelle de kubectl::
++
+--
+*Appliquer les ressources du cluster*
+
+Pour créer le cluster à l'aide de kubectl, exécutez les commandes suivantes :
+
+. Ouvrez un terminal et appliquez la ClusterClass et les modèles associés :
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/heads/main/examples/clusterclasses/docker/rke2/clusterclass-docker-rke2.yaml
+----
+
+. Appliquer la configuration de l'équilibreur de charge :
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/heads/main/examples/applications/lb/docker/configmap.yaml
+----
+
+. Appliquer la configuration CNI (Calico) :
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/heads/main/examples/applications/cni/calico/helm-chart.yaml
+----
+
+. Créer le cluster :
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/heads/main/examples/clusters/docker/rke2/cluster.yaml
+----
+. Observez la préparation des ressources :
++
+[source,bash]
+----
+kubectl get clusters -w
+----
+. Sélectionnez *Gestion des clusters* dans le menu
+. Vérifiez que votre cluster a été importé
+--
+======
+
+== Prochaines étapes : Attendez que le cluster apparaisse dans le tableau de bord de Rancher.
+
+Le cluster provisionné dans ce tutoriel contient le label `+cluster-api.cattle.io/rancher-auto-import+`.
+Cette étiquette indiquera à Turtles d'importer automatiquement le cluster dans Rancher.
+Pour plus d'informations, veuillez vous référer à l'xref:user/rancher-cluster-registration.adoc[inscription à la grappe des éleveurs.]
