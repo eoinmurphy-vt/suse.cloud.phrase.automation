@@ -1,0 +1,254 @@
+= によるネットワーク構成 {elemental-product-name}
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+
+[CAUTION]
+.警告
+====
+宣言的ネットワーキングは*技術プレビュー*状態で、サポートは限られている。
+そのため、本番環境での使用は推奨されていない。
+====
+
+xref:references/machineregistration-reference.adoc[MachineRegistrationは]、Declarative Networkingおよびhttps://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220125-ipam-integration.md#ipam-provider[] CAPI統合をサポートする。
+
+== 前提条件
+
+* DHCPサーバーは、最初のブート登録とマシンのリセットにはまだ必要です。このため、マシンのライフサイクル全体にわたって、IPAMが駆動するIPアドレスが使用されるため、リース時間は最小限に抑えることができる。
+* 選択したIPAMプロバイダがRancher管理クラスタにインストールされます。
+例えば、https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster[InCluster IPAM Provider]。
+* https://networkmanager.dev[NetworkManagerは]OSイメージにインストールする必要があり、`+nmconnections+` ネットワーク・<<_configurators,コンフィギュレーターを使って>>直接設定できる。
+すでにエレメンタルの提供画像に含まれている。
+* (オプション)https://github.com/suse-edge/nm-configurator/releases[] nmcは、`+nmc+` network<<_configurators,configuratorで>>使用できます。
+* (オプション)https://github.com/nmstate/nmstate/releases[] nmstatectlは`+nmstate+` network<<_configurators,configuratorと>>一緒に使うことができる。
+
+=== OSイメージへのnmcまたはnmstatectlのインストール
+
+`+nmc+` または`+nmstate+` コンフィギュレーターを使用する場合、https://github.com/suse-edge/nm-configurator/releases[]nmc またはhttps://github.com/nmstate/nmstate/releases[] nmstatectl ツールをマシンにインストールする必要がある。
+
+現在のところ、これはカスタムコマンドでxref:operator-operational-tasks/custom-images.adoc#_remastering_an_os_image_with_a_custom_dockerfile[エレメンタルOSイメージをカスタマイズする]ことで実現できる：
+
+[tabs]
+======
+nmc::
++
+--
+[,yaml]
+----
+# Install nmc
+RUN curl -LO https://github.com/suse-edge/nm-configurator/releases/download/v0.3.3/nmc-linux-x86_64 && \ install -o root -g root -m 0755 nmc-linux-x86_64 /usr/sbin/nmc
+----
+--
+
+nmstatectl::
++
+--
+[,yaml]
+----
+# Install nmstatectl
+RUN curl -LO https://github.com/nmstate/nmstate/releases/download/v2.2.40/nmstatectl-linux-x64.zip && \ unzip nmstatectl-linux-x64.zip && \ chmod +x nmstatectl && \ mv ./nmstatectl /usr/sbin/nmstatectl && \ rm nmstatectl-linux-x64.zip
+----
+--
+======
+
+=== CAPI IPAMプロバイダのインストール方法
+
+CAPIプロバイダをRancherにインストールする推奨の方法は、https://documentation.suse.com/cloudnative/cluster-api/v0.22/en/index.html[] Rancher使用することです。
+
+Rancher Turtlesは、ユーザーが任意のCAPIプロバイダをインストールし、ライフサイクルを管理できるようにします。あなたのシステムにインストールするには、https://documentation.suse.com/cloudnative/cluster-api/v0.22/en/tutorials/quickstart.html[] Rancherください。
+
+Rancher Turtlesがインストールされると、IPAM CAPI Provider、例えばhttps://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster[InCluster IPAM Providerを]インストールするには、以下のリソースを適用する：
+
+[,yaml]
+----
+kind: CAPIProvider
+metadata:
+  name: in-cluster
+  namespace: default
+spec:
+  name: in-cluster
+  type: ipam
+  fetchConfig:
+    url: "https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases"
+  version: v0.1.0
+----
+
+==== ランチャータートルズなし
+
+CAPI IPAM Providerをインストールする代替オプションは、Rancherクラスタでマニフェストを直接適用することです。
+
+この解決策は、適用されたCRDとリソースを手動で適用し、維持する必要があるため、最終的にコンフリクトを引き起こす可能性があることに注意してください。
+
+. `+ipaddresses.ipam.cluster.x-k8s.io+` および`+ipaddressclaims.ipam.cluster.x-k8s.io+` CRD は Rancher 管理クラスターにインストールする必要があります：
++
+[,bash]
+----
+ kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/cluster-api/main/config/crd/bases/ipam.cluster.x-k8s.io_ipaddressclaims.yaml
+ kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/cluster-api/main/config/crd/bases/ipam.cluster.x-k8s.io_ipaddresses.yaml
+----
+
+[IMPORTANT]
+.インフォメーション
+====
+これらのCRDは、最終的にはランチャーの一部となり、手動でのインストールは不要となる見込みだ。見てください： https://github.com/rancher/rancher/issues/46385
+====
+
+
+. リリースされたマニフェストからhttps://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster[InCluster IPAM Provider]をインストールします：
++
+[,bash]
+----
+ kubectl apply -f https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v0.1.0/ipam-components.yaml
+----
+
+=== ネットワークの設定
+
+`+MachineRegistration+` の`+network+` ：
+
+. IPPool参照のマップ。
+. ネットワーク設定テンプレート（この場合、`+nmc+` コンフィグレーターを使用）。
+
+.宣言的ネットワーキングを使用したMachineRegistrationの例
+[,yaml]
+----
+include::example$network/machineregistration.yaml[]
+----
+
+この例ではhttps://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster[InCluster IPAM Providerを]使用しているため、`+InClusterIPPool+` が1つ定義されていることがわかる。
+
+次に、このIPPoolを`+MachineRegistration+` 。このリファレンスのキーは`+inventory-ip+` で、登録されたマシン1台につきIPが1つだけ必要です。マシンに複数のNICがある場合は、さらに多くの参照を定義し、例えば異なるIPPoolを使用することもできる：
+
+[,yaml]
+----
+ipAddresses:
+  main-nic-ip:
+    apiGroup: ipam.cluster.x-k8s.io
+    kind: InClusterIPPool
+    name: elemental-inventory-pool
+  secondary-nic-ip:
+    apiGroup: ipam.cluster.x-k8s.io
+    kind: InClusterIPPool
+    name: elemental-inventory-pool
+  private-nic-ip:
+    apiGroup: ipam.cluster.x-k8s.io
+    kind: InClusterIPPool
+    name: elemental-private-pool
+----
+
+定義された各IPPool参照キーは、ネットワーク・コンフィグ・テンプレートに使用できる：
+
+[,yaml]
+----
+config:
+  dns-resolver:
+    config:
+      server:
+      - 192.168.122.1
+      search: []
+  routes:
+    config:
+    - destination: 0.0.0.0/0
+      next-hop-interface: eth0
+      next-hop-address: 192.168.122.1
+      metric: 150
+      table-id: 254
+  interfaces:
+    - name: eth0
+      type: ethernet
+      description: Main-NIC
+      state: up
+      ipv4:
+        enabled: true
+        dhcp: false
+        address:
+        - ip: "{inventory-ip}"
+          prefix-length: 24
+      ipv6:
+        enabled: false
+----
+
+上のスニペットは、`+{inventory-ip}+` のプレースホルダを除いて、https://github.com/suse-edge/nm-configurator?tab=readme-ov-file#unified-configurations[] nm-configuratorのほぼ1対1である。Elementalマシンのインストールまたはリセットの段階で、`+elemental-operator+` 、参照されたIPプールから1つのIPアドレスを要求し、`+{inventory-ip}+` 、プレースホルダを実際のIPアドレスで置き換える。
+
+=== 請求されたIPAアドレス
+
+`+IPAddressClaim+` は、`+MachineInventory+` のライフサイクル全体をフォローし、登録された各マシンに一意のIPが割り当てられるようにする。各クレームには、例えば`+$MachineInventoryName-$IPPoolRefKey+` のように、それを使用する`+MachineInventory+` の名前が付けられている：
+
+[,yaml]
+----
+apiVersion: ipam.cluster.x-k8s.io/v1beta1
+kind: IPAddressClaim
+metadata:
+  finalizers:
+    - ipam.cluster.x-k8s.io/ReleaseAddress
+  name: m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip
+  namespace: fleet-default
+  ownerReferences:
+    - apiVersion: elemental.cattle.io/v1beta1
+      kind: MachineInventory
+      name: m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c
+spec:
+  poolRef:
+    apiGroup: ipam.cluster.x-k8s.io
+    kind: InClusterIPPool
+    name: elemental-inventory-pool
+status:
+  addressRef:
+    name: m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip
+----
+
+`+MachineInventory+` が削除されるたびに、デフォルト（DHCP）ネットワーク構成が復元され、マシンのネットワークプロファイルが削除され、ネットワークスタックが再起動されます。最後に、割り当てられたIPが解放される。
+
+問題のトラブルシューティングの詳細については、『xref:troubleshooting/troubleshooting-network.adoc[Troubleshooting Declarative Networking』のドキュメントを]参照してください。
+
+=== コンフィギュレーター
+
+エレメンタル・マシンでは、`+elemental-register+` 、`+NetworkManager+` をさまざまな方法で設定できる。使用されるコンフィギュレーターは、xref:references/machineregistration-reference.adoc#_config_network[MachineRegistration.spec.network].Configuratorで定義される：
+
+* https://github.com/suse-edge/nm-configurator[nmc]
+* https://nmstate.io/[nmstate]
+* https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nm-settings-keyfile.html[nmconnections]
+
+[tabs]
+======
+nmc::
++
+--
+`+nmc+` コンフィギュレーターは、https://github.com/suse-edge/nm-configurator?tab=readme-ov-file#unified-configurations[]nm-configurator使用して NetworkManager の接続ファイルを生成します。
+
+.nmc configurator を使用した MachineRegistration の例
+[,yaml]
+----
+include::example$network/machineregistration-nmc.yaml[]
+----
+
+--
+
+エヌエムステート::
++
+--
+`+nmstate+` コンフィギュレーターは、https://nmstate.io/examples.html[]nmstate使用して NetworkManager の接続ファイルを生成します。なお、このコンフィギュレーターを使用するには、https://github.com/nmstate/nmstate/releases[]nmstatectlをElementalシステムにインストールする必要がある。Elementalのイメージにはデフォルトでは含まれていませんが、xref:operator-operational-tasks/custom-images.adoc[カスタムイメージを]作成する際にインストールすることができます。
+
+.nmstateコンフィギュレータを使用したMachineRegistrationの例
+[,yaml]
+----
+include::example$network/machineregistration-nmstate.yaml[]
+----
+
+--
+
+エヌエムコネクションズ::
++
+--
+`+nmconnections+` コンフィギュレーターは最もシンプルなオプションで、`+nmconnection+` ファイルを直接書き込むことができる。複雑なネットワーク・セットアップのためにこれらのファイルを定義するのは難しいかもしれないが、https://networkmanager.dev/docs/api/latest/nmcli.html[] nmcli、あるいはhttps://nmstate.io[] nmstate、あるいは[nm-configurator](https://github.com/suse-edge/nm-configurator)を使い、生成された`+nmconnection+` ファイルをテンプレートとして使うことはいつでも可能である。このコンフィギュレータは`+NetworkManager+` だけが必要で、余分な依存関係はありません。.nmconnectionsコンフィギュレータを使用したMachineRegistrationの例。
+
+.nmstateコンフィギュレータを使用したMachineRegistrationの例はこちら
+[%collapsible]
+====
+[,yaml]
+----
+include::example$network/machineregistration-nmconnections.yaml[]
+----
+====
+
+--
+======
