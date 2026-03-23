@@ -1,0 +1,195 @@
+include::partial$variables.adoc[]
+
+= エアギャップの設置
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: エアギャップのある環境に{project-name} を設置するには、Hauler を使用する。
+:keywords: ["{project-name}", kubewarden, kubernetes, air gap installation, hauler ]。
+:doc-persona: キューブウォーデンオペレーター、キューブウォーデンインテグレーター
+:doc-type: ハウツー
+:doc-topic: 操作マニュアル, エアギャップ, 設置, 運搬機
+
+このガイドでは、link:https://docs.hauler.dev/docs/intro[Haulerを]使用して、エアギャップ環境に{project-name} 。Haulerは、ユーザーがエアギャップ環境でワークロードを実行するのを支援するツールである。アプリに必要なリソースをエアギャップ環境に移動させるのだ。
+
+{short-project-name} は、{short-project-name} をプライベート環境で実行するために必要なすべてのリソースを含むマニフェストファイルを提供します。この文書では、その使用方法について説明します。詳しくはHaulerのドキュメントを参照してください。
+
+Haulerマニフェストを使用した基本的なワークフローは次のとおりです：
+
+. {short-project-name} リリースページから入手
+. {short-project-name} の実行に必要なすべてのリソースをローカル・ストアにロードする。
+. ファイルにエクスポートする
+. ファイルをプライベート環境に移動する
+. プライベート環境で動作するHaulerにリソースをロードする。
+. エアギャップ環境で、インストールプロセスで使用するレジストリにすべてをコピーする。
+
+== Helmのチャート・リリース・ページから、Haulerマニフェストをダウンロードする。
+
+{short-project-name}link:https://github.com/kubewarden/helm-charts/releases/[ リリース]ページから`+hauler_manifest.yml+` をダウンロードしてください。
+
+マニフェストで定義されたリソースをHaulerストアに同期します：
+
+[source,shell]
+----
+hauler store sync --filename hauler_manifest.yaml
+----
+
+Haulerはマニフェストからローカルストアにすべてのリソースをダウンロードします。この作業には数分かかる。完了したら、`+hauler store info+` コマンドで同期されたリソースを見ることができる。
+
+== すべての{short-project-name} リソースを含む tarball ファイルを生成する。
+
+Haulerコマンドを実行し、ストアにロードされているすべてのリソースをファイルにエクスポートします：
+
+[source,shell]
+----
+hauler store save --filename kubewarden-resources.tar.zst
+----
+
+[NOTE]
+====
+
+{short-project-name} コンテナ・イメージはx86_64とArmアーキテクチャをサポートしている。そのため、リソースをファイルに保存すると、次のような警告メッセージが表示されることがある：
+
+[source,shell]
+----
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/kyverno/policy-reporter:3.3.3]
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/kyverno/policy-reporter-ui:2.4.1]
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/kubewarden/policy-server:v1.27.0]
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/kubewarden/audit-scanner:v1.27.0]
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/rancher/kuberlr-kubectl:v5.0.0]
+2025-08-12 18:55:54 WRN specify an export platform to prevent potential platform mismatch on import of index [ghcr.io/kubewarden/kubewarden-controller:v1.27.0]
+----
+
+この警告メッセージを回避するには、`+--platform+` CLIフラグを設定して、ファイルに保存するプラットフォーム・アーキテクチャを定義します。
+
+====
+
+== tarballを分離した環境に移す。
+
+これで`+kubewarden-resources.tar.zst+` に{short-project-name} のリソースがすべて揃ったので、それをエアギャップ環境にコピーし、そこの Hauler ストアにロードする：
+
+[source,shell]
+----
+hauler store load --filename kubewarden-resources.tar.zst
+# Check if the resources are loaded
+hauler store info
+----
+
+これで、{short-project-name} のインストールに必要なすべてのリソースが、分離環境のHaulerストアに揃ったことになる。
+
+== 個人レジストリの登録
+
+Haulerストアのリソースを使用するには、内部レジストリで使用できるようにする必要があります。Haulerコマンドを使えば、プライベートレジストリにコピーできる。
+
+[source,shell]
+----
+hauler store copy registry://localhost:5000
+----
+
+また、Haulerを実行すると、ストアのすべてのリソースを含むレジストリを起動することができます。このレジストリは安全ではないので、クラスタ構成を適合させる必要がある：
+
+[source,shell]
+----
+# Find IP address of your host
+# hostname -I
+
+# Update registries.yaml for k3s based cluster to allow insecure access
+# mirrors:
+#   "<HOST_IP>:5000":
+#     endpoint:
+#       - "http://<HOST_IP>:5000"
+# configs:
+#   "<HOST_IP>:5000":
+#     tls:
+#       insecure_skip_verify: true
+
+# Configure policy-server to allow pulling policies from insecure sources
+# helm install .. kubewarden-defaults .. --set policyServer.insecureSources[0]=<HOST_IP:5000>
+
+hauler store serve registry
+----
+
+これは、`+localhost:5000+` アドレスでレジストリを開始する。この時点から、Skopeoのような他のコマンドを使用して、{short-project-name} で使用されるすべてのコンテナイメージ、ポリシーモジュール、Helmチャートをプライベートレジストリにコピーできる。
+
+== インストール {short-project-name}
+
+これでプライベートレジストリに必要なものがすべて揃ったので、{short-project-name} をインストールできる。標準的な{short-project-name}インストールとの違いは、コンテナ・イメージとポリシーのレジストリをプライベート・レジストリに変更する必要があることだ。さらに、OCIアーティファクトからHelmチャートをインストールする必要がある。
+
+{short-project-name} スタックを取り付ける：
+
+[source,shell]
+----
+helm install --wait -n kubewarden kubewarden-crds --create-namespace \
+    oci://<REGISTRY.YOURDOMAIN.COM:PORT>/hauler/kubewarden-crds
+helm install --wait -n kubewarden kubewarden-controller \
+    --set "global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT>" \
+    oci://<REGISTRY.YOURDOMAIN.COM:PORT>/hauler/kubewarden-controller
+----
+
+[CAUTION]
+====
+
+`+kubewarden-controller+`チャートで利用可能な PolicyReporter サブチャートを使用するには、エアギャップ環境でサブチャートに固有の他の値を定義する必要があります。以下に例を挙げる：
+
+[source,shell]
+----
+helm install --wait -n kubewarden kubewarden-controller oci://<REGISTRY.YOURDOMAIN.COM:PORT>/hauler/kubewarden-controller \
+    --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set auditScanner.policyReporter=true \
+    --set policy-reporter.image.registry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set policy-reporter.image.repository=kyverno/policy-reporter \
+    --set policy-reporter.ui.image.registry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set policy-reporter.ui.image.repository=kyverno/policy-reporter-ui
+----
+
+`+auditScanner.policyReporter+` 、その他4つの値を定義してサブチャートを有効にし、Policy Reporterイメージストアの場所をレジストリとリポジトリに設定する必要があります。ポリシー レポート サブチャートの値の詳細については、\link:https://kyverno.github.io/policy-reporter-docs/getting-started/helm.html[ポリシー レポーターのドキュメント] を参照してください。
+
+====
+
+[source,shell]
+----
+helm install --wait -n kubewarden \
+  kubewarden-defaults oci://<REGISTRY.YOURDOMAIN.COM:PORT>/hauler/kubewarden-defaults \
+  --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT>
+----
+
+最後に、各 Policy Server がプライベートレジストリからポリシーを取得するように構成します。xref:/howtos/policy-servers/02-private-registry.adoc[プライベート・レジストリの使用]法の項を参照のこと。
+
+次に、クラスタに{short-project-name} ポリシーを作成する。ポリシーは個人登録で利用可能でなければならない。
+
+[source,yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: privileged-pods
+spec:
+  module: registry://<REGISTRY.YOURDOMAIN.COM:PORT>/kubewarden/policies/pod-privileged:v0.2.2
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+  mutating: false
+EOF
+----
+
+[CAUTION]
+====
+
+`+PolicyServer+` リソースは、プライベートレジストリで利用可能なイメージを使用する必要があります。
+例えば、こうだ：
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: reserved-instance-for-tenant-a
+spec:
+  image: <REGISTRY.YOURDOMAIN.COM:PORT>/kubewarden/policy-server:v1.3.0
+  replicas:
+----
+
+====
