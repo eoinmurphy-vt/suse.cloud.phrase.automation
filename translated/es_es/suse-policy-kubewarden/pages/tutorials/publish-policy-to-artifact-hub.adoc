@@ -1,0 +1,98 @@
+include::partial$variables.adoc[]
+= Publicar políticas en Artifact Hub
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Publique las políticas de {project-name} en Artifact Hub creando un diseño de repositorio Git bien formateado y configurando las Acciones de GitHub para el empaquetado automatizado, facilitando la integración continua.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-policy-developer", "kubewarden-distributor", "kubewarden-integrator"].
+:doc-topic: ["distributing-policies", "publish-policy-to-artifacthub"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "publishing policies", "artifact hub"]
+:sidebar_label: Publicar en Artifact Hub
+:sidebar_position: 40
+:current-version: {page-origin-branch}
+
+https://artifacthub.io/[Artifact Hub] es un sitio web donde los usuarios pueden encontrar, instalar y publicar paquetes y configuraciones para los proyectos https://cncf.io[CNCF de].
+
+{project-name} pueden publicarse en Artifact Hub y ponerse a disposición del amplio público de usuarios del CNCF.
+
+[NOTE]
+====
+Artifact Hub es una plataforma de agregación de contenidos y en realidad no aloja los artefactos que se publican en ella.
+
+Artifact Hub requiere que aloje físicamente repositorios de imágenes de contenedores en un registro de contenedores o en un servidor web.
+Consulte la sección de xref:explanations/distributing-policies.adoc[distribución de políticas] para obtener más información sobre cómo alojar sus políticas.
+====
+
+
+Este documento se centra en los pasos necesarios para hacer que una política {short-project-name} sea detectable en Artifact Hub.
+
+== Prepare su repositorio Git
+
+Artifact Hub rastrea los repositorios Git en busca de archivos de metadatos especiales.
+
+Hay diferentes tipos de diseños que puede tener el repositorio Git. Todos ellos están documentados en profundidad en la https://artifacthub.io/docs/topics/repositories/#kubewarden-policies-repositories[documentación oficial de].
+
+Artifact Hub es flexible y te permite organizar tu código de estas maneras:
+
+* Tener un repositorio Git dedicado a Artifact Hub: este repositorio no contendrá ningún código fuente de la política. Será una colección de los archivos YAML requeridos por Artifact Hub.
+
+* Añada un directorio Artifact Hub en el repositorio Git que contiene el código fuente de su política. Se trata de una iteración del enfoque anterior, centrándose en una sola política, la que está definida en el repositorio Git. Este enfoque permite mantener múltiples versiones de la política publicada en Artifact Hub.
+
+* Añada los archivos `+artifacthub-pkg.yml+` y `+artifacthub-repo.yml+` a la raíz del repositorio Git que contiene el código fuente de la política. Este enfoque es el más sencillo. La única limitación es que sólo la última versión de la política será visible en Artifact Hub.
+
+Este último enfoque se utiliza en nuestras plantillas de políticas oficiales. El repositorio Git que es andamiaje incluye el archivo `+artifacthub-repo.yml+`, y nuestras Acciones GitHub generar y empujar el `+artifacthub-pkg.yml+` a una rama`+artifacthub+` para Artifact Hub para consumir.
+
+== Pasos de la publicación
+
+Antes de publicar una política en Artifact Hub, debe crear una cuentahttps://artifacthub.io/[allí].
+
+Antes de publicar la política, asegúrese de que su repositorio Git tiene el diseño adecuado, con un `+metadata.yml+` bien formateado y con las anotaciones obligatorias.
+
+Si desea hacerlo manualmente, puede crear el archivo `+artifacthub-pkg.yml+` haciendo un `+kwctl scaffold artifacthub+` (con la versión `+>= 1.23+`). Este comando toma el `+metadata.yml+` de la ruta actual y muestra un`+artifacthub-pkg.yml+`. `+artifacthub-pkg.yml+` contiene campos como`+version:+`, `+createdAt:+`, que deben ajustarse a un formato específico y estar actualizados. El formato de `+artifacthub-pkg.yml+` se describehttps://github.com/artifacthub/hub/blob/master/docs/metadata/artifacthub-pkg.yml[aquí].
+
+Si utiliza nuestras Acciones GitHub >= `+v4.0.0+`, el flujo de trabajo de publicación puede configurarse con la entrada `+artifacthub: true+`. Si así se configura, después de un lanzamiento exitoso (después de que la política se ha construido con éxito, firmado y empujado), nuestras Acciones GitHub tienen un último trabajo que genera el`+artifacthub-pkg.yml+` para usted y luego se compromete, y empuja los cambios a la rama`+artifacthub+`. Los archivos canónicos son siempre los de la rama `+main+`. Para conocer el comportamiento de las versiones anteriores de nuestras Acciones GitHub, consulta la documentación de las versiones anteriores a la 1.23.
+
+Por último, asegúrese de que su política se publica dentro de un registro de contenedores o en un servidor web.
+
+[NOTE]
+====
+En este momento, el contenido del archivo `+artifacthub-repo.yml+` no es relevante.
+====
+
+
+Una vez que todo esté en su lugar, inicie sesión en Artifact Hub y vaya a suhttps://artifacthub.io/control-panel/repositories?page=1[plano de control].
+
+Decida si desea publicar la política como usuario o bajo una organización Artifact Hub a la que pertenezca. Esto se hace eligiendo el _"contexto del panel de control"_ correcto _._
+
+A continuación, pulse el botón _"Añadir"_ y rellene el formulario:
+
+* Elija _"{short-project-name} policies"_ como tipo.
+* Introduzca un _"Nombre"_ y un _"Nombre para mostrar"_ de su elección.
+* Introduzca la URL de su repositorio Git.
+* Introduzca `+artifacthub+` como rama a seguir.
+
+Por último, pulse el botón _"Añadir"_. Esto le devolverá a la página _"Repositorios_", donde verá su repositorio recién creado.
+
+Cada repositorio tiene varios campos de información. Busque la propiedad _"ID"_ del repositorio que acaba de crear y cópiela.
+
+Vuelva a su repositorio Git y edite el archivo `+artifacthub-repo.yml+`. Asegúrese de que la clave`+repositoryID+` que se encuentra dentro del documento tiene el valor que acaba de copiar de la página web Artifact Hub.
+
+[TIP]
+====
+El formato del archivo `+artifacthub-repo.yml+` se definehttps://github.com/artifacthub/hub/blob/master/docs/metadata/artifacthub-repo.yml[aquí].
+
+Ahora es un buen momento para hacer algunas personalizaciones adicionales a este archivo.
+====
+
+
+Una vez que haya terminado con los cambios, confirme el archivo `+artifacthub-repo.yml+`actualizado y envíelo. Durante el siguiente escaneo, Artifact Hub encontrará este archivo y añadirá lahttps://artifacthub.io/docs/topics/repositories/#verified-publisher[insignia]a tu repositorio Artifact Hub.
+
+== Sincronización de Artifact Hub
+
+No olvide actualizar el contenido del archivo `+artifacthub-pkg.yml+` cada vez que publique una nueva versión de su política. Por ejemplo, debe actualizar el campo`+io.kubewarden.policy.version+` (que suele coincidir con la etiqueta OCI de la política), y cualquier otra anotación que desee cambiar.
+
+[NOTE]
+====
+No es necesario modificar el contenido del archivo `+artifacthub-repo.yml+`.
+====
+
