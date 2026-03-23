@@ -1,7 +1,7 @@
-= Sicherungen wiederherstellen
+= Backups wiederherstellen
 :revdate: 2025-07-10
 :page-revdate: {revdate}
-:description: SUSE Observability Self-hosted
+:description: SUSE Observability Selbstgehostet
 
 [NOTE]
 ====
@@ -10,39 +10,38 @@ Diese Seite gilt für {stackstate-product-name} v2.7.0 oder neuer.
 
 == Übersicht
 
-Diese Seite beschreibt, wie Sie Sicherungen für {stackstate-product-name}-Datenspeicher mit der Sicherungs-Kommandozeilenschnittstelle wiederherstellen.
+Auf dieser Seite wird beschrieben, wie Sie mit Hilfe der Backup-CLI Sicherungen für {stackstate-product-name} Datenspeicher wiederherstellen können.
 
 [WARNING]
 ====
-*Die Wiederherstellung aus einer Sicherung wird vorhandene Daten löschen oder überschreiben. Dieser Vorgang kann nicht rückgängig gemacht werden.*
+*Bei der Wiederherstellung von der Sicherung werden vorhandene Daten gelöscht oder überschrieben. Dieser Vorgang kann nicht rückgängig gemacht werden.*
 
-Überprüfen Sie immer den Namen und den Namespace der Sicherung, bevor Sie einen Wiederherstellungsprozess bestätigen.
+Überprüfen Sie immer den Sicherungsnamen und den Namensraum, bevor Sie einen Wiederherstellungsvorgang bestätigen.
 
-*GitOps-Workflow betroffen* +
-Dieses Sicherungstool ändert K8s-Ressourcen direkt in Ihrem Cluster:
+*Auswirkungen auf den GitOps-Workflow*Dieses Backup-Tool ändert K8s-Ressourcen direkt in Ihrem Cluster:
 
 - Skaliert StatefulSets/Deployments auf 0 Replikate
-- Fügt Annotationen zur Wiederherstellungsverfolgung hinzu
+- Fügt Anmerkungen für die Wiederherstellungsverfolgung hinzu
 
-Diese Änderungen werden mit Ihrem GitOps-Workflow in Konflikt stehen, da sie die Git-basierte Versöhnung umgehen. GitOps-Controller können versuchen, diese Änderungen während der Sicherungsvorgänge zurückzusetzen.
-*Wichtig:* Die automatische Versöhnung für die SUSE Observability Helm-Chart-Implementierung muss während der Wiederherstellung der Sicherung deaktiviert werden, um Konflikte zu vermeiden.
+Diese Änderungen stehen in Konflikt mit Ihrem GitOps-Workflow, da sie den Git-basierten Abgleich umgehen. GitOps-Controller können versuchen, diese Änderungen während der Sicherungsvorgänge rückgängig zu machen.
+*Das ist wichtig:* Der automatische Abgleich für den SUSE Observability Helm-Diagrammeinsatz muss während der Sicherungswiederherstellung deaktiviert werden, um Konflikte zu vermeiden.
 ====
 
 [NOTE]
 ====
-*Bevor Sie die Kommandozeilenschnittstelle verwenden, stellen Sie sicher, dass:*
+*Bevor Sie die CLI verwenden, stellen Sie sicher, dass:*
 
-* Sie verwenden die neueste Version der Sicherungs-Kommandozeilenschnittstelle.
-* Die Kommandozeilenschnittstelle erwartet eine kubeconfig mit einem aktuellen Kontext zum Cluster, in dem SUSE Observability installiert ist.
+* Sie verwenden die neueste Version der Backup-CLI.
+* Die CLI erwartet eine kubeconfig mit einem aktuellen Kontext zum Cluster, in dem SUSE Observability installiert ist.
 ====
 
-== Laden Sie die Sicherungs-Kommandozeilenschnittstelle herunter
+== Laden Sie die Backup-CLI herunter
 
-Laden Sie die neueste Version der Sicherungs-Kommandozeilenschnittstelle mit den untenstehenden Befehlen für Ihre Plattform herunter. Die Binärdatei heißt `sts-backup`.
+Laden Sie die neueste Version der Backup-CLI mit den unten aufgeführten Befehlen für Ihre Plattform herunter. Die Binärdatei heißt `sts-backup`.
 
 [tabs]
 ====
-macOS (Apple Silicon)::
+macOS (Apple Silizium)::
 +
 --
 
@@ -106,12 +105,12 @@ Expand-Archive -Path "stackstate-backup-cli.zip" -DestinationPath "."
 
 [TIP]
 ====
-Zur Vereinfachung kopieren Sie die `sts-backup` Binärdatei in ein Verzeichnis in Ihrem `$PATH` (z. B. `/usr/local/bin` unter Linux/macOS), damit Sie sie von überall aus ohne Angabe des vollständigen Pfads ausführen können.
+Kopieren Sie der Einfachheit halber die Binärdatei `sts-backup` in ein Verzeichnis in Ihrem `$PATH` (z. B. `/usr/local/bin` unter Linux/macOS), damit Sie sie von überall aus ausführen können, ohne den vollständigen Pfad angeben zu müssen.
 ====
 
 == Konfigurations- und Topologiedaten (StackGraph)
 
-=== Liste der StackGraph-Backups
+=== StackGraph-Sicherungen auflisten
 
 Um die StackGraph-Backups aufzulisten, führen Sie den folgenden Befehl aus:
 
@@ -133,60 +132,60 @@ NAME                            LAST MODIFIED            SIZE
 sts-backup-20251128-0300.graph  2025-11-28 03:08:42 UTC  2GiB
 ----
 
-Der Zeitstempel, wann die Sicherung erstellt wird, ist Teil des Sicherungsnamens.
+Der Zeitstempel, zu dem die Sicherung erstellt wurde, ist Teil des Sicherungsnamens.
 
 
-=== Stellen Sie eine StackGraph-Sicherung wieder her
+=== Wiederherstellen einer StackGraph-Sicherung
 
-Um eine StackGraph-Sicherung wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
+Um ein StackGraph-Backup wiederherzustellen, verwenden Sie eine der folgenden Methoden:
 
-==== Stellen Sie eine bestimmte Sicherung wieder her
+==== Wiederherstellen einer bestimmten Sicherung
 
 [,bash]
 ----
 sts-backup stackgraph restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
 ----
 
-==== Stellen Sie die neueste Sicherung wieder her
+==== Wiederherstellen der letzten Sicherung
 
 [,bash]
 ----
 sts-backup stackgraph restore --namespace <NAMESPACE> --latest
 ----
 
-==== Häufige Flags
+==== Gemeinsame Flaggen
 
 * `--yes` oder `-y` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
 * `--background` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
 
-==== Hintergrundwiederherstellung
+==== Hintergrund wiederherstellen
 
-Bei Verwendung von `--background` wird die Wiederherstellung asynchron ausgeführt. Nach dem Starten der Wiederherstellung verwenden Sie den folgenden Befehl, um den Status zu überprüfen und abzuschließen:
+Bei Verwendung von `--background` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
 
 [,bash]
 ----
 sts-backup stackgraph check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
 ----
 
-Der `check-and-finalize`-Befehl:
+Der Befehl `check-and-finalize`:
 
-* Überprüft den Status des Wiederherstellungsjobs
-* Mit dem `--wait`-Flag wartet er auf den Abschluss des Jobs
-* Skaliert automatisch Deployments hoch, die während der Wiederherstellung heruntergefahren wurden
-* Bereinigt Ressourcen nach Abschluss
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `--wait` Flagge, wartet auf den Abschluss des Auftrags
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
 
 [NOTE]
 ====
-Wenn eine Wiederherstellung, die ohne `--background` läuft, unterbrochen wird (zum Beispiel durch Ctrl+C), müssen Sie `check-and-finalize` ausführen, um Deployments hochzuskalieren und Ressourcen zu bereinigen.
+Wenn eine Wiederherstellung ohne `--background` unterbrochen wird (z. B. durch Strg+C), müssen Sie `check-and-finalize` ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
 ====
 
 == Einstellungen
 
-Einstellungen-Backups umfassen installierte StackPacks mit ihrer Konfiguration und anderen Anpassungen, die vom Benutzer erstellt wurden, wie Monitore, benutzerdefinierte Ansichten und Dienst-Token. Einstellungen-Backups sind leichtgewichtig (typischerweise nur mehrere Megabyte) und schnell wiederherzustellen, mit minimaler Ausfallzeit.
+Backups der Einstellungen umfassen installierte StackPacks mit ihrer Konfiguration und andere vom Benutzer erstellte Anpassungen wie Monitore, benutzerdefinierte Ansichten und Dienst-Token. Einstellungssicherungen sind leicht (in der Regel nur einige Megabyte) und lassen sich schnell und mit minimaler Ausfallzeit wiederherstellen.
 
-=== Einstellungen-Backups auflisten
+=== Liste Einstellungssicherungen
 
-Um die Einstellungen-Backups aufzulisten, führen Sie den folgenden Befehl aus:
+Um die Einstellungssicherungen aufzulisten, führen Sie den folgenden Befehl aus:
 
 [,bash]
 ----
@@ -206,65 +205,65 @@ NAME                          LAST MODIFIED            SIZE
 sts-backup-20251128-1328.sty  2025-11-28 13:29:12 UTC  2MiB
 ----
 
-Der Zeitstempel, wann die Sicherung erstellt wurde, ist Teil des Sicherungsnamens.
+Der Zeitstempel, zu dem die Sicherung erstellt wurde, ist Teil des Sicherungsnamens.
 
-=== Eine Einstellungen-Sicherung wiederherstellen
+=== Wiederherstellen einer Einstellungssicherung
 
 [CAUTION]
 ====
-Das Wiederherstellen einer Einstellungen-Sicherung entfernt auch die gesamte Topologie, einschließlich Gesundheitszustände, Alarme und der Topologiehistorie.
+Bei der Wiederherstellung eines Einstellungs-Backups wird auch die gesamte Topologie, einschließlich der Zustände, Warnungen und des Topologieverlaufs, entfernt.
 ====
 
-Um eine Einstellungen-Sicherung wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
+Um eine Einstellungssicherung wiederherzustellen, verwenden Sie eine der folgenden Methoden:
 
-==== Stellen Sie eine bestimmte Sicherung wieder her
+==== Wiederherstellen einer bestimmten Sicherung
 
 [,bash]
 ----
 sts-backup settings restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
 ----
 
-==== Stellen Sie die neueste Sicherung wieder her
+==== Wiederherstellen der letzten Sicherung
 
 [,bash]
 ----
 sts-backup settings restore --namespace <NAMESPACE> --latest
 ----
 
-==== Häufige Flags
+==== Gemeinsame Flaggen
 
 * `--yes` oder `-y` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
 * `--background` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
 
-==== Hintergrundwiederherstellung
+==== Hintergrund wiederherstellen
 
-Bei Verwendung von `--background` wird die Wiederherstellung asynchron ausgeführt. Nach dem Starten der Wiederherstellung verwenden Sie den folgenden Befehl, um den Status zu überprüfen und abzuschließen:
+Bei Verwendung von `--background` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
 
 [,bash]
 ----
 sts-backup settings check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
 ----
 
-Der `check-and-finalize`-Befehl:
+Der Befehl `check-and-finalize`:
 
-* Überprüft den Status des Wiederherstellungsjobs
-* Mit dem `--wait`-Flag wartet er auf den Abschluss des Jobs
-* Skaliert automatisch Deployments hoch, die während der Wiederherstellung heruntergefahren wurden
-* Bereinigt Ressourcen nach Abschluss
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `--wait` Flagge, wartet auf den Abschluss des Auftrags
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
 
 [NOTE]
 ====
-Wenn eine Wiederherstellung, die ohne `--background` läuft, unterbrochen wird (z. B. durch Ctrl+C), müssen Sie `check-and-finalize` ausführen, um die Bereitstellungen zu skalieren und Ressourcen zu bereinigen.
+Wenn eine Wiederherstellung ohne `--background` unterbrochen wird (z. B. durch Strg+C), müssen Sie `check-and-finalize` ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
 ====
 
-== Metriken (Victoria Metrics)
+== Metriken (Victoria Metriken)
 
-Je nach Profil, `nonha` oder `ha`, wird Victoria Metrics in verschiedenen Modi bereitgestellt:
+Je nach Profil, `nonha` oder `ha`, wird Victoria Metrics in verschiedenen Modi eingesetzt:
 
-* *nonha-Profil* - Ein-Knoten-Modus mit einer Victoria Metrics-Instanz (`victoria-metrics-0`)
-* *ha-Profil* - HA (Spiegel)-Modus mit zwei Victoria Metrics-Instanzen (`victoria-metrics-0` und `victoria-metrics-1`)
+* *nonha-Profil* - Single-Node-Modus mit einer Victoria Metrics-Instanz (`victoria-metrics-0`)
+* *ha-Profil* - HA-Modus (Spiegelung) mit zwei Victoria Metrics-Instanzen (`victoria-metrics-0` und `victoria-metrics-1`)
 
-=== Liste der Victoria Metrics-Sicherungen
+=== Liste Victoria Metrics-Sicherungen
 
 Um die Victoria Metrics-Sicherungen aufzulisten, führen Sie den folgenden Befehl aus:
 
@@ -301,62 +300,62 @@ NOTE: In HA mode, backups from both instances (victoria-metrics-0 and victoria-m
       The restore command accepts either backup to restore both instances.
 ----
 
-Im HA-Modus werden für beide Instanzen Sicherungen mit unterschiedlichen Präfixen (`victoria-metrics-0` und `victoria-metrics-1`) erstellt. Bei der Wiederherstellung können Sie entweder die Sicherung angeben – der Wiederherstellungsprozess wird die ausgewählte Sicherung auf beide Instanzen wiederherstellen.
+Im HA-Modus werden Backups für beide Instanzen mit unterschiedlichen Präfixen erstellt (`victoria-metrics-0` und `victoria-metrics-1`). Bei der Wiederherstellung können Sie eine der beiden Sicherungen angeben - der Wiederherstellungsvorgang wird die ausgewählte Sicherung in beiden Instanzen wiederherstellen.
 
-=== Stellen Sie eine Sicherung von Victoria Metrics wieder her
+=== Wiederherstellung einer Victoria Metrics-Sicherung
 
 [NOTE]
 ====
-Alle neuen Metriken werden während des Wiederherstellungsprozesses von `vmagent` zwischengespeichert. Stellen Sie sicher, dass `vmagent` genügend Speicher hat, um Metriken zwischenzuspeichern.
+Alle neuen Metriken werden von `vmagent` während des Wiederherstellungsprozesses zwischengespeichert. Vergewissern Sie sich, dass die `vmagent` über genügend Speicherplatz für die Zwischenspeicherung von Metriken verfügt.
 ====
 
-Um ein Victoria Metrics-Backup wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
+Um eine Victoria Metrics-Sicherung wiederherzustellen, verwenden Sie eine der folgenden Methoden:
 
-==== Stellen Sie ein bestimmtes Backup wieder her
+==== Wiederherstellen einer bestimmten Sicherung
 
 [,bash]
 ----
 sts-backup victoria-metrics restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
 ----
 
-==== Stellen Sie das neueste Backup wieder her
+==== Wiederherstellen der letzten Sicherung
 
 [,bash]
 ----
 sts-backup victoria-metrics restore --namespace <NAMESPACE> --latest
 ----
 
-==== Häufige Flags
+==== Gemeinsame Flaggen
 
 * `--yes` oder `-y` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
 * `--background` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
 
-==== Hintergrundwiederherstellung
+==== Hintergrund wiederherstellen
 
-Bei Verwendung von `--background` wird die Wiederherstellung asynchron ausgeführt. Nach dem Starten der Wiederherstellung verwenden Sie den folgenden Befehl, um den Status zu überprüfen und abzuschließen:
+Bei Verwendung von `--background` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
 
 [,bash]
 ----
 sts-backup victoria-metrics check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
 ----
 
-Der `check-and-finalize`-Befehl:
+Der Befehl `check-and-finalize`:
 
-* Überprüft den Status des Wiederherstellungsjobs
-* Mit dem `--wait`-Flag wartet er auf den Abschluss des Jobs
-* Skaliert automatisch StatefulSets hoch, die während der Wiederherstellung heruntergefahren wurden.
-* Bereinigt Ressourcen nach Abschluss
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `--wait` Flagge, wartet auf den Abschluss des Auftrags
+* Automatische Skalierung von StatefulSets, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
 
 [NOTE]
 ====
-Wenn eine Wiederherstellung, die ohne `--background` läuft, unterbrochen wird (z. B. durch Ctrl+C), müssen Sie `check-and-finalize` ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
+Wenn eine Wiederherstellung ohne `--background` unterbrochen wird (z. B. durch Strg+C), müssen Sie `check-and-finalize` ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
 ====
 
-== OpenTelemetry (ClickHouse)
+== OpenTelemetry (KlickHaus)
 
-=== Liste der ClickHouse-Sicherungen
+=== ClickHouse-Sicherungen auflisten
 
-Um ClickHouse-Sicherungen aufzulisten, führen Sie den folgenden Befehl aus:
+Um ClickHouse-Backups aufzulisten, führen Sie den folgenden Befehl aus:
 
 [,bash]
 ----
@@ -381,59 +380,59 @@ incremental_2025-11-27T23-45-00  2025-11-27 23:45:03  118MiB
 
 Sicherungsnamen, die mit `full_` beginnen, sind vollständige Sicherungen, während Namen, die mit `incremental_` beginnen, inkrementelle Sicherungen sind.
 
-=== Stellen Sie eine ClickHouse-Sicherung wieder her
+=== Wiederherstellen einer ClickHouse-Sicherung
 
 [NOTE]
 ====
-Der Wiederherstellungsprozess skaliert automatisch Arbeitslasten, die Daten erzeugen (wie OpenTelemetry-Exporter), herunter, um Datenverlust während der Wiederherstellung zu verhindern.
+Bei der Wiederherstellung werden datenproduzierende Workloads (wie OpenTelemetry-Exporter) automatisch heruntergefahren, um Datenverluste während der Wiederherstellung zu vermeiden.
 ====
 
-Um eine ClickHouse-Sicherung wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
+Um ein ClickHouse-Backup wiederherzustellen, verwenden Sie eine der folgenden Methoden:
 
-==== Stellen Sie eine bestimmte Sicherung wieder her
+==== Wiederherstellen einer bestimmten Sicherung
 
 [,bash]
 ----
 sts-backup clickhouse restore --namespace <NAMESPACE> --snapshot <BACKUP_NAME>
 ----
 
-==== Stellen Sie die neueste Sicherung wieder her
+==== Wiederherstellen der letzten Sicherung
 
 [,bash]
 ----
 sts-backup clickhouse restore --namespace <NAMESPACE> --latest
 ----
 
-==== Häufige Flags
+==== Gemeinsame Flaggen
 
 * `--yes` oder `-y` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
 * `--background` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
 
-==== Hintergrundwiederherstellung
+==== Hintergrund wiederherstellen
 
-Bei Verwendung von `--background` wird die Wiederherstellung asynchron ausgeführt. Nach dem Starten der Wiederherstellung verwenden Sie den folgenden Befehl, um den Status zu überprüfen und abzuschließen:
+Bei Verwendung von `--background` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
 
 [,bash]
 ----
 sts-backup clickhouse check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
 ----
 
-Der `check-and-finalize`-Befehl:
+Der Befehl `check-and-finalize`:
 
-* Überprüft den Status der Wiederherstellungsoperation
-* Mit dem `--wait`-Flag wartet es auf den Abschluss der Operation
+* Überprüft den Status des Wiederherstellungsvorgangs
+* Mit `--wait` Flagge, wartet auf den Abschluss der Operation
 * Führt SQL-Befehle nach der Wiederherstellung aus
-* Skaliert automatisch StatefulSets hoch, die während der Wiederherstellung heruntergefahren wurden.
-* Bereinigt Ressourcen nach Abschluss
+* Automatische Skalierung von StatefulSets, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
 
 [NOTE]
 ====
-Wenn eine Wiederherstellung, die ohne `--background` läuft, unterbrochen wird (z. B. durch Ctrl+C), müssen Sie `check-and-finalize` mit der Operations-ID ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
+Wenn eine Wiederherstellung ohne `--background` unterbrochen wird (z. B. durch Strg+C), müssen Sie `check-and-finalize` mit der Vorgangskennung ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
 ====
 
 == Telemetriedaten (Elasticsearch)
 
-=== Listen Sie die Elasticsearch-Snapshots auf
+=== Elasticsearch-Schnappschüsse auflisten
 
 Um die Elasticsearch-Snapshots aufzulisten, führen Sie den folgenden Befehl aus:
 
@@ -455,53 +454,53 @@ SNAPSHOT                                         STATE    START TIME            
 sts-backup-20251128-1135-dpkj2dqrszo6cscpgfhrhg  SUCCESS  2025-11-28T11:35:10.967Z  329158         0
 ----
 
-Der Zeitstempel, wann der Snapshot erstellt wurde, ist Teil des Snapshot-Namens.
+Der Zeitstempel, zu dem der Snapshot erstellt wurde, ist Teil des Snapshot-Namens.
 
-=== Stellen Sie einen Elasticsearch-Snapshot wieder her
+=== Wiederherstellen eines Elasticsearch-Snapshots
 
 [NOTE]
 ====
-Der Wiederherstellungsprozess löscht automatisch alle STS-Indizes (die dem Muster `sts*` entsprechen), bevor der Snapshot wiederhergestellt wird. Dies umfasst das Rollover von Datenströmen, um eine saubere Wiederherstellung sicherzustellen.
+Der Wiederherstellungsprozess löscht automatisch alle STS-Indizes (die dem Muster `sts*` entsprechen), bevor der Snapshot wiederhergestellt wird. Dazu gehört auch ein Rollover der Datenströme, um eine saubere Wiederherstellung zu gewährleisten.
 ====
 
 Um einen Elasticsearch-Snapshot wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
 
-==== Stellen Sie einen bestimmten Snapshot wieder her
+==== Wiederherstellung eines bestimmten Schnappschusses
 
 [,bash]
 ----
 sts-backup elasticsearch restore --namespace <NAMESPACE> --snapshot <SNAPSHOT_NAME>
 ----
 
-==== Stellen Sie den neuesten Snapshot wieder her
+==== Wiederherstellen des letzten Schnappschusses
 
 [,bash]
 ----
 sts-backup elasticsearch restore --namespace <NAMESPACE> --latest
 ----
 
-==== Häufige Flags
+==== Gemeinsame Flaggen
 
 * `--yes` oder `-y` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
 * `--background` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
 
-==== Hintergrundwiederherstellung
+==== Hintergrund wiederherstellen
 
-Bei Verwendung von `--background` wird die Wiederherstellung asynchron ausgeführt. Nach dem Starten der Wiederherstellung verwenden Sie den folgenden Befehl, um den Status zu überprüfen und abzuschließen:
+Bei Verwendung von `--background` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
 
 [,bash]
 ----
 sts-backup elasticsearch check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
 ----
 
-Der `check-and-finalize`-Befehl:
+Der Befehl `check-and-finalize`:
 
-* Überprüft den Status der Wiederherstellungsoperation
-* Mit dem `--wait`-Flag wartet es auf den Abschluss der Operation
-* Skaliert automatisch die Implementierungen hoch, die während der Wiederherstellung herunterskaliert wurden
-* Bereinigt Ressourcen nach Abschluss
+* Überprüft den Status des Wiederherstellungsvorgangs
+* Mit `--wait` Flagge, wartet auf den Abschluss der Operation
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
 
 [NOTE]
 ====
-Wenn eine Wiederherstellung, die ohne `--background` läuft, unterbrochen wird (z. B. durch Ctrl+C), müssen Sie `check-and-finalize` mit der Operations-ID (Snapshot-Name) ausführen, um die Implementierungen hochzuskalieren und Ressourcen zu bereinigen.
+Wenn eine Wiederherstellung ohne `--background` unterbrochen wird (z. B. durch Strg+C), müssen Sie `check-and-finalize` mit der Vorgangs-ID (Snapshot-Name) ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
 ====
