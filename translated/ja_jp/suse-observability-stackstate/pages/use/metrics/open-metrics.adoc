@@ -1,0 +1,90 @@
+= OpenMetrics
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+== 概要
+
+SUSE Observability Agent V2は、OpenMetricsエンドポイントからメトリクスを取得し、SUSE Observabilityにプッシュするように設定できます。
+
+== セットアップ
+
+=== インストール
+
+OpenMetricsチェックは[Agent V2 StackPack]に含まれています。
+
+=== 構成
+
+OpenMetrics統合を有効にしてOpenMetricsエンドポイントからメトリクスデータの収集を開始するには、SUSE Observability Agent V2でOpenMetricsチェックを設定する必要があります。チェック構成は、エージェントが OpenMetrics エンドポイントに接続し、利用可能なメトリクスを取得するために必要なすべての詳細を提供します。
+
+[tabs]
+====
+Kubernetes, OpenShift::
++
+--
+
+. KubernetesまたはOpenShiftクラスタにAgentをデプロイします。
+. OpenMetrics エンドポイントを介してメトリクスを公開するポッドを起動するときに、以下のアノテーションを追加します。以下を追加する：
+ ** **+++<CONTAINER_NAME>+++** - OpenMetrics を公開するコンテナの名前。1つのポッドで複数のエンドポイントを処理することが可能です（JSONにリストがあるのはそのためです）。+++</CONTAINER_NAME>+++
+ ** *prometheus_url*- OpenMetrics のエンドポイントが公開されているパス（多くの場合、`+metrics+` ）とポート。
+ ** *名前空間*- ここで収集されるすべてのメトリクスは、ドット区切りの接頭辞としてこれを受け取ります。
+ ** *metrics*-`+["*"]+` を使用して、利用可能なすべてのメトリクスを収集します。また、取得するメトリクスのリストを指定することも可能です。これは、メトリック名を表す文字列か、メトリック名を変更するためのマッピングでなければならない+``<EXPOSED_METRIC>:````<SENT_METRIC>+。``
++
+[,yaml]
+----
+ ...
+ metadata:
+   annotations:
+     ad.stackstate.com/<CONTAINER_NAME>.check_names: '["openmetrics"]'
+     ad.stackstate.com/<CONTAINER_NAME>.init_configs: '[{}]'
+     ad.stackstate.com/<CONTAINER_NAME>.instances: |
+       [
+         {
+           "prometheus_url": "http://%%host%%:<METRICS_PORT>/<METRICS_PATH>",
+           "namespace": "<METRICS_NAMESPACE>",
+           "metrics": ["*"]
+         }
+       ]
+ ...
+ # This already exists in the pod spec, the container name needs to match the container that is exposing the openmetrics endpoint
+ spec:
+   containers:
+    - name: <CONTAINER_NAME>
+ ...
+----
+. また、オプションの設定やフィルターを追加することもできます：
+ ** *prometheus_metrics_prefix*- OpenMetrics の公開メトリクスに追加するプレフィックス。
+ ** *health_service_check*- OpenMetrics エンドポイントの健全性を報告するサービスチェック`+<NAMESPACE>.prometheus.health+` を送信します。デフォルト`+true+`.
+ ** *label_to_hostname*- ラベルの値でホスト名を上書きする。
+ ** *label_joins*- メトリックをターゲットとし、1:1のマッピングでそのラベルを取得する。
+ ** *labels_mapper*- ラベルの名前を変更する。フォーマットは`+<LABEL_TO_RENAME>: <NEW_LABEL_NAME>+` 。
+ ** *type_overrides*- OpenMetrics のペイロードの型を上書きするか、型付けされていないメトリックの型を上書きします (これらはデフォルトでは無視されます)。サポートされる`+<METRIC_TYPE>+` は、`+gauge+` 、`+count+` 、`+rate+` である。フォーマットは`+<METRIC_NAME>: <METRIC_TYPE>+` 。
+ ** *tags*- この統合によって発行されるすべてのメトリクス、イベント、サービスチェックに付けるタグのリスト。
+ ** *send_histograms_buckets*- ヒストグラムのバケツを送信する。デフォルト`+true+`.
+ ** *send_monotonic_counter*- カウンターをレートに変換するために`+true+` に設定（最初の結果を出すには2回の実行が必要であることに注意）。カウンタをモノトニック・カウンタとして送信するには、`+false+` に設定する。デフォルト`+true+`.
+ ** *exclude_labels*- 除外するラベルのリスト。
+ ** *prometheus_timeout*- OpenMetrics クエリのタイムアウトを設定します。
+ ** *ssl_cert*- OpenMetrics のエンドポイントがセキュリティで保護されている場合、証明書へのパスを入力し、`+ssl_private_key+` パラメータに秘密鍵を指定するか、証明書と秘密鍵の両方を含むファイルへのパスを指定します。
+ ** *ssl_private_key*-`+ssl_cert+` でリンクされている証明書に秘密鍵が含まれていない場合に必要。ローカル証明書の秘密鍵は暗号化されていない必要があることに注意してください。
+ ** *ssl_ca_cert*- カスタム証明書の生成に使用する、信頼できる CA へのパス。
+ ** *extra_headers*- HTTP ヘッダ名と、OpenMetrics エンドポイントへのクエリで送信する対応する値をマッピングした辞書。`+%%env_VARIABLE%%+` の構文を使って、動的に環境変数を含めることができる。例えば、`+"Authorization: Bearer %%env_TOKEN%%"+` は、`+TOKEN+` 環境変数の値を自動的に代入する。
+. エージェントがOpenMetricsエンドポイントからデータを収集し、SUSE Observabilityに送信するのを待ちます。
+
+--
+====
+
+== 収集されたデータ
+
+=== 指標
+
+デフォルトでは、すべてのメトリクスは指定された OpenMetrics エンドポイントから取得されます。パフォーマンスを最適化するため、最大2000個のメトリクスが検索されます。2000 を超えるメ ト リ ッ ク を取得 し よ う と す る 場合は、`+metrics+` フ ィ ル タ を<<_configuration,構成に>>追加 し て、 すべての重要な メ ト リ ッ ク が制限内で取得で き る よ う に し ます。
+
+取得されたメトリクスは自動的にトポロジー要素にマッピングされませんが、xref:/use/metrics/k8sTs-explore-metrics.adoc[テレメトリ・インスペクタを]使用して参照することができ、最終的にはxref:/use/metrics/k8s-add-charts.adoc[メトリクス・バインディングを介してコンポーネントに追加さ]れます。
+
+=== イベント
+
+OpenMetrics 統合はイベントデータを取得しません。
+
+=== 痕跡
+
+OpenMetrics 統合はトレースデータを取得しません。
