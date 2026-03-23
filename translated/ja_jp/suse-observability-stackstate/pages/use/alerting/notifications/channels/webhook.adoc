@@ -1,0 +1,203 @@
+= ウェブフック
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+Webhookは、あなたが定義して実行するカスタムHTTPコールバックです。通知が開かれたり閉じられたりするたびに、必要なアクションを起こすことができる。たとえば、SUSE Observabilityでネイティブにサポートされていないチケットシステムでチケットを作成します。あるいは、単に通知メッセージをS3バケットに書き込み、将来参照することもできる。
+
+ウェブフック・チャンネルは、通知データを<<_webhook_requests_and_payload,HTTP上のJSONとして>>送信する。
+
+== ウェブフックを設定する
+
+image::k8s/notifications-webhook-channel-configuration.png[ウェブフックを設定する]
+
+Webhookを設定するには、フィールドに記入してください：
+
+. URL - ウェブフック・エンドポイントのURLを入力します。URLに特殊文字が含まれている場合は、パーセントエンコードする必要があります。
+. シークレットトークン - SUSE Observabilityが<<_validate_the_requests,リクエストに>>含めるシークレットトークン。
+. メタデータ - ペイロードに含まれる追加のキーと値のペアを追加します。これは、同じエンドポイントが複数のSUSE Observability webhookを処理し、追加情報が必要な場合に使用できます。
+. Enable SSL verification - (default on) SSL証明書の検証を有効にする。SUSE Observabilityでサポートされていない自己署名証明書または認証局を使用する場合のみ無効にします。
+
+最後に「チャンネルを追加」を選択する。ウェブフック・チャンネルが右側に表示されます。Webhookが機能するかテストするには、"Test "ボタンをクリックしてテストメッセージを送信してください。
+
+== Webhookリクエストとペイロード
+
+Webhook チャネルは HTTP POST リクエストとしてデータを送信します。エンドポイントとペイロードは、https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[OpenAPI仕様で]文書化されている。
+
+=== 通知オープン・リクエストのペイロード例
+
+----
+{
+    "component": {
+        "identifier": "urn:kubernetes:/k8s-demo-cluster:sock-shop:service/catalogue",
+        "link": "https://play.stackstate.com/#/components/urn%3Akubernetes%3A%2Fk8s-demo-cluster%3Asock-shop%3Aservice%2Fcatalogue?timeRange=1702624556757_1702646156757&timestamp=1702635356757",
+        "name": "catalogue",
+        "tags": [
+            "app.kubernetes.io/component:catalogue",
+            "app.kubernetes.io/instance:sock-shop",
+            "app.kubernetes.io/managed-by:Helm",
+            "app.kubernetes.io/name:sock-shop",
+            "app.kubernetes.io/version:0.3.5",
+            "cluster-name:k8s-demo-cluster",
+            "cluster-type:kubernetes",
+            "component-type:kubernetes-service",
+            "domain:business",
+            "extra-identifier:catalogue",
+            "helm.sh/chart:sock-shop",
+            "name:catalogue",
+            "namespace:sock-shop",
+            "service-type:ClusterIP",
+            "stackpack:kubernetes"
+        ],
+        "type": "service"
+    },
+    "event": {
+        "state": "CRITICAL",
+        "title": "HTTP - response time - is above 3.0 seconds",
+        "triggeredTimeMs": 1702635356757,
+        "type": "open"
+    },
+    "monitor": {
+        "identifier": "urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:http-response-time",
+        "link": "https://play.stackstate.com/#/monitors/urn%3Astackpack%3Akubernetes-v2%3Ashared%3Amonitor%3Akubernetes-v2%3Ahttp-response-time",
+        "name": "HTTP - response time - is above 3 seconds",
+        "tags": []
+    },
+    "notificationConfiguration": {
+        "identifier": "urn:system:default:notification-configuration:testing-2",
+        "link": "https://play.stackstate.com/#/notifications/urn%3Asystem%3Adefault%3Anotification-configuration%3Atesting-2",
+        "name": "Test Notification"
+    },
+    "notificationId": "836f628c-1258-4500-b1c7-23884e00f439",
+    "metadata": {
+        "team": "Team A"
+    }
+}
+----
+
+`+open+` ペイロードのセクションは以下の通り：
+
+. コンポーネント: 通知が適用されるSUSE Observabilityコンポーネント。これには、コンポーネント名、識別子、タイプ、タグが含まれる。また、ヘルスステートの変更時にコンポーネントを開くSUSE Observability UIへのリンクもあります。
+. イベント：この通知のトリガーとなったイベント。`+open+` 、または`+close+` （次項参照）。`+open+` 状態は、モニターが指定されたコンポーネントのクリティカル（または逸脱）状態にあることを意味する。`+close+` の状態は、以前はモニターが開いていたが、問題が解決したことを意味する。状態とトリガーされた時間が含まれる。また、`+title+` 、モニターが提供する問題の短い説明も含まれます。これは、コンポーネントのハイライトページに表示されるタイトルと同じもので、モニター名とは異なり、より詳細になる場合があります。
+. モニター：通知をトリガーしたモニター。モニター名、タグ、識別子の横にはリンクも含まれている。リンクをクリックすると、SUSE Observability UIでモニタが開きます。
+. 通知設定：この通知の通知設定。名前、識別子、リンクを含む。このリンクをクリックすると、SUSE Observability UIの通知設定が開きます。
+. 通知ID：この通知に対する一意の識別子。<<_notification_life_cycle,通知のライフサイクルも>>参照してください。
+. メタデータ：ウェブフック・チャンネルにメタデータを指定することができます。メタデータは、ここではキーと値のペアのセットとして一対一で再現される。
+
+=== 通知クローズ・リクエストのペイロード例
+
+----
+{
+    "component": {
+        "identifier": "urn:kubernetes:/gke-demo-dev.gcp.stackstate.io:sock-shop:service/catalogue",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/components/urn%3Akubernetes%3A%2Fgke-demo-dev.gcp.stackstate.io%3Asock-shop%3Aservice%2Fcatalogue?timeRange=1702624556757_1702646156757&timestamp=1702635356757",
+        "name": "catalogue",
+        "tags": [
+            "app.kubernetes.io/component:catalogue",
+            "app.kubernetes.io/instance:sock-shop",
+            "app.kubernetes.io/managed-by:Helm",
+            "app.kubernetes.io/name:sock-shop",
+            "app.kubernetes.io/version:0.3.5",
+            "cluster-name:gke-demo-dev.gcp.stackstate.io",
+            "cluster-type:kubernetes",
+            "component-type:kubernetes-service",
+            "domain:business",
+            "extra-identifier:catalogue",
+            "helm.sh/chart:sock-shop",
+            "name:catalogue",
+            "namespace:sock-shop",
+            "service-type:ClusterIP",
+            "stackpack:kubernetes"
+        ],
+        "type": "service"
+    },
+    "event": {
+        "reason": "HealthStateResolved",
+        "type": "close"
+    },
+    "monitor": {
+        "identifier": "urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:http-response-time",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/monitors/urn%3Astackpack%3Akubernetes-v2%3Ashared%3Amonitor%3Akubernetes-v2%3Ahttp-response-time",
+        "name": "HTTP - response time - is above 3 seconds",
+        "tags": []
+    },
+    "notificationConfiguration": {
+        "identifier": "urn:system:default:notification-configuration:testing-2",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/notifications/urn%3Asystem%3Adefault%3Anotification-configuration%3Atesting-2",
+        "name": "Test Notification"
+    },
+    "notificationId": "836f628c-1258-4500-b1c7-23884e00f439",
+    "tags": {
+        "team": "Team A"
+    }
+}
+----
+
+`+close+` ペイロードのセクションは、`+event+` を除き、`+open+` ペイロードと同じである。`+type+` が`+close+` になり、通知がクローズされた理由を示す`+reason+` フィールドだけがある。このフィールドの値は列挙型で、https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[OpenAPI仕様に]可能な値が記載されています。
+
+== 通知のライフサイクル
+
+ペイロードからわかるように、各通知は`+notificationId+` によって一意に識別される。同じ通知に対して複数のメッセージを受け取ることは可能であり、一般的でさえあるが、それらは常にこのライフサイクルに従って送信される。
+
+モニター状態が逸脱またはクリティカルに変更されると、最初に通知が作成される（逸脱が適用されるかどうかは、xref:/use/alerting/notifications/configure.adoc#_configure_when_to_notify[通知設定に]依存する）。イベントタイプ`+open+` のメッセージがウェブフックに送信される。
+
+イベントの`+state+` または`+title+` が変更された場合、通知を更新することができます。コンポーネントやメッセージの他の部分の変更も含まれるが、それだけではアップデートのトリガーにはならない。通知更新はまた、イベントタイプ`+open+` のメッセージをウェブフックに送信します。このメッセージは、外部システムのデータを更新するために（新しい通知を作成する代わりに）使用できる同じ`+notificationId+` 。
+
+最後に、モニター状態が非クリティカル（または逸脱）状態に戻ると、通知がクローズされる。イベントタイプ`+close+` のメッセージがウェブフックに送信される。これは、特定の`+notificationId+` が使用される最後の機会でもある。
+
+健康状態の変化とは異なる理由で、通知を開いたり閉じたりすることができることに注意してください：
+
+* タグはコンポーネントまたはモニターに追加される。これにより、いくつかの重要なモニターの健全性状態が通知構成の選択条件に一致し、対応する通知が開かれることがあります。
+* 同じ理由で、コンポーネントまたはモニタからタグを削除すると、健康状態がまだクリティカルであっても、通知を閉じることができます。
+* 通知コンフィギュレーションそのものを変更すると、多くの新しい通知が開かれたり閉じられたりすることもある。
+
+== リクエストを検証する
+
+チャネル・コンフィギュレーションで指定されたシークレット・トークンは、`+X-StackState-Webhook-Token+` ヘッダーのウェブフック・リクエストに含まれます。Webhookエンドポイントは、リクエストが正当なものであるかどうかを確認するために、値をチェックすることができます。
+
+== リトライ
+
+ウェブフック・チャンネルは、ステータス200 OKのレスポンスを受け取るまで、通知のリクエストを再試行します（レスポンスの本文は無視されます）。Webhookがメッセージの処理に失敗した場合（たとえば、その時点でデータベースにアクセスできない場合など）、単純に500のステータスコードで応答することができます。SUSE Observabilityは、数秒以内に同じメッセージを再送します。
+
+しかし、通知が更新されたり閉じられたりした場合、古いメッセージは破棄され、更新された新しいメッセージが送信され、成功するまで再試行されます。
+
+== ウェブフックの例
+
+Webhookがどのように機能するかをテストするには、HTTPサーバーを起動し、受信したペイロードを標準出力に書き出すシンプルなPythonスクリプトを使用できます。
+
+. このPythonスクリプトを`+webhook.py+` として保存する：
+```python
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import sys
+
+class WebhookHTTPRequestHandler(BaseHTTPRequestHandler):
+
+ def do_POST(self):
+     content_len = int(self.headers.get('content-length', 0))
+     notification = json.loads(self.rfile.read(content_len))
+     print("Notification received: ", json.dumps(notification, indent = 2))
+     self.send_response(200)
+     self.end_headers()
+
+httpd = HTTPServer(('', int(sys.argv[1])), WebhookHTTPRequestHandler)
+httpd.serve_forever()
+```
+
+. 未使用のポート（たとえば8000）でWebhookサーバーを実行します： `+python3 webhook.py 8000+`
+. SUSE Observabilityで、WebhookサーバのURLを使用してWebhookを設定します。 `+http://webhook.example.com:8000+`
+. ウェブフック・チャンネルの`+test+` をクリックします。
+
+[NOTE]
+====
+WebhookのURLはSUSE Observabilityからアクセスできる必要があるため、localhostアドレスやローカルのipアドレスでは不十分です。
+====
+
+
+<<_validate_the_requests,トークン・ヘッダーの>>値を検証することで追加できる。
+
+これを手作業で実装する代わりに、https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[OpenAPI仕様を使って]、https://openapi-generator.tech/[OpenAPIジェネレーター・プロジェクトが]サポートする言語でサーバー実装を生成することも可能です。
+
+== 関連
+
+* xref:/use/alerting/notifications/troubleshooting.adoc[トラブルシューティング]
