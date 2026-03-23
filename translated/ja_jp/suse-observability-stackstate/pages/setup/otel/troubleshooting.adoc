@@ -1,0 +1,102 @@
+= オープン・テレメトリーのトラブルシューティング
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+設定オプションはたくさんあるが、より重要なのは、（Kubernetesの）環境はそれぞれ微妙に異なるということだ。問題がどこにあるのかを見つけるには、テレメトリーデータが期待されるポッドを選ぶのが一番手っ取り早い：
+
+. SDKは、起動時に計測に失敗すると警告やエラーをログに記録します。
+. コレクタへのデータ送信に関連するエラーがないか、ログもチェックする。
+. コレクターポッドのログをチェックして、設定や初期化のエラーを確認する。
+. SUSE Observabilityへのデータ送信に関連するエラーがないか、コレクタのログも確認してください。
+
+ログのエラーは通常、問題の良い兆候を示す。オープン・テレメトリ・データが、あなたの計測アプリケーションの一部または全部で利用できない最も一般的な原因を列挙します。問題がここに記載されていない場合は、https://opentelemetry.io/docs/languages/[言語固有の SDK ドキュメント]、または Open Telemetry のhttps://opentelemetry.io/docs/collector/troubleshooting/[コレクターのドキュメントを]参照することもできます。
+
+== 同じKubernetesクラスター名を使用する
+
+同じKubernetesクラスタ名を同じクラスタに使用することを確認してください：
+
+* オープン・テレメトリ・コレクタの取付け
+* SUSE Observabilityエージェントのインストール
+* Kubernetes StackPackのインストール
+
+同じクラスタに異なる名前が使用されている場合、SUSE ObservabilityはOpen TelemetryのデータとSUSE Observabilityエージェントのデータを一致させることができず、トレースパースペクティブは空のままになります。
+
+== コレクタがSUSE Observabilityにデータを送信できない
+
+=== SUSE ObservabilityのOTLPエンドポイントとAPIキーが誤って設定されている
+
+接続エラーがある場合、OTLPエンドポイントが正しくない可能性があります。認証/認可エラー（ステータスコード401と403）がある場合は、APIキーが有効でない（もうない）可能性があります。設定されたOTLPエンドポイントがSUSE ObservabilityのURLであることを確認します。接頭辞は`+otlp-+` 、接尾辞は`+:443+` 。例えば、`+play.stackstate.com+` の OTLP エンドポイントは`+otlp-play.stackstate.com:443+` です。
+
+apiキーが正しく設定されていることを確認するために、以下をチェックする：
+
+. シークレットに有効なAPIキーが含まれている(SUSE Observabilityで確認する)
+. 秘密はポッド上の環境変数として使用されます。
+. `+bearertokenauth+` 拡張モジュールが正しいスキームを使用しており、`+API_KEY+` 環境変数の値が正しい。
+. `+bearertokenauth+` の拡張子は`+otlp/suse-observability+` エクスポーターで使用される。
+
+=== 一部のプロキシやファイアウォールはgRPCとうまく動作しません。
+
+コレクタがプロキシやファイアウォールを介してSUSE Observabilityにデータを送信する必要がある場合、トラフィックが完全にブロックされるか、gRPCメッセージの一部がドロップされるか、予期せず長期間のgRPC接続が完全にドロップされる可能性があります。最も簡単な修正は、gRPCからHTTPに切り替えることです。そのためには、`+otlp/suse-observability+` エクスポーターの**設定と、パイプライン・セクション内の参照を**、`+otlphttp/suse-observability+` エクスポーターに置き換えます。
+
+ここで`+<otlp-http-suse-observability-endpoint>+` は`+<otlp-suse-observability-endpoint>+` と似ているが、`+otlp-+` という接頭辞の代わりに、`+otlp-http-+` という接頭辞を持つ。例えば`+otlp-http-play.stackstate.com+` 。詳細は、xref:/setup/otel/collector.adoc#_exporters[コレクタの設定を]参照してください。
+
+== インスツルメンテッド・アプリケーションがコレクタにデータを送信できない。
+
+=== URLが間違っているか、トラフィックがブロックされている
+
+SDKがコレクタDNS名を解決できないというエラーを記録する場合は、設定されたコレクタURLが正しくない可能性があります。Kubernetesでは通常、アプリケーションはコレクターとは別のネームスペースにデプロイされる。これは、コレクタサービスの完全修飾ドメイン名で SDK を構成する必要があることを意味します。`+http://<service-name>.<namespace>.svc.cluster.local:4317+`.xref:/setup/otel/collector.adoc[コレクタのインストール手順では]、これは`+http://opentelemetry-collector.open-telemetry.svc.cluster.local:4317+` でしたが、コレクタに異なるネームスペースまたはリリース名を使用している場合は、状況が異なる可能性があります。
+
+SDKがネットワーク接続のタイムアウトをログに記録する場合は、コレクタに設定ミスがあるか、<<_the_language_sdk_uses_the_wrong_port,間違ったポートが>>使用されている可能性があります。しかし、Kubernetesのネットワークポリシーが、アプリケーションからコレクターへのネットワークトラフィックをブロックしている可能性もある。これはKubernetes管理者に確認するのがベストだ。ネットワークポリシーは、少なくともすべてのアプリケーションからコレ クタへの構成済みポート (4317 および / または 4318) の TCP トラフィックを許可 する必要があります。
+
+=== 言語SDKはgRPCをサポートしていません。
+
+すべての言語SDKがgRPCをサポートしているわけではありません。OTLP over gRPCがサポートされていない場合は、OTLP over HTTPに切り替えるのが最善です。xref:/setup/otel/instrumentation/sdk-exporter-config.adoc#_grpc_vs_http[SDKエクスポーターのコンフィグには]、この切り替え方法が記載されています。
+
+=== 言語SDKが間違ったポートを使用している
+
+間違ったポートを使用すると、通常は接続エラーとして表示されるが、ネットワーク接続が予期せず切断されることもある。SDKエクスポータがデータ送信時に正しいポートを使用していることを確認してください。xref:/setup/otel/instrumentation/sdk-exporter-config.adoc#_grpc_vs_http[SDKエクスポータの設定を]参照してください。
+
+== hostNetworkを有効にしたKubernetesポッド
+
+Open Telemetry コレクターは、Kubernetes メタデータで遠隔測定データをエンリッチします。リッチ化できないテレメトリーデータはすべてドロップされるように設定されている。ただし、コレクターは`+hostNetwork: true+` が自動的に設定された状態で実行されているポッドをエンリッチすることはできません。なぜなら、ポッドの識別はポッドのIPアドレスを使って行われ、ホスト・ネットワークを使用するポッドはホストのIPアドレスを使用するからです。
+
+コレクターがポッドを識別するのを助けるために、`+k8s.pod.uid+` 属性を直接追加するように SDK に指示することで、メタデータに追加できます。これを行うには、Pod仕様を変更し、インスツルメンテッド・アプリケーション・コンテナに以下の環境変数を追加する：
+
+[,yaml]
+----
+env:
+  - name: POD_UID
+    valueFrom:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: metadata.uid
+  - name: OTEL_RESOURCE_ATTRIBUTES
+    value: k8s.pod.uid=$(POD_UID)
+----
+
+`+OTEL_RESOURCE_ATTRIBUTES+` env var がすでに設定されている場合は、`+k8s.pod.uid+` をカンマ区切りで追加するだけでよい。値はカンマ区切りのリスト。
+
+== Google Kubernetesエンジン上のNode.jsアプリケーション
+
+Node.jsのSDKは、GKEでのみ、Kubernetesの名前空間が環境変数`+NAMESPACE+` を介して設定されていることを期待します。設定されていない場合は、`+k8s.namespace.name+` 属性が追加されますが、値は空です。 これは、Kubernetes属性プロセッサが正しい名前空間名を挿入するのを妨げる。これが修正されるまでの回避策は、ポッド仕様を更新し、この環境変数をインスツルメンテッドコンテナに追加することである：
+
+[,yaml]
+----
+env:
+  - name: NAMESPACE
+    valueFrom:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: metadata.namespace
+----
+
+== Node.jsアプリケーションで利用可能なメトリクスはありません。
+
+Node.jsの自動インスツルメンテーションは、環境変数によって設定され、トレースのみをサポートしています。少なくとも、このhttps://github.com/open-telemetry/opentelemetry-js/issues/4551[Open Telemetry の問題が]解決するまでは。自動計測によるメトリクスを有効にするには、コードの変更が必要である。https://opentelemetry.io/docs/languages/js/exporters/#_usage_with_nodejs[Open Telemetry ドキュメントの]指示に従って変更してください。
+
+== Kubernetes属性を追加できない
+
+コレクターのインストール中に、コレクターがKubernetesリソースからメタデータを読み取れるようにするクラスタロールとクラスタロールバインディングがKubernetesに作成される。これが失敗したり削除されたりすると、コレクターはKubernetes APIに問い合わせることができなくなる。これはコレクタログにエラーとして表示され、エラーにはメタデータを取得できなかったリソースタイプが含まれます。
+
+これを修正するには、Helmチャートでコレクタを再インストールし、クラスタロールとクラスタロールバインディングを作成するために必要な権限があることを確認します。または、クラスタ管理者に、必要な権限でコレクタのインストールを行うように依頼してください。
