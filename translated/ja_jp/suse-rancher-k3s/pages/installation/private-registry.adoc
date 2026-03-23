@@ -1,0 +1,303 @@
+= プライベートレジストリの設定
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+コンテイナーは、プライベートレジストリーに接続し、kubeletが必要に応じてイメージをプルするためにそれらを使用するように構成できます。
+
+起動すると、K3sは`+/etc/rancher/k3s/registries.yaml+` 。もしそうなら、containerd の設定を生成するときに、このファイルに含まれるレジストリの設定が使われる。
+
+* プライベートレジストリを docker.io などのパブリックレジストリのミラーとして使いたい場合は、ミラーを使いたい各ノードで`+registries.yaml+` を設定する必要があります。
+* プライベートレジストリに認証が必要な場合、カスタム TLS 証明書を使用する場合、または TLS を使用しない場合は、レジストリからイメージを取得する各ノードで`+registries.yaml+` を設定する必要があります。
+
+サーバーノードはデフォルトでスケジューリング可能である。サーバーノードを汚染しておらず、その上でワークロードを実行する場合は、各サーバー上に`+registries.yaml+` ファイルも作成してください。
+
+[#_default_endpoint_fallback]
+== デフォルトのエンドポイント・フォールバック
+
+Containerdは、すべてのレジストリに対して暗黙の "デフォルトエンドポイント "を持っている。
+デフォルトのエンドポイントは、`+registries.yaml+` にそのレジストリの他のエンドポイントがリストされていても、常に最後の手段として試行される。
+リライトは、デフォルトのエンドポイントに対するプルには適用されません。
+例えば、`+registry.example.com:5000/rancher/mirrored-pause:3.6+` を引き出す場合、containerd はデフォルトのエンドポイント`+https://registry.example.com:5000/v2+` を使用する。
+
+* `+docker.io+` のデフォルトのエンドポイントは`+\https://index.docker.io/v2+` 。
+* 他のすべてのレジストリのデフォルトのエンドポイントは`+\https://<REGISTRY>/v2+` である。`+<REGISTRY>+` はレジストリのホスト名とオプションのポートである。
+
+レジストリとして認識されるためには、画像名の最初の構成要素に少なくとも1つのピリオドかコロンが含まれていなければなりません。
+歴史的な理由から、レジストリが名前に指定されていない画像は、暗黙のうちに`+docker.io+` のものであると識別される。
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+`+--disable-default-registry-endpoint+` オプションは 2024 年 1 月のリリースで利用可能です: v1.26.13+k3s1、 v1.27.10+k3s1、 v1.28.6+k3s1、 v1.29.1+k3s1。
+====
+
+
+ノードは`+--disable-default-registry-endpoint+` オプションで起動できる。
+これを設定すると、containerd はデフォルトのレジストリエンドポイントにフォールバックせず、 設定されたミラーエンドポイントからのみ取得するようになる。
+
+これは、クラスタがアップストリーム・レジストリを利用できない真のエアギャップ環境にある場合や、一部のノードにのみアップストリーム・レジストリからプルさせたい場合に有効です。
+
+デフォルトのレジストリエンドポイントを無効にすることは、`+registries.yaml+` を介して構成されたレジストリにのみ適用される。
+レジストリが`+registries.yaml+` のミラー・エントリによって明示的に設定されていない場合、デフォルトのフォールバック動作が使用される。
+
+== レジストリ設定ファイル
+
+このファイルは、トップレベルの2つのキーと、各レジストリのサブキーで構成されている：
+
+[,yaml]
+----
+mirrors:
+  <REGISTRY>:
+    endpoint:
+      - https://<REGISTRY>/v2
+configs:
+  <REGISTRY>:
+    auth:
+      username: <BASIC AUTH USERNAME>
+      password: <BASIC AUTH PASSWORD>
+      token: <BEARER TOKEN>
+    tls:
+      ca_file: <PATH TO SERVER CA>
+      cert_file: <PATH TO CLIENT CERT>
+      key_file: <PATH TO CLIENT KEY>
+      insecure_skip_verify: <SKIP TLS CERT VERIFICATION BOOLEAN>
+----
+
+=== 鏡
+
+ミラーのセクションは、例えばレジストリーの名前とエンドポイントを定義している：
+
+----
+mirrors:
+  registry.example.com:
+    endpoint:
+      - "https://registry.example.com:5000"
+----
+
+各ミラーは名前とエンドポイントのセットを持たなければならない。レジストリからイメージを取得するとき、containerd はこれらのエンドポイント URL とデフォルトのエンドポイントを試し、最初に動作したものを使用する。
+
+==== リダイレクト
+
+プライベートレジストリを他のレジストリのミラーとして使用する場合、例えばhttps://docs.docker.com/registry/recipes/mirror/[プルスルーキャッシュを]設定する場合、画像のプルは透過的にリストされたエンドポイントにリダイレクトされます。元のレジストリ名は、`+ns+` クエリパラメータでミラーエンドポイントに渡されます。
+
+たとえば、`+docker.io+` にミラーを設定した場合：
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+----
+
+そして、`+docker.io/rancher/mirrored-pause:3.6+` を引っ張ると、`+registry.example.com:5000/rancher/mirrored-pause:3.6+` として透過的に画像が引っ張られる。
+
+==== リライト
+
+各ミラーは書き換えのセットを持つことができ、ミラーから引き出された画像の名前を正規表現を使ってマッチさせ、変換します。
+これは、プライベートレジストリの組織/プロジェクト構造が、ミラーしているレジストリとは異なる場合に便利である。
+リライトはタグではなく画像名のみにマッチし、変換されます。
+
+例えば、次のように設定すると、`+registry.example.com:5000/mirrorproject/rancher-images/mirrored-pause:3.6+` として`+docker.io/rancher/mirrored-pause:3.6+` イメージを透過的に引き出します：
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+    rewrite:
+      "^rancher/(.*)": "mirrorproject/rancher-images/$1"
+----
+
+[NOTE]
+.バージョン・ゲート
+====
+2024年1月リリースのv1.26.13+k3s1、v1.27.10+k3s1、v1.28.6+k3s1、v1.29.1+k3s1では、xref:#_default_endpoint_fallback[デフォルトエンドポイントに]書き換えが適用されなくなりました。
+これらのリリース以前は、デフォルトエンドポイントにも書き換えが適用され、ミラーエンドポイントからイメージをプルできず、アップストリームで変更された名前でイメージが利用できない場合、K3がアップストリームレジストリからプルできないようになっていました。
+====
+
+異なる上流のレジストリのミラーとして使用されていないレジストリから直接取得する際に書き換えを適用したい場合は、デフォルトのエンドポイントとは異なるミラーエンドポイントを指定する必要があります。
+`+registries.yaml+` 、デフォルトのエンドポイントに一致するミラー・エンドポイントは無視される。フォールバックが無効化されていない場合、デフォルトのエンドポイントは常に最後に試行され、書き換えは行われない。
+
+例えば、`+https://registry.example.com/+` にレジストリがあり、`+registry.example.com/rancher/mirrored-pause:3.6+` を明示的にプルする際に書き換えを適用したい場合、ポートをリストしたミラーエンドポイントを追加することができる。
+ミラーのエンドポイントはデフォルトのエンドポイントと一致しないため **`+"https://registry.example.com:443/v2" != "https://registry.example.com/v2"+`**- というエンドポイントは、事実上デフォルトと同じであるにもかかわらず、ミラーとして受け入れられ、書き換えが適用されます。
+
+[,yaml]
+----
+mirrors:
+ registry.example.com
+   endpoint:
+     - "https://registry.example.com:443"
+   rewrite:
+     "^rancher/(.*)": "mirrorproject/rancher-images/$1"
+----
+
+ミラーと書き換えを使用する場合、画像は元の名前で保存されることに注意してください。
+例えば、`+crictl image ls+` は、異なる名前のミラーから引き出されたイメージであっても、ノード上で利用可能なものとして`+docker.io/rancher/mirrored-pause:3.6+` を表示します。
+
+=== コンフィグ
+
+`+configs+` セクションでは、各ミラーのTLSとクレデンシャルの設定を定義する。各ミラーについて、`+auth+` および/または`+tls+` を定義することができる。
+
+`+tls+` ：
+
+|===
+| 指令 | 説明
+
+| `+cert_file+`
+| レジストリとの認証に使用するクライアント証明書のパス。
+
+| `+key_file+`
+| レジストリとの認証に使用するクライアントキーのパス。
+
+| `+ca_file+`
+| レ ジ ス ト リ のサーバ証明フ ァ イ ルを検証す る ために用い ら れ る CA 証明書のパ ス を定義 し ます。
+
+| `+insecure_skip_verify+`
+| レジストリのTLS検証を省略するかどうかを指定するブール値。
+|===
+
+`+auth+` の部分は、ユーザー名／パスワードまたは認証トークンで構成される：
+
+|===
+| 指令 | 説明
+
+| `+username+`
+| プライベートレジストリのユーザー名 基本認証
+
+| `+password+`
+| プライベートレジストリのユーザーパスワード 基本認証
+
+| `+auth+`
+| プライベートレジストリの認証トークン。
+|===
+
+以下は、さまざまなモードでのプライベート登録の基本的な使用例である：
+
+=== ワイルドカード対応
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+ワイルドカードのサポートは2024年3月のリリースで利用可能：v1.26.15+k3s1、v1.27.12+k3s1、v1.28.8+k3s1、v1.29.3+k3s1
+====
+
+
+`+"*"+` ワイルドカードエントリーは、`+mirrors+` と`+configs+` セクションで使用することができ、すべてのレジストリーの デフォルト設定を提供する。
+そのレジストリの特定のエントリがない場合のみ、デフォルトの設定が使用される。アスタリスクは必ず引用符で囲むこと。
+
+以下の例では、ローカルレジストリのミラーがすべてのレジストリに使用される。TLS 検証は、`+docker.io+` を除くすべてのレジストリで無効になる。
+
+[,yaml]
+----
+mirrors:
+  "*":
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "docker.io":
+  "*":
+    tls:
+      insecure_skip_verify: true
+----
+
+=== TLS付き
+
+以下は、TLS使用時に各ノードで`+/etc/rancher/k3s/registries.yaml+` 。
+
+[tabs]
+======
+認証あり::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+    tls:
+      cert_file: # path to the cert file used in the registry
+      key_file:  # path to the key file used in the registry
+      ca_file:   # path to the ca file used in the registry
+----
+
+認証なし::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    tls:
+      cert_file: # path to the cert file used in the registry
+      key_file:  # path to the key file used in the registry
+      ca_file:   # path to the ca file used in the registry
+----
+======
+
+=== TLSなし
+
+以下は、TLSを使用_しない_場合に各ノードで`+/etc/rancher/k3s/registries.yaml+` 。
+
+[tabs]
+======
+認証あり::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+----
+
+認証なし::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+----
+======
+
+____
+TLS 通信を行わない場合は、エンドポイントに`+http://+` を指定する必要がある。指定しない場合は、デフォルトで https になる。
+____
+
+レジストリの変更を有効にするには、各ノードでK3を再起動する必要があります。
+
+== イメージプルのトラブルシューティング
+
+Kubernetesでイメージのプルに問題が発生した場合、kubeletが表示するエラーは、デフォルトのエンドポイントに対して行われたプルの試行によって返されたターミナルエラーのみを反映し、設定されたエンドポイントが使用されていないように見えることがあります。
+
+障害の根本原因に関する詳細な情報については、`+/var/lib/rancher/k3s/agent/containerd/containerd.log+` にあるノードの containerd ログを確認してください。ポッドがスケジュールされているノードのログを見なければならないことに注意してください。ポッドがどのノードにスケジュールされているかは、`+kubectl get pod -o wide -n NAMESPACE POD+` を発行して NODE 列をチェックすることで確認できます。
+
+== プライベートレジストリへの画像の追加
+
+イメージをプライベートレジストリにミラーリングするには、Dockerまたはイメージをプル/プッシュできるその他のサードパーティツールを備えたホストが必要です。 +
+以下の手順では、dockerd と docker CLI ツールが使えるホストと、docker.io とプライベートレジストリの両方にアクセスできる環境を想定しています。
+
+. 作業するリリースの`+k3s-images.txt+` ファイルを GitHub から入手する。
+. k3s-images.txtに記載されているK3sイメージをdocker.ioから取り出します。 +
+例 `+docker pull docker.io/rancher/mirrored-pause:3.6+`
+. 画像をプライベートレジストリにリタグする。 +
+例 `+docker tag docker.io/rancher/mirrored-pause:3.6 registry.example.com:5000/rancher/mirrored-pause:3.6+`
+. プライベートレジストリに画像をプッシュする。 +
+例 `+docker push registry.example.com:5000/rancher/mirrored-pause:3.6+`
