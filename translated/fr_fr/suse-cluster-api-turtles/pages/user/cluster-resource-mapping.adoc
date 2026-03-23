@@ -1,0 +1,123 @@
+= Relations entre les ressources des clusters dans {product_name}
+:revdate: 2026-01-06
+:page-revdate: {revdate}
+
+== Vue d'ensemble
+
+Rancher intègre plusieurs composants qui définissent leurs propres ressources personnalisées `+Cluster+`.{product_name} s'appuie sur cette base en utilisant Cluster API et Fleet, ce qui peut entraîner une certaine confusion sur la façon dont ces ressources `+Cluster+` interagissent et sur ce que les utilisateurs doivent modifier.
+
+Ce document explique l'objectif, le comportement et les relations entre les ressources suivantes du cluster :
+
+* `+clusters.cluster.x-k8s.io+` (Pôle CAPI)
+* `+clusters.fleet.cattle.io+` (Groupement de la flotte)
+* `+clusters.provisioning.cattle.io+` (Cluster de provisionnement)
+* `+clusters.management.cattle.io+` (Pôle de gestion)
+
+== Résumé des ressources
+
+|===
+| Groupe API | Ressources de la grappe | Rôle
+
+| `+cluster.x-k8s.io+`
+| Pôle CAPI
+| Définit le cycle de vie et la topologie du cluster. Agit comme source de vérité dans les Tortues.
+
+| `+fleet.cattle.io+`
+| Groupement de la flotte
+| Utilisé pour le ciblage des paquets GitOps et la synchronisation des applications via Fleet.
+
+| `+provisioning.cattle.io+`
+| Cluster de provisionnement
+| La première abstraction de cluster à usage général de Rancher. Encapsule la configuration spécifique à l'infrastructure et au fournisseur, et est nécessaire pour générer des jetons d'enregistrement de cluster et des manifestes. Sur le site {product_name}, cette ressource a été utilisée pour envelopper les grappes CAPI importées, mais elle est en train d'être supprimée.
+
+| `+management.cattle.io+`
+| Pôle de gestion
+| Représentation actuelle des clusters de Rancher. Les clusters `+management.cattle.io/v3+` sont désormais la ressource par défaut créée et gérée par Turtles. Il ne faut pas confondre avec les clusters gérés par CAPI, où "géré" fait référence à la gestion du cycle de vie de l'API Cluster, et non au groupe d'API `+management.cattle.io+` de Rancher.
+|===
+
+== Les relations
+
+=== Groupe CAPI → Groupe Flotte
+
+Lorsque le Cluster API Add-on Provider for Fleet (CAAPF) est activé, il propage les étiquettes et les annotations du CAPI `+Cluster+` vers le Fleet `+Cluster+` correspondant. Cela permet de cibler les paquets GitOps via des sélecteurs d'étiquettes. Le CAAPF crée la ressource Fleet `+Cluster+` correspondante lorsque le CAPI `+Cluster+` atteint la condition `+ControlPlaneInitialized+`.
+
+=== Cluster CAPI → Cluster Provisioning (Legacy)
+
+Un site `+provisioning.cattle.io.Cluster+` peut être créé pour envelopper le cluster CAPI et exposer les champs spécifiques au Rancher (par exemple, le nom d'affichage, la configuration RKE). Cependant, dans la plupart des flux de travail du site {product_name}, il est progressivement supprimé et l'utilisateur n'est pas tenu d'interagir avec cette ressource.
+
+=== Management Cluster → Provisioning Cluster
+
+Pour les anciens clusters, un `+provisioning.cattle.io/v1.Cluster+` peut être généré à partir d'un `+management.cattle.io/v3.Cluster+`. Cet objet est utilisé par l'interface utilisateur et les API de Rancher et n'est pas destiné à être modifié directement par les utilisateurs.
+Les nouveaux clusters gérés uniquement par des tortues ne créent pas automatiquement un cluster `+provisioning.cattle.io+`.
+
+== Comportement de propagation
+
+|===
+| De → À | Propagation | Notes
+
+| CAPI → Flotte
+| Oui
+| Propagé par CAAPF
+
+| CAPI → Approvisionnement
+| Non
+| Il n'est pas créé automatiquement ; il n'est généré que par les Tortues pour les clusters hérités.
+
+| CAPI → Gestion
+| Non
+| Uniquement via Provisioning Cluster pour les clusters existants
+
+| Approvisionnement → Flotte
+| Non
+| Non pris en charge
+
+| Flotte → CAPI
+| Non
+| Non pris en charge
+
+| Gestion → Approvisionnement
+| Conditional
+| Uniquement pour les clusters hérités ; les nouveaux clusters gérés par Turtles ne génèrent pas de clusters de provisionnement.
+|===
+
+== Que doivent modifier les utilisateurs ?
+
+=== Recommandé : `+cluster.x-k8s.io.Cluster+`
+
+Le cluster CAPI est la ressource qui fait autorité pour la définition des clusters dans {product_name}.
+Des étiquettes doivent être placées sur l'objet CAPI Cluster. Ils se propageront automatiquement au Fleet Cluster, ce qui permettra aux sélecteurs de paquets basés sur les étiquettes de fonctionner comme prévu.
+
+=== Sous réserve : `+provisioning.cattle.io.Cluster+`
+
+Nécessaire uniquement lors de l'utilisation de fonctionnalités de provisionnement natives de Rancher (par exemple, `+spec.rkeConfig+`, flux pilotés par l'interface utilisateur). Éviter les modifications, sauf si elles sont explicitement requises.
+
+=== Éviter : `+fleet.cattle.io.Cluster+`
+
+Les groupes de flottes sont gérés automatiquement. Les modifications sont déconseillées, sauf si l'on travaille sur les éléments internes de la flotte.
+
+=== Éviter : `+management.cattle.io.Cluster+`
+
+Ces ressources sont internes et entièrement gérées par Rancher. Ne les modifiez pas.
+
+[NOTE]
+====
+* Le **Pôle CAPI** est la source de la vérité.
+* Les **clusters de flotte** sont générés automatiquement à partir des clusters CAPI via CAAPF.
+* Les **clusters de** **provisionnement** et de **gestion** ne sont *pas nécessaires* à moins que le provisionnement Rancher ne soit impliqué.
+====
+
+[TIP]
+====
+Utilisez les étiquettes du cluster CAPI pour piloter le déploiement de l'offre groupée Fleet. Le contrôleur CAAPF veille à ce que ces étiquettes soient synchronisées avec l'objet Fleet Cluster.
+====
+
+== Références
+
+* https://github.com/rancher/cluster-api-addon-provider-fleet[Cluster API Add-on Provider for Fleet (CAAPF) (Fournisseur de services complémentaires à l'API de cluster pour la flotte)]
+ifeval::["{build-type}" == "product"]
+* https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/index.html[Documentation de la flotte]
+endif::[]
+ifeval::["{build-type}" == "community"]
+* https://fleet.rancher.io[Documentation de la flotte]
+endif::[]
+* https://extensions.rancher.io/internal/code-base-works/cluster-management-resources#cluster-resources[Les rouages du cluster Rancher]
