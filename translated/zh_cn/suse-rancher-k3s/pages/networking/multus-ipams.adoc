@@ -1,41 +1,41 @@
 = Multus 和 IPAM 插件
-:page-languages: [en, ja, ko, zh]
+:page-languages: [EN, JA, KO, ZH]
 :revdate: 2025-09-16
 :page-revdate: {revdate}
 
-https://github.com/k8snetworkplumbingwg/multus-cni[Multus CNI] 是一个 CNI 插件，能够将多个网络接口附加到 Pod 上。Multus 并不替代 CNI 插件，而是作为 CNI 插件的多路复用器。在某些使用场景中，Multus 非常有用，特别是当 Pod 网络密集并需要额外的网络接口以支持数据平面加速技术（如 SR-IOV）时。
+https://github.com/k8snetworkplumbingwg/multus-cni[Multus CNI]是一个 CNI 插件，可将多个网络接口连接到 pod。Multus 不会取代 CNI 插件，而是充当 CNI 插件复用器。Multus 在某些使用情况下非常有用，尤其是当 pod 是网络密集型设备，需要额外的网络接口来支持 SR-IOV 等数据平面加速技术时。
 
-有关 Multus 的更多信息，请参阅 https://github.com/k8snetworkplumbingwg/multus-cni/tree/master/docs[multus-cni] 文档。
+有关 Multus 的更多信息，请参阅https://github.com/k8snetworkplumbingwg/multus-cni/tree/master/docs[multus-cni]文档。
 
-Multus 不能单独部署。它始终需要至少一个满足 Kubernetes 集群网络要求的传统 CNI 插件。该 CNI 插件成为 Multus 的默认插件，并将用于为所有 Pod 提供主要接口。在使用默认选项部署 K3s 时，该 CNI 插件是 Flannel。
+Multus 不能独立部署。它始终需要至少一个满足 Kubernetes 集群网络要求的传统 CNI 插件。该 CNI 插件将成为 Multus 的默认设置，并为所有 pod 提供主要接口。使用默认选项部署 K3 时，该 CNI 插件是 Flannel。
 
 [NOTE]
-.版本门控
+.版本闸门
 ====
-K3s 从 2024 年 10 月的版本开始使用固定的 CNI 二进制路径：v1.28.15+k3s1，v1.29.10+k3s1，v1.30.6+k3s1，v1.31.2+k3s1。
+K3s 在 2024 年 10 月发布的版本中使用固定的 CNI 二进制路径：v1.28.15+k3s1、v1.29.10+k3s1、v1.30.6+k3s1、v1.31.2+k3s1。
 ====
 
-K3s 在 `+$DATA_DIR/data/cni+` 中查找 CNI 插件二进制文件。默认情况下，这是 `+/var/lib/rancher/k3s/data/cni+`。额外的 CNI 插件应安装到此位置。
+K3s 可查看`+$DATA_DIR/data/cni+` 中的 CNI 插件二进制文件。默认为`+/var/lib/rancher/k3s/data/cni+` 。其他 CNI 插件应安装到此位置。
 
-在 2024 年 10 月的版本之前，CNI 二进制文件是 K3s 用户空间包的一部分，位于 `+$DATA_DIR/data/$HASH/bin+`，其中哈希值对每个 K3s 版本都是唯一的。
-这使得部署额外的 CNI 插件变得困难，因为每次升级 K3s 时路径都会改变。
+在 2024 年 10 月发布之前，CNI 二进制文件是 K3s 用户空间捆绑包的一部分，地址为`+$DATA_DIR/data/$HASH/bin+` ，每个 K3s 版本的哈希值都是唯一的。
+这使得部署其他 CNI 插件变得困难，因为每次升级 K3s，路径都会改变。
 
-如果要在较旧版本的 K3s 上部署 Multus，您应使用 `+/var/lib/rancher/k3s/data/current/bin/+` 作为 CNI 路径，但要预期每次 K3s 升级时都需要重新部署插件。
+如果将 Multus 部署到旧版本的 K3s 上，则应使用`+/var/lib/rancher/k3s/data/current/bin/+` 作为 CNI bin 目录，但要注意，每当 K3s 升级时，插件都需要重新部署。
 
 == 使用 IPAM 插件进行部署
 
-需要一个 IP 地址管理器（IPAM）插件来为 Multus 创建的额外接口分配 IP 地址。可以安装一个或多个IPAM；下面的示例每个都展示了单个IPAM插件的使用，但可以根据需要组合。
+需要使用 IP 地址管理器 (IPAM) 插件为 Multus 创建的额外接口分配 IP 地址。可以安装一个或多个 IPAM；下面的示例分别展示了单个 IPAM 插件的使用情况，但也可以根据需要进行组合。
 
-下面的helm部署示例将部署一个DaemonSet，以创建Multus pods，在`+/var/lib/rancher/k3s/data/cni/+`中安装所需的CNI二进制文件，并在`+/var/lib/rancher/k3s/agent/etc/cni/net.d+`中安装Multus CNI配置。
+下面的 helm 部署示例将部署 DaemonSet 以创建 Multus pod，从而在`+/var/lib/rancher/k3s/data/cni/+` 中安装所需的 CNI 二进制文件，并在`+/var/lib/rancher/k3s/agent/etc/cni/net.d+` 中安装 Multus CNI 配置。
 
 [tabs,sync-group-id=MultusIPAMplugins]
 ======
-host-local::
+主机本地::
 +
 --
-host-local IPAM插件从一组地址范围中分配IP地址。它将状态存储在主机文件系统上，从而确保单个主机上的IP地址唯一性。因此，我们不建议在多节点集群中使用它。此IPAM插件不需要额外的部署。有关更多信息：https://www.cni.dev/plugins/current/ipam/host-local/.
+主机本地 IPAM 插件从一组地址范围中分配 IP 地址。它将状态本地存储在主机文件系统中，从而确保单台主机上 IP 地址的唯一性。因此，我们不建议将其用于多节点集群。该 IPAM 插件无需额外部署。欲了解更多信息： https://www.cni.dev/plugins/current/ipam/host-local/.
 
-要使用 host-local 插件，请使用以下配置部署 Multus：
+要使用主机本地插件，请使用以下配置部署 Multus：
 
 [,yaml]
 ----
@@ -60,12 +60,12 @@ spec:
 ----
 --
 
-Whereabouts::
+下落::
 +
 --
-https://github.com/k8snetworkplumbingwg/whereabouts[Whereabouts]是一个IP地址管理（IPAM）CNI插件，负责在整个集群中分配IP地址。
+https://github.com/k8snetworkplumbingwg/whereabouts[Whereabouts]是一个 IP 地址管理（IPAM）CNI 插件，可在整个集群范围内分配 IP 地址。
 
-要使用Whereabouts IPAM插件，请使用以下配置部署Multus：
+要使用 Whereabouts IPAM 插件，请使用以下配置部署 Multus：
 
 [,yaml]
 ----
@@ -95,9 +95,9 @@ spec:
         binDir: /var/lib/rancher/k3s/data/cni/
 ----
 
-在K3s上使用whereabouts时，`+configuration_path+`必须在NetworkAttachmentDefinition的`+ipam+`配置中设置为`+/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf+`。
+在 K3 上使用 whereabouts 时，`+configuration_path+` 必须在 NetworkAttachmentDefinition 的`+ipam+` 配置中设置为`+/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf+` 。
 
-例如，当使用whereabouts作为IPAM与macvlan插件时：
+例如，使用 macvlan 插件将 whereabouts 作为 IPAM 时：
 
 [,yaml]
 ----
@@ -122,12 +122,12 @@ spec:
 ----
 --
 
-Multus DHCP守护程序::
+Multus DHCP 守护进程::
 +
 --
-当网络上已经有一个DHCP服务器运行时，可以部署DHCP IPAM插件。此 DaemonSet 负责定期续订 DHCP 租约。有关更多信息，请查看https://www.cni.dev/plugins/current/ipam/dhcp/[DHCP IPAM插件]的官方文档。
+当网络上已有 DHCP 服务器时，就可以部署 dhcp IPAM 插件。该守护进程负责定期更新 DHCP 租约。更多信息请查看https://www.cni.dev/plugins/current/ipam/dhcp/[IPAM 插件] DHCP的官方文档。
 
-要使用DHCP插件，请使用以下配置部署Multus：
+要使用 DHCP 插件，请使用以下配置部署 Multus：
 
 [,yaml]
 ----
@@ -155,10 +155,10 @@ spec:
 --
 ======
 
-=== 使用Multus
+=== 使用 Multus
 
-一旦部署了 Multus，您可以创建 NetworkAttachmentDefinition 资源，并在 Pod 规格中引用这些资源以附加额外的接口。
-例如，使用上面的 Whereabouts 示例，您可以在 Pod 上使用 `+k8s.v1.cni.cncf.io/networks+` 注释创建一个 `+eth1+` 接口：
+部署 Multus 后，您可以创建 NetworkAttachmentDefinition 资源，并在 Pod 规范中引用这些资源来附加其他接口。
+例如，使用上面的行踪示例，您可以使用`+k8s.v1.cni.cncf.io/networks+` 注解在 Pod 上创建一个`+eth1+` 接口：
 
 [,yaml]
 ----
