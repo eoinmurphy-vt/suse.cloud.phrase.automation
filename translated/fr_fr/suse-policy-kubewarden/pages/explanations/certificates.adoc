@@ -1,0 +1,33 @@
+include::partial$variables.adoc[]
+= Rotation des certificats
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Apprenez à effectuer la rotation des certificats sur votre site {project-name} sans provoquer de temps d'arrêt.
+:doc-persona: ["kubewarden-operator"]
+:doc-topic: ["explanations", "certificates"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "certificate", "controller", "reconciliation"]
+:sidebar_label: Rotation des certificats
+:sidebar_position: 21
+
+{project-name} La version 1.17.0 a supprimé la dépendance de cert-manager. Le contrôleur est capable de gérer tous les certificats utilisés par tous les composants. Le contrôleur dispose désormais d'une nouvelle boucle de réconciliation qui garantit que les certificats sont toujours à jour et que la configuration du webhook est correcte.
+
+L'installation de la carte Helm génère le premier certificat. Il génère l'autorité de certification racine avec dix ans d'expiration. L'installation de la carte Helm génère également le certificat du serveur web du webhook du contrôleur, signé par l'autorité de certification racine. Le serveur API l'utilise pour communiquer avec le contrôleur{short-project-name} afin de valider les CRD. Il a une durée de validité d'un an.
+
+Une fois le contrôleur démarré, son réconciliateur renouvelle automatiquement les certificats lorsqu'ils sont sur le point d'expirer. Il met également à jour tous les certificats et toutes les configurations de webhook utilisés par l'ensemble de la pile {short-project-name}.
+
+[NOTE]
+====
+Tous les certificats générés par la carte Helm, puis par le contrôleur, utilisent des clés ECDSA P256.
+====
+
+La boucle de réconciliation renouvelle les certificats 60 jours avant leur expiration.
+Les certificats tournent sans interruption de service. La boucle de réconciliation se charge également de renouveler l'autorité de certification racine.
+
+Le contrôleur génère une nouvelle autorité de certification racine 60 jours avant l'expiration. Le contrôleur met à jour le groupe d'autorités de certification utilisé par tous les webhooks afin d'y inclure la nouvelle autorité de certification racine et l'ancienne.
+
+Le changement de l'autorité de certification racine conduit le réconciliateur à recréer les certificats délivrés aux webhooks. La propagation des nouveaux certificats prend un certain temps. Toutefois, pendant cette période, le paquet d'AC mis à jour permet au serveur API de continuer à communiquer avec tous les webhooks sans interruption de service.
+
+Lorsqu'un nouveau certificat est prêt et que l'ancien n'est plus valable, le contrôleur met à jour le groupe d'autorités de certification, utilisé par les webhooks, pour n'inclure que la dernière autorité de certification racine.
+
+Lorsque le certificat d'un serveur de stratégie ou d'un serveur web de contrôleur est renouvelé, le contrôleur met à jour le secret avec le nouveau certificat signé par l'autorité de certification racine. Grâce à cette fonction de rechargement, le contrôleur et le serveur de politiques utilisent le nouveau certificat sans qu'il soit nécessaire de redémarrer les processus, et donc sans interruption de service.
