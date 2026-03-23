@@ -1,0 +1,100 @@
+= NTP-Konfiguration mit {elemental-product-name}
+:revdate: 2025-07-03
+:page-revdate: {revdate}
+
+== Übersicht
+
+Der mit {elemental-product-name} ausgelieferte Standard-OS-Channel bietet NTP-Unterstützung über `+systemd-timesyncd+`.
+
+Diese Seite behandelt die Konfiguration von `+systemd-timesyncd+` mit den mitgelieferten SLE Micro-Images, die mit einigen Standard-(Fallback-)NTP-Servern vorkonfiguriert sind: (_[0-3].suse.pool.ntp.org_).
+
+Der einfachste Weg, einen bestimmten NTP-Server zu konfigurieren, besteht darin, eine Konfigurationsdatei im Verzeichnis`+/etc/systemd/timesyncd.conf.d+` abzulegen.
+Das Verzeichnis und die Konfigurationsdatei sollten für den Benutzer `+systemd-timesync+` zugänglich sein.
+
+== Konfigurieren Sie einen statischen NTP-Server
+
+Die NTP-Konfiguration kann über ein cloud-config-Snippet bereitgestellt werden, das der MachineRegistration-Konfiguration hinzugefügt wird.
+
+Das werden wir tun müssen:
+
+* sicherstellen, dass das Verzeichnis `+timesyncd.conf.d+` vom Benutzer `+systemd-timesync+` gelesen werden kann
+* schreiben Sie die benutzerdefinierte Konfigurationsdatei in das Verzeichnis `+timesyncd.conf.d+` 
+* Starten Sie den Dienst `+systemd-timesyncd+` neu, um die neue Konfiguration zu verwenden.
+
+Sehen wir uns als Beispiel an, wie man `+ntp.ripe.net+` als primären NTP-Server konfiguriert (Zeilen 6-14):
+
+[,yaml]
+----
+config:
+  cloud-config:
+    users:
+      - name: root
+        passwd: root
+    write_files:
+      - content: |
+          [Time]
+          NTP=ntp.ripe.net
+        path: /etc/systemd/timesyncd.conf.d/custom-ntp.conf
+        permissions: 644
+    runcmd:
+      - chmod 755 /etc/systemd/timesyncd.conf.d
+      - systemctl restart systemd-timesyncd
+  elemental:
+    install:
+      device: /dev/vda
+      reboot: true
+machineInventoryLabels:
+  element: fire
+----
+
+== NTP über DHCP konfigurieren
+
+Um den NTP-Server über die NTP-DHCP-Option aus dem Netz zu beziehen, benötigen wir ein NetworkManager-Dispatcher-Skript, das den Dienst `+systemd-timesync+` bei Bedarf dynamisch neu konfiguriert.
+
+Wir müssen beides tun:* das Dispatcher-Skript bereitstellen, das die systemd-timesyncd-Konfigurationsdateien erstellt und löscht * den NetworkManager-Dispatcher-Dienst aktivieren
+
+Siehe Zeilen 6-34 im folgenden MachineRegistration-Konfigurationsbeispiel:
+
+[,yaml]
+----
+config:
+  cloud-config:
+    users:
+      - name: root
+        passwd: root
+    write_files:
+      - content: |
+          #! /usr/bin/bash
+
+          [ -n "$CONNECTION_UUID" ] || exit
+
+          INTERFACE=$1
+          ACTION=$2
+
+          case $ACTION in
+              up | dhcp4-change | dhcp6-change)
+                  [ -n "$DHCP4_NTP_SERVERS" ] || exit
+                  mkdir -p /etc/systemd/timesyncd.conf.d/
+                  cat<<EOF > /etc/systemd/timesyncd.conf.d/$CONNECTION_UUID.conf
+          [Time]
+          NTP=$DHCP4_NTP_SERVERS
+          RootDistanceMaxSec=15
+          EOF
+                  systemctl restart systemd-timesyncd
+                  ;;
+              down)
+                  rm -f /etc/systemd/timesyncd.conf.d/$CONNECTION_UUID.conf
+                  systemctl restart systemd-timesyncd
+                  ;;
+          esac
+        path: /etc/NetworkManager/dispatcher.d/10-update-timesyncd
+        permissions: 700
+    runcmd:
+      - systemctl enable NetworkManager-dispatcher
+  elemental:
+    install:
+      device: /dev/vda
+      reboot: true
+machineInventoryLabels:
+  element: fire
+----
