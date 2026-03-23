@@ -1,0 +1,194 @@
+include::partial$variables.adoc[]
+
+= {project-name} vs OPA Gatekeeper
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:page-aliases: explanations/opa-comparison.adoc
+:description: Comparez OPA Gatekeeper et {project-name} gestion des politiques pour les environnements Kubernetes afin de déterminer la meilleure approche pour votre cas d'utilisation.
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["explanations", "kubewarden-vs-opa_gatekeeper"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "opa gatekeeper", "comparison"]
+:current-version: {page-origin-branch}
+
+[IMPORTANT]
+====
+
+Cette page date d'août 2023. Les deux projets peuvent avoir évolué depuis lors.
+
+Si vous trouvez que quelque chose manque ou est inexact, veuillezhttps://github.com/kubewarden/docs/[déposer un problème] ou ouvrir un PR en utilisant le lien au bas de la page.
+
+====
+
+OPA Gatekeeper et Kubewarden, dont {project-name} est dérivé, sont tous deux des projets open source et font partie de la CNCF.
+
+Ce tableau fournit une comparaison entre OPA Gatekeeper et {short-project-name}. Les sujets nécessitant plus d'informations sont accompagnés de liens vers des explications complémentaires.
+
+|===
+| Fonctionnalité | OPA Gatekeeper | {short-project-name}
+
+| Validation
+| ✅
+| ✅
+
+| Mutation
+| ✅
+| ✅
+
+| Langue de la politique <<_writing_policies,[1]>>
+| Rego
+| Rego, CEL, Go, Rust,...
+
+| Conscient du contexte <<_context_aware,[2]>>
+| ✅
+| ✅
+
+| Intégration de Kubernetes <<_kubernetes_integration,[3]>>
+| CRD à l'échelle de la grappe
+| CRDs à l'échelle du groupe et à espace nominatif
+
+| Distribution des politiques <<_policy_distribution,[4]>>
+| intégré à Kubernetes CR
+| Registre de conteneurs, ou intégré dans Kubernetes CR (CEL)
+
+| Intégration CI/CD <<_cicd_integration,[5]>>
+| ✅
+| ✅
+
+| Modes d'application de la politique
+| refuser, avertir
+| refuser, avertir
+
+| Mode de déploiement <<_deployment_mode,[6]>>
+| serveur d'évaluation unique
+| plusieurs serveurs d'évaluation
+
+| Vérification des antécédents <<_background_checks,[7]>>
+| ✅
+| ✅
+|===
+
+== Types de politiques
+
+L'OPA Gatekeeper et Kubernetes peuvent tous deux écrire des politiques de validation et de mutation.
+
+Ces politiques peuvent cibler n'importe quel type de ressource Kubernetes, y compris les ressources personnalisées.
+
+== Rédaction des politiques
+
+Vous écrivez des politiques OPA Gatekeeper en utilisanthttps://www.openpolicyagent.org/docs/latest/#rego[Rego]. Rego est un langage de requête créé par le projet Open Policy Agent.
+
+[IMPORTANT]
+====
+
+Vous ne pouvez utiliser Rego que pour écrire des politiques de validation. Les politiques de mutation n'utilisent pas Rego, mais des règles ad hoc définies en YAML (voirhttps://open-policy-agent.github.io/gatekeeper/website/docs/mutation[ici)].
+
+====
+
+
+Vous pouvez rédiger des politiques {short-project-name} en utilisant différents paradigmes. Les auteurs de politiques peuvent utiliser des langages de programmation traditionnels (comme Go, Rust et d'autres) ouhttps://en.wikipedia.org/wiki/Domain-specific_language[Domain Specific Languages] comme Rego et CEL. Sur le site {short-project-name}, vous écrivez les politiques de validation et de mutation de la même manière.
+
+[CAUTION]
+====
+
+Le projet open source https://github.com/open-policy-agent/kube-mgmt[] kube-mgmt, qui fait partie du projet Open Policy Agent, utilise Rego.
+
+Bien qu'utilisant le même langage, les politiques écrites pour kube-mgmt ne sont pas compatibles avec OPA Gatekeeper et vice versa.
+
+{short-project-name} peut utiliser des politiques Rego écrites à la fois pour Open Policy Agent et pour OPA Gatekeeper. Plus d'informationsxref:/tutorials/writing-policies/rego/01-intro-rego.adoc[ici].
+
+====
+
+
+== Prise en compte du contexte
+
+Parfois, une politique a besoin de données sur l'état actuel de la grappe pour prendre une décision de validation ou de mutation. Par exemple, une politique de validation des ressources Ingress peut avoir besoin de connaître les autres ressources Ingress déjà définies dans le cluster pour s'assurer qu'il n'y a pas de conflit. {short-project-name} appelle ces politiques "context aware" (conscientes du contexte).
+
+OPA Gatekeeper et {short-project-name} supportent tous deux ces types de politiques.
+
+Lors du déploiement d'OPA Gatekeeper, un administrateur Kubernetes décide du type de données de cluster à mettre à disposition des politiques au moment de l'évaluation.
+
+Il est important de souligner que ces données sont ensuite accessibles par toutes les politiques déployées.
+
+Par exemple, si une politique OPA Gatekeeper nécessite l'accès à Kubernetes Secrets, toutes les autres politiques déployées sont en mesure de lire ces données également.
+
+Inversement, {short-project-name} fournit un accès granulaire aux ressources de la grappe.
+Chaque politique n'a accès qu'aux ressources spécifiées par l'administrateur Kubernetes. Toute tentative de lecture de données non autorisées est immédiatement bloquée et signalée aux administrateurs du cluster.
+
+== Intégration de Kubernetes
+
+OPA Gatekeeper dispose d'une ressource personnalisée à l'échelle du cluster, qui permet de définir des politiques et de déterminer où et comment les appliquer.
+
+{short-project-name} dispose de deux types différents de ressources personnalisées utilisées pour déclarer les politiques. L'un fonctionne au niveau du cluster, l'autre est un espace de noms. Le nom de la ressource personnalisée à espace de noms est `+AdmissionPolicy+`.
+
+Les politiques déployées via une ressource `+AdmissionPolicy+` n'affectent que les ressources créées dans l'espace de noms auquel elles appartiennent. Pour cette raison, vous pouvez autoriser les utilisateurs de Kubernetes qui ne sont pas des administrateurs à disposer des privilèges RBAC nécessaires pour gérer les ressources `+AdmissionPolicy+`, dans les espaces de noms auxquels ils peuvent accéder.
+
+Cela permet aux administrateurs de Kubernetes de déléguer le travail lié aux politiques.
+
+== Distribution des politiques
+
+Les politiques OPA Gatekeeper et {short-project-name} ont un code source de politique (Rego pour OPA Gatekeeper, CEL pour {short-project-name}) dans la ressource personnalisée définissant une politique dans Kubernetes.
+
+En outre, les politiques {short-project-name} peuvent avoir leur code source géré comme des images de conteneurs (pour Rego, Go, Rust, ...). Une fois construits, ils sont introduits dans les registres de conteneurs en tant qu'artefacts OCI.
+
+Vous pouvez signer et vérifier les politiques {short-project-name} à l'aide d'outils d'images de conteneurs tels que`+cosign+`, du https://sigstore.dev[projet].
+
+Vous pouvez distribuer les politiques {short-project-name} parmi les registres de conteneurs distribués géographiquement en utilisant les outils et processus traditionnels adoptés pour les images de conteneurs.
+
+== Intégration CI/CD
+
+OPA Gatekeeper et {short-project-name} sont gérés selon les méthodologies GitOps.
+
+Cependant, pour OPA Gatekeeper, il y a un couplage entre le code Rego de la politique et la ressource personnalisée utilisée pour la déployer dans Kubernetes.
+Cela introduit des étapes supplémentaires dans les pipelines CI/CD.
+
+Rego dispose de https://www.openpolicyagent.org/docs/latest/policy-testing/[outils de test] permettant de créer des suites de tests unitaires. Il est essentiel d'écrire des tests et de les exécuter dans un pipeline CI/CD pour s'assurer que les politiques se comportent comme prévu.
+
+Pour utiliser ces outils de test, le code source de la politique doit être disponible dans des fichiers texte dédiés. Il est impossible de lire le code source des fichiers YAML utilisés pour déclarer la politique OPA Gatekeeper. Le pipeline CI/CD doit synchroniser le code source Rego à tester avec le code défini dans la ressource personnalisée OPA Gatekeeper. Vous pouvez le faire à l'aide d'outils tiers.
+
+{short-project-name} Les politiques ont des pipelines CI/CD comme les microservices traditionnels.
+En général, leur code source se trouve dans un dépôt Git et, à l'aide de systèmes CI/CD traditionnels, des tests unitaires sont exécutés en fonction de ce code. Vous écrivez des tests unitaires en utilisant les cadres de test du langage utilisé pour écrire la politique. Une fois tous les tests réussis, vous compilez la politique en WebAssembly et l'envoyez dans un registre de conteneurs. Ce type de pipeline est généralement géré par l'auteur de la politique.
+
+Les administrateurs Kubernetes maintiennent généralement d'autres pipelines d'automatisation qui réagissent aux nouvelles versions de la politique (en utilisant des outils d'automatisation tels quehttps://docs.github.com/en/code-security/dependabot/working-with-dependabot[Dependabot],https://www.mend.io/renovate/[Renovate bot],https://www.updatecli.io/[updatecli] et d'autres), ou aux modifications de la configuration de la politique.
+
+Le pipeline teste la politique en fonction de différents types de demandes. Vous pouvez effectuer les tests à l'aide de l'outil https://github.com/kubewarden/kwctl[`+kwctl+`] sans avoir besoin d'un cluster Kubernetes en cours d'exécution. L'outil `+kwctl+` CLI utilise le même moteur d'évaluation que la pile {short-project-name} déployée dans un cluster Kubernetes.
+
+== Modes d'application de la politique
+
+OPA Gatekeeper et {short-project-name} peuvent déployer des politiques en utilisant deux modes de fonctionnement différents :
+
+* `+deny+`La violation d'une politique entraîne le rejet de la demande
+* `+warn+`La violation d'une politique n'entraîne pas de rejet et est enregistrée.
+
+== Mode de déploiement
+
+Le même serveur évalue toutes les politiques de l'OPA Gatekeeper. Inversement,{short-project-name} permet de définir plusieurs serveurs d'évaluation. Vous définissez ces serveurs à l'aide d'une ressource personnalisée appelée `+PolicyServer+`.
+
+Lors de la déclaration d'une politique {short-project-name}, l'administrateur Kubernetes décide quel`+PolicyServer+` l'héberge.
+
+[NOTE]
+====
+
+L'objet `+PolicyServer+` est une abstraction de haut niveau introduite par {short-project-name}.
+En coulisses, un site `+Deployment+` est créé avec une taille de réplique spécifique.
+
+Chaque site `+PolicyServer+` peut avoir une taille de réplique différente des autres.
+
+====
+
+Cela permet d'envisager des scénarios intéressants comme les suivants :
+
+* Déployer les stratégies critiques dans un pool de serveurs de stratégies dédié.
+* Déployer les politiques d'un locataire bruyant dans un pool de serveurs de politiques dédié.
+
+== Vérification des antécédents
+
+Au fur et à mesure de l'ajout, de la suppression et de la reconfiguration des politiques, les ressources déjà présentes dans le cluster risquent de ne plus être conformes.
+
+OPA Gatekeeper et {short-project-name} disposent tous deux d'un scanner qui fonctionne en arrière-plan. Ce scanner évalue les ressources déjà définies dans le cluster et signale celles qui ne sont pas conformes.
+
+La seule différence entre OPA Gatekeeper et {short-project-name} est la manière dont les résultats du scanner sont sauvegardés.
+
+OPA Gatekeeper ajoute les détails de la violation au champ `+status+` d'une ressource personnalisée donnée`+Constraint+` (voirhttps://open-policy-agent.github.io/gatekeeper/website/docs/audit#constraint-status[ici)].
+
+{short-project-name} stocke plutôt les résultats dans un ensemble de ressources personnalisées de rapports définies par https://openreports.io[openreports.io].
