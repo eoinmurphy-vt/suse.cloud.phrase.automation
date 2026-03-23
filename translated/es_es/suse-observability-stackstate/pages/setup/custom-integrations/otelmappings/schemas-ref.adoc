@@ -1,0 +1,467 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= Esquemas
+:revdate: 2025-12-23
+:page-revdate: {revdate}
+:description: Abrir esquemas cartográficos de telemetría
+
+== Visión general
+
+Esta página describe los esquemas para definir un `+OtelComponentMapping+` o `+OtelRelationMapping+`, junto con explicaciones detalladas de las construcciones, la sintaxis de las expresiones y su semántica.
+
+== Esquemas de asignación de componentes y relaciones de OTel
+
+=== OtelComponentMapping
+
+Asignación de cada componente:
+
+* Selecciona la telemetría utilizando las condiciones.
+* Extrae valores utilizando expresiones.
+* Produce un único componente lógico identificado por un identificador estable.
+
+Múltiples registros telemétricos pueden resolver el mismo identificador de componente; en ese caso, el componente se fusiona y se actualiza.
+
+[,yaml]
+----
+_type: "OtelComponentMapping"
+name: string
+input:
+  signal: ["TRACES" | "METRICS"]
+  resource:
+    condition: <cel-boolean>        # default: true
+    action: CONTINUE                # default
+    scope:
+      condition: <cel-boolean>      # default: true
+      action: CONTINUE              # default
+      span:                         # TRACES only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+      metric:                       # METRICS only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+        datapoint:                  # METRICS only
+          condition: <cel-boolean>  # default: true
+          action: CONTINUE          # default
+vars:                               # Optional
+  - name: string
+    value: <cel-expression>
+output:
+  identifier: <cel-string>
+  name: <cel-string>
+  typeName: <cel-string>
+  typeIdentifier: <cel-string>      # Optional
+  domainName: <cel-string>
+  domainIdentifier: <cel-string>    # Optional
+  layerName: <cel-string>
+  layerIdentifier: <cel-string>     # Optional
+  required:                         # Optional (required means that if any expression fails, the mapping fails)
+    version: <cel-string>           # Optional
+    additionalIdentifiers:          # Optional
+      - <cel-string>
+    tags:                           # Optional
+      - source: <cel-string>
+        target: string
+      - source: <cel-string>
+        pattern: regex
+        target: string
+  optional:                         # Optional (besides being optional on the schema, optional means that if any expression under `+optional+` fails, the mapping will continue, but without the failed expression/field)
+    version: <cel-string>           # Optional
+    additionalIdentifiers:          # Optional
+      - <cel-string>
+    tags:                           # Optional
+      - source: <cel-string>
+        target: string
+      - source: <cel-map>
+        pattern: regex
+        target: string
+expireAfter: duration-ms
+----
+
+=== OtelRelationMapping
+
+Cada mapeo de relación:
+
+* Resuelve un `+sourceId+` y `+targetId+`.
+* Asigna un tipo de relación.
+* Produce un borde dirigido entre componentes existentes o futuros.
+
+Las relaciones se materializan cuando existen componentes de origen y destino.
+
+[,yaml]
+----
+_type: "OtelRelationMapping"
+name: string
+input:
+  signal: ["TRACES" | "METRICS"]
+  resource:
+    condition: <cel-boolean>        # default: true
+    action: CONTINUE                # default
+    scope:
+      condition: <cel-boolean>      # default: true
+      action: CONTINUE              # default
+      span:                         # TRACES only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+      metric:                       # METRICS only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+        datapoint:                  # METRICS only
+          condition: <cel-boolean>  # default: true
+          action: CONTINUE          # default
+vars:                               # Optional
+  - name: string
+    value: <cel-expression>
+output:
+  sourceId: <cel-string>
+  targetId: <cel-string>
+  typeName: <cel-string> 
+  typeIdentifier: <cel-string>      # Optional
+expireAfter: duration-ms
+----
+
+== Identidad, fusión y ciclo de vida de componentes y relaciones
+
+=== Identidad de los componentes
+
+El campo `+output.identifier+` define la identidad principal de un componente y debe ser "globalmente" único dentro de toda la topología. A través de `+output.required.additionalIdentifiers+` puede especificar más identificadores para el componente.  Los componentes que tienen al menos un identificador superpuesto se consideran la misma entidad lógica y son fusionados por la plataforma. Esto hace que la construcción de identificadores sea una elección de diseño fundamental.
+
+Los identificadores deben:
+
+* Siga el formato del identificador {stackstate-product-name} (es decir, `+urn:...+`). Consulte la documentación xref:/configure/topology/identifiers.adoc[sobre identificadores] para obtener más información.
+* Ser estable a lo largo del tiempo.
+* Reflejar la cardinalidad prevista (servicio, instancia, base de datos y similares).
+* Evite las dimensiones no delimitadas.
+
+[NOTE]
+====
+Mediante la lista `+output.required.additionalIdentifiers+`, puede especificar identificadores adicionales a los que asociar el componente generado. Esto podría ser útil para correlacionar un componente con un identificador externo en otro sistema.
+====
+
+=== Identidad de relación
+
+La relación identidad es un compuesto de la forma `+output.sourceId-output.targetId+`, donde `+sourceId+` y `+targetId+` son identificadores de componentes (por ejemplo, de `+output.identifier+`).
+
+=== Actualización y caducidad
+
+Cada asignación define una duración `+expireAfter+`. Este valor controla el tiempo que un componente o relación permanece en la topología sin ser actualizado por nueva telemetría coincidente. Si no se actualiza, el componente o la relación se elimina de la topología.
+
+Internamente, el recolector OTel refresca continuamente los componentes a medida que la telemetría coincide - esta ventana de refresco se basa en el campo `+expireAfter+` por mapeo.
+
+== Modelo de entrada transversal
+
+Las asignaciones topológicas recorren los datos de OpenTelemetry jerárquicamente - `+resource → scope → metric/span → datapoint+`
+
+Cada nivel puede definir:
+
+* Una condición: una expresión booleana CEL.
+* Una acción: qué hacer si se cumple la condición.
+
+=== Campos disponibles por señal
+
+La señal seleccionada determina qué estructuras de datos y atributos están disponibles para la evaluación de expresiones.
+
+**TRACES**
+
+Proporciona acceso a:
+
+* resource.attributes
+* scope.name, scope.version, scope.attributes
+* span.name, span.kind, span.statusMessage, span.statusCode, span.attributes
+
+Ejemplos:
+
+[source]
+----
+resource.attributes['service.name'] == 'checkout'
+# OR
+span.kind == 'SPAN_KIND_SERVER' && span.attributes['http.method'] == 'POST'
+----
+
+**METRICA**
+
+Proporciona acceso a:
+
+* resource.attributes
+* scope.name, scope.version, scope.attributes
+* metric.name, metric.description, metric.unit
+* datapoint.attributes
+
+Ejemplos:
+
+[source]
+----
+metric.name == 'traces_service_graph_request_total'
+# OR
+datapoint.attributes['connection_type'] == 'database'
+----
+
+
+=== Condiciones y acciones
+
+**Condiciones**
+
+Las condiciones determinan si el procesamiento continúa en un nivel determinado. Si una condición se evalúa como falsa, se omite la asignación para ese elemento de telemetría.
+
+Por defecto:
+
+* Las condiciones son "true" por defecto. Esto permite omitir las condiciones explícitas en cada nivel para que actúen como un "fall-through".
+
+Restricciones:
+
+* Cuando hay varias señales de entrada declaradas (por ejemplo, `+TRACES+` y `+METRICS+`), sólo se puede acceder a los datos de una expresión desde el nivel de anclaje común, que en todos los casos son de nivel de ámbito.
+* No se permite el acceso a datos/campos desde un nivel inferior/infantil. Por ejemplo, no se puede acceder a los campos de nivel de ámbito en el nivel de recurso.
+* No se permite el acceso a datos/campos desde otra señal de entrada. Por ejemplo, no se puede acceder a los campos de nivel métrico desde el nivel span y viceversa.
+
+Las condiciones pueden acceder a los datos desde un nivel superior. Por ejemplo, a nivel de ámbito, se puede acceder a datos de ámbito y de recursos.
+
+[,yaml]
+----
+input:
+  signal:
+    - "TRACES"
+  resource:
+    condition: "${'service.name' in resource.attributes}"
+    # action omitted since the default is `+CONTINUE+`
+    scope:
+      action: "CREATE" # input block describes that it expects to filter until this level only
+      condition: "${scope.name.contains('http') && resource.attributes['service.name'] == 'cart-svc'}" # it's allowed to access resource-level fields at scope-level
+----
+
+**Acciones**
+
+Acciones admitidas:
+
+* CONTINUAR - continuar la evaluación al siguiente nivel.
+* CREAR - crea un componente o relación a este nivel.
+
+Por defecto:
+
+* Las acciones son por defecto "CONTINUAR".
+
+Esto significa que es necesario especificar una acción `+CREATE+` explícita en un nivel de entrada para que se aplique la asignación.
+
+He aquí algunos ejemplos más de declaraciones de entrada válidas:
+
+**TRACES**
+
+[,yaml]
+----
+input:
+  signal:
+    - "TRACES"
+  resource:
+    condition: "${'service.name' in resource.attributes}"
+    # action omitted since the default is `+CONTINUE+`
+    scope:
+      # action and condition have been omitted since the defaults are `+CONTINUE+` and `+true+` respectively
+      span:
+        action: "CREATE"
+        condition: "${span.attributes['http.method'] == 'POST'}"
+----
+
+**METRICA**
+
+[,yaml]
+----
+input:
+  signal:
+    - "METRICS"
+  resource:
+    # action and condition have been omitted since the defaults are `+CONTINUE+` and `+true+` respectively
+    scope:
+      condition: "scope.name == 'traces_service_graph'"
+      metric:
+        # action omitted since the default is `+CONTINUE+`
+        condition: "metric.name == 'traces_service_graph_request_total'"
+        datapoint:
+          action: "CREATE"
+          condition: |
+            'client' in datapoint.attributes &&
+            'server' in datapoint.attributes
+----
+
+== Variables (vars)
+
+Las correspondencias pueden definir variables para evitar repeticiones y mejorar la legibilidad.
+
+Variables:
+
+* Se evalúan mediante expresiones CEL.
+* Puede hacer referencia a cualquier campo que esté disponible en el nivel de entrada más profundo coincidente con los filtros de entrada. Por ejemplo, si la selección de entrada tiene la acción `+CREATE+` a nivel de span, se pueden utilizar los campos resource, scope y span.
+* Puede reutilizarse en todos los campos de salida.
+
+Ejemplo:
+
+[,yaml]
+----
+vars:
+- name: "service"
+  value: "${resource.attributes['service.name']}"
+----
+
+Las variables se resuelven antes de evaluar las expresiones de salida.
+
+== Salida
+
+La sección `+output+` define cómo las señales de OpenTelemetry (trazas/métricas) deben ser asignadas a componentes o relaciones.
+
+Campos de salida:
+
+* Utilice expresiones CEL para generar valores de forma dinámica.
+* Puede hacer referencia a cualquier campo que esté disponible en el nivel de entrada más profundo coincidente con los filtros de entrada. Por ejemplo, si la selección de entrada tiene la acción `+CREATE+` a nivel de span, se pueden utilizar los campos resource, scope y span.
+
+Si no es necesario generar dinámicamente el valor de un campo, puede establecerse un literal de cadena en el que el esquema especifique una expresión `+<cel-string>+` que debe declararse.
+
+=== Obligatorio vs. Obligatorio Subsecciones opcionales
+
+El esquema de asignación de componentes distingue entre dos comportamientos de gestión de errores:
+
+==== obligatorio (subapartado opcional)
+
+Si falla alguna de las expresiones requeridas, falla todo el mapeo.
+
+==== opcional (subsección opcional)
+
+Si falla cualquier expresión bajo opcional, el mapeo continúa pero sin el campo fallido.
+
+==== Asignación de etiquetas
+
+Las asignaciones de componentes pueden definir asignaciones de etiquetas para enriquecer los componentes con metadatos.
+
+Se admiten dos formas:
+
+**Asignación directa**
+
+[,yaml]
+----
+- source: "value"
+  target: "key"
+----
+Resultado: `+key:value+`
+
+[,yaml]
+----
+- source: "${resource.attributes['service.name']}"
+  target: "service.name"
+----
+Dada: `+resource.attributes { 'service.name': 'cart-svc' }+`
+
+Resultado: `+service.name:cart-svc+`
+
+La fuente de una asignación directa debe ser a:
+
+* cadena literal
+* expresión de cadena
+
+**Extracción basada en expresiones regulares**
+
+[,yaml]
+----
+- source: "${resource.attributes}"
+  pattern: "telemetry.sdk\.(.*)"
+  target: "telemetry.sdk.${1}"
+----
+Dada: `+resource.attributes: { 'telemetry.sdk.language': 'go', 'telemetry.sdk.version': '1.23.1' }+`
+
+Resultado: `+telemetry.sdk.language:go;telemetry.sdk.version:1.23.1+`
+
+Los mapeos basados en Regex admiten múltiples grupos de captura, que pueden referenciarse posicionalmente en la expresión de destino.
+
+La fuente de un mapeo basado en regex tiene que ser:
+
+* expresión cartográfica
+
+Ejemplo con varios grupos de captura:
+
+[,yaml]
+----
+- source: "${resource.attributes}"
+  pattern: "^(os|host|cloud|azure|gcp)\.(.*)"
+  target: "${1}.${2}"
+----
+
+En las correspondencias basadas en expresiones regulares, los grupos de captura se sustituyen en el destino.
+
+== Explicación de la expresión CEL (`+<cel-*>+`):
+
+* `+<cel-string>+` - debe devolver una cadena; puede ser una de las siguientes:
+** cadena literal (por ejemplo, "hola")
+** expresión de cadena, envuelta en `+${...}+` (por ejemplo, "${resource.attributes['service.name']}")
+** interpolación de cadenas (por ejemplo, "urn:opentelemetry:namespace/$\{resource.attributes['namespace']}:service/$\{resource.attributes['service.name']}") - nota: para la interpolación de cadenas, la expresión completa no se envuelve en `+$\{...}+`
+* `+cel-boolean+` - tiene que devolver un booleano; puede ser uno de:
+** literal booleano (por ejemplo, "true")
+** expresión booleana (por ejemplo, "'namespace' en resource.attributes") - nota: las expresiones booleanas no se envuelven en `+${...}+`
+* `+cel-map+` - necesita devolver un mapa; puede ser uno de:
+** map literal (por ejemplo, "${{'a': 1, 'b': 'dos'}}")
+** expresión map (por ejemplo, "${resource.attributes}")
+* `+cel-expression+` - devuelve "cualquier" tipo, puede ser uno de:
+** expresión de cadena
+** expresión booleana
+** expresión de mapa (por ejemplo, "${resource.attributes}" - devuelve el mapa de atributos)
+** expresión de lista (por ejemplo, "${resource.attributes['process.command_args']}" - devuelve una lista)
+
+=== Interpolación
+
+La interpolación de cadenas permite incrustar expresiones dentro de literales de cadena. Aunque no está soportada directamente por la especificación CEL, las configuraciones de mapeo OTel proporcionan una sintaxis de interpolación de la forma `+prefix-$\{expression1}/suffix-$\{expression2}+`, que se reescribe internamente como concatenación de cadenas utilizando el operador `+++` (por ejemplo, `+"prefix-" + expression1 + "/suffix-" + expression2+`).
+
+Comprender este comportamiento de reescritura es importante por dos razones:
+
+1. *No se admite la interpolación anidada*: Dado que las expresiones de cadena se delimitan con `+${...}+`, no se pueden anidar expresiones de interpolación. Sin embargo, puede escribir la concatenación directamente utilizando el operador `+++`. Por ejemplo:
++
+[source]
+----
+${
+  'service.instance.id' in resource.attributes ?
+    resource.attributes['service.name'] + " - " + resource.attributes['service.instance.id'] :
+    resource.attributes['service.name'] + " - instance"
+}
+----
+
+2. *Para los valores que no sean cadenas es necesario realizar una conversión de tipo*: CEL está fuertemente tipado y no convierte automáticamente los tipos durante la concatenación. Al interpolar valores de distintos tipos, debe convertir explícitamente los tipos que no sean cadenas en cadenas.
++
+Por ejemplo, si `+process.pid+` es un número entero (por ejemplo, `+1+`), esta expresión fallará:
++
+[source]
+----
+${resource.attributes['service.name']}/${resource.attributes['process.pid']}
+----
++
+La forma correcta requiere primero convertir el valor dinámico a un tipo concreto y, a continuación, convertirlo en una cadena:
++
+[source]
+----
+${resource.attributes['service.name']}/${string(int(resource.attributes['process.pid']))}
+----
++
+La doble colada (`+string(int(...))+`) es necesaria porque:
++
+* `+resource.attributes['process.pid']+` devuelve un tipo dinámico (`+dyn+`)
+* `+int()+` convierte el valor dinámico a un tipo entero concreto
+* `+string()+` convierte el número entero en una cadena para su concatenación
++
+Para otros tipos, utilice patrones similares: `+string(double(...))+` para flotantes, `+string(bool(...))+` para booleanos.
+
+=== Referencia lingüística CEL
+
+CEL es un lenguaje de expresión seguro y sin efectos secundarios diseñado para casos de uso de configuraciones y políticas. En el contexto de las asignaciones topológicas de OpenTelemetry, CEL se utiliza para:
+
+* Definir las condiciones que deciden si se aplica una asignación
+* Calcular variables a partir de atributos telemétricos
+* Creación dinámica de identificadores, nombres y etiquetas
+
+Las expresiones se evalúan con respecto a un contexto bien definido y tipificado derivado de la señal de OpenTelemetry que se está procesando (por ejemplo, recurso, ámbito, alcance, métrica o punto de datos).
+
+Visite https://github.com/google/cel-spec/blob/master/doc/langdef.md[CEL's langdef] para obtener una referencia completa.
+
+Un patio de recreo CEL en línea como https://playcel.undistro.io/ es una herramienta útil para realizar comprobaciones rápidas de la validez de las expresiones.
+
+== Patrones comunes y mejores prácticas
+
+* Proteja las asignaciones con condiciones para evitar cardinalidades no deseadas.
+* Tratar siempre a la defensiva los atributos que faltan
+* Mantener los identificadores estables y predecibles
+* Prefiera las variables para expresiones complejas y para favorecer la legibilidad
+* Utilizar valores expireAfter adecuados a la frecuencia de la señal
+
+Consulte la página de xref:/setup/custom-integrations/otelmappings/troubleshooting.adoc[solución de problemas] para obtener orientación sobre la solución de problemas de asignaciones OTel.
+
+endif::ss-ff-stackpacks2_enabled[]
