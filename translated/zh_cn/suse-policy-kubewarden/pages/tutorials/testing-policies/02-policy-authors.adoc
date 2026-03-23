@@ -1,0 +1,99 @@
+include::partial$variables.adoc[]
+= 对政策制定者进行测试
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解如何使用 kwctl 测试策略作者，可使用 bats 或标准测试，特别是 Wasm 中的{project-name} 策略。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["testing-policies", "policy-authors"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"策略测试"、"策略作者"、"rust"、"go"、"汇编脚本"、"开发环境"]
+:current-version: {page-origin-branch}
+
+{project-name} 策略是以 WebAssembly (Wasm) 形式编译的常规程序。
+与任何程序一样，良好的测试覆盖率非常重要。
+
+政策作者可以使用自己喜欢的开发环境。
+您可以使用熟悉的工具和测试框架来验证开发。
+
+这些{short-project-name} 政策是用xref:tutorials/writing-policies/rust/01-intro-rust.adoc[Rust]和xref:tutorials/writing-policies/go/01-intro-go.adoc[Go] 编写的示例：
+
+* https://github.com/kubewarden/psp-apparmor[psp装甲]
+* https://github.com/kubewarden/ingress-policy[入口策略]
+
+他们在开发环境中使用标准测试建立测试套件。
+
+这些政策使用 GitHub Actions 作为其 CI 管道。
+
+== 端对端测试
+
+您还可以编写针对包含策略的 Wasm 二进制文件执行的测试。
+要做到这一点，无需部署 Kubernetes 集群，您可以使用这些工具：
+
+* https://github.com/bats-core/bats-core[蝙蝠]：就是编写测试并自动执行。
+* https://github.com/kubewarden/kwctl[`+kwctl+`]：{short-project-name} 的默认 CLI 工具，可帮助您进行与策略相关的操作：拉取、检查、注释、推送和运行。
+
+要使用`+kwctl run+` ，您需要具备以下条件：
+
+. 要运行的策略的 Wasm 二进制文件引用。
+{short-project-name} 政策可从以下地址加载：
+ ** 本地文件系统 (`+file://+`)
+ ** HTTP 服务器 (`+https://+`
+ ** OCI 登记处 (`+registry://+`)。
+. 要测试的入场申请对象。
+您可以通过`+--request-path+` 参数或在`+stdin+` 上将`+--request-path+` 设为`+-+` 来提供。
+. 通过`+--settings-json+` 标志将运行时的策略设置作为内联 JSON 格式。
+或通过`+--settings-path+` 从文件系统加载的 JSON 或 YAML 文件。
+
+测试结束后`+kwctl+` ，将`+ValidationResponse+` 对象打印到标准输出。
+
+这就是如何使用`+kwctl+` 测试前面提到的 Wasm 二进制程序。https://github.com/kubewarden/ingress-policy[`+ingress-policy+`]的 Wasm 二进制文件：
+
+[subs="+attributes",console]
+----
+$ curl https://raw.githubusercontent.com/kubewarden/ingress-policy/v0.1.8/test_data/ingress-wildcard.json 2> /dev/null | \
+    kwctl run \
+        --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+        --request-path - \
+        registry://ghcr.io/kubewarden/policies/ingress:v0.1.8 | jq
+----
+
+您可以下载`+kwctl+`https://github.com/kubewarden/kwctl/releases[在这里] 的预编译二进制文件。
+
+您可以使用`+bats+` 编写一个测试，运行该命令并查找预期输出：
+
+.蝙蝠测试
+[%collapsible]
+======
+
+[,bash]
+----
+@test "all is good" {
+  run kwctl run \
+    --request-path test_data/ingress-wildcard.json \
+    --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+    ingress-policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation passed
+  [[ "$output" == *"valid: true"* ]]
+
+  # request accepted
+  [[ "$output" == *"allowed: true"* ]]
+}
+----
+
+======
+
+您可以将代码放在一个文件中，例如`+e2e.bats+` ，然后通过以下方式调用`+bats+` ：
+
+[subs="+attributes",console]
+----
+$ bats e2e.bats
+ ✓ all is good
+
+1 tests, 0 failures
+----
+
+xref:tutorials/writing-policies/go/05-e2e-tests.adoc[本节]文档介绍了更多有关编写策略端到端测试的内容。
