@@ -1,0 +1,82 @@
+= Comment ajouter des RPMs tiers au moment de l'installation ?
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Cet exemple couvre le cas où des RPMS supplémentaires (par exemple des pilotes de matériel spécifiques) sont inclus dans l'ISO et sont installés sur l'image du système d'exploitation au cours de l'installation.
+
+Pour ce cas d'utilisation, les fichiers suivants sont nécessaires :
+
+* RPMs supplémentaires à installer
+* fichier cloud-config supplémentaire définissant des crochets pour copier et installer les binaires en tant que crochets d'installation
+
+Nous pouvons tout gérer dans une seule section `+SeedImage.spec.cloud-config+` en supposant que le RPM supplémentaire est disponible pour le télécharger à partir d'un serveur distant au moment de l'installation.
+
+Considérons les données suivantes de configuration du nuage qui pourraient être utilisées comme contenu de la section `+cloud-config+` dans une xref:references/seedimage-reference.adoc#_seedimagespec_reference[ressource SeedImage].
+
+[,yaml]
+----
+name: "Install extra drivers"
+stages:
+  before-install:
+  # Preload data to the persistent storage
+  # During installation persistent partition is mounted at /run/elemental/persistent
+  - downloads:
+    - path: /tmp/some_package.rpm
+      url: "<REMOTE_PACKAGE_URL>"
+      permissions: 0777
+  - commands:
+    - mkdir -o /run/elemental/persistent/extra-pkgs
+    - cp -p /tmp/some_package.rpm /run/elemental/persistent/extra-pkgs
+
+  after-install-chroot:
+  # Install the package at install time
+  - commands:
+    - rpm -iv /run/elemental/extra-pkgs/some_package.rpm
+
+  # Include to the install system analog upgrade and reset hooks
+  - files:
+    - path: /oem/extra-pkg.yaml
+      permissions: 0664
+      content: |
+        name: "Install extra drivers"
+        stages:
+          after-upgrade-chroot:
+          # Install the package after upgrading to a new image
+          - commands:
+            - rpm -iv /run/elemental/extra-pkgs/some_package.rpm
+          after-reset-chroot:
+          # Install the package on reset
+          - commands:
+            - rpm -iv /run/elemental/extra-pkgs/some_package.rpm
+----
+
+Notez que les crochets d'installation ne couvrent que les procédures d'installation, de sorte que les données supplémentaires de configuration du nuage doivent également faire partie du système installé afin de continuer à installer le paquet dans le cadre des processus de mise à niveau ou de réinitialisation.
+
+== Reconditionnement d'une image ISO générée avec des fichiers supplémentaires
+
+Par ailleurs, si le téléchargement dynamique du contenu au moment de l'installation n'est pas souhaité et qu'une ISO comprenant déjà tous les binaires supplémentaires est l'objectif réel, cela est également possible mais nécessite de reconditionner manuellement l'ISO. En utilisant `+xorriso+`, l'utilitaire linux pour créer des ISO, le processus s'avère relativement facile.
+
+Créons un répertoire `+overlay+` pour créer l'arborescence qui doit être ajoutée à la racine ISO. Dans ce cas, le répertoire `+overlay+` pourrait contenir :
+
+[,yaml]
+----
+overlay/
+  data/
+    extra-pkgs/
+      some_package.rpm
+  iso-config/
+    install_hooks.yaml
+----
+
+Nous supposons que `+install_hooks.yaml+` est le contenu de la configuration cloud exposée dans la section précédente qui est incluse manuellement dans l'image au lieu d'être incorporée dans une ressource SeedImage. Le dossier `+data+` contient les binaires que nous voulons ajouter à l'ISO.
+
+En supposant que nous ayons déjà téléchargé une ISO Elemental liée à une MachineRegistration spécifique avec l'appel suivant `+xorriso+`, tout le contenu du dossier `+overlay+` serait inclus dans une nouvelle ISO :
+
+[,bash]
+----
+xorriso -indev elemental.x86_64.iso -outdev elemental.custom.x86_64.iso -map overlay / -boot_image any replay
+----
+
+Requiert `+xorriso+` égal ou supérieur à la version 1.5.
+
+Le contenu de `+install_hooks.yaml+` pourrait éventuellement être le même que celui de la section précédente, mais en omettant le téléchargement du paquet RPM et en adaptant le chemin RPM à `+/run/initramfs/live/data/extra-pkgs/some_package.rpm+`, car le dossier racine de l'ISO est monté à `+/run/initramfs/live+`.
