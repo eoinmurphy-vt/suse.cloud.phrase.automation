@@ -1,0 +1,33 @@
+include::partial$variables.adoc[]
+= Zertifikat Rotation
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Erfahren Sie, wie Sie Zertifikate in Ihrem {project-name} ohne Ausfallzeiten rotieren können.
+:doc-persona: ["kubewarden-operator"]
+:doc-topic: ["Erklärungen", "Zertifikate"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "certificate", "controller", "reconciliation"]
+:sidebar_label: Zertifikat Rotation
+:sidebar_position: 21
+
+{project-name} Mit v1.17.0 wurde die Abhängigkeit von cert-manager entfernt. Der Controller ist in der Lage, alle von allen Komponenten verwendeten Zertifikate zu verwalten. Jetzt verfügt der Controller über eine neue Abgleichsschleife, die sicherstellt, dass die Zertifikate immer auf dem neuesten Stand sind und die Webhook-Konfiguration korrekt ist.
+
+Die Helm Chart-Installation führt die erste Zertifikatserstellung durch. Es erzeugt die Root-CA mit einer Laufzeit von zehn Jahren bis zum Ablauf. Die Helm-Diagramm-Installation erzeugt auch das Webhook-Web-Server-Zertifikat des Controllers, das von der Root-CA signiert ist. Der API-Server kommuniziert auf diese Weise mit dem{short-project-name} Controller, um die CRDs zu validieren. Sie ist für ein Jahr gültig.
+
+Nach dem Start des Controllers werden die Zertifikate automatisch erneuert, wenn sie ablaufen. Es aktualisiert auch alle Zertifikate und Webhook-Konfigurationen, die vom gesamten {short-project-name} Stack verwendet werden.
+
+[NOTE]
+====
+Alle vom Helm-Diagramm und später vom Controller generierten Zertifikate verwenden ECDSA-P256-Schlüssel.
+====
+
+Die Abgleichsschleife erneuert Zertifikate 60 Tage vor Ablauf der Gültigkeit.
+Die Zertifikate rotieren ohne Ausfallzeiten. Die Abstimmungsschleife kümmert sich auch um die Erneuerung der Stamm-CA.
+
+Der Controller erstellt 60 Tage vor Ablauf der Gültigkeit eine neue Root-CA. Der Controller aktualisiert das von allen Webhooks verwendete CA-Bündel, um sowohl die neue als auch die alte Root-CA einzubeziehen.
+
+Der Wechsel der Stammzertifizierungsstelle veranlasst den Reconciler, die für die Webhooks ausgestellten Zertifikate neu zu erstellen. Die Verbreitung der neuen Zertifikate erfordert eine gewisse Zeitspanne. Während dieser Zeit kann der API-Server dank des aktualisierten CA-Bündels jedoch weiterhin mit allen Webhooks kommunizieren, ohne dass es zu Ausfallzeiten kommt.
+
+Wenn ein neues Zertifikat bereitsteht und das alte ungültig ist, aktualisiert der Controller das von den Webhooks verwendete CA-Bündel, so dass es nur noch die neueste Root-CA enthält.
+
+Wenn ein Zertifikat des Policy Servers oder des Webservers des Controllers erneuert wird, aktualisiert der Controller das Geheimnis mit dem neuen, von der Root CA signierten Zertifikat. Dank dieser Funktion zum Neuladen verwenden der Controller und der Policy Server das neue Zertifikat, ohne dass Prozesse neu gestartet werden müssen und somit keine Ausfallzeiten entstehen.
