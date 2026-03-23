@@ -1,0 +1,145 @@
+include::partial$variables.adoc[]
+= Kubernetesの機能
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} のコンテキストアウェアポリシーとクラスタリソースにアクセスするための waPC プロトコルを使用して、Kubernetes の機能を探ります。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "host-capabilities", "kubernetes-capabilities"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"policy specification"、"kubernetes capabilities"]。
+:sidebar_label: Kubernetesの機能
+:current-version: {page-origin-branch}
+
+{project-name} コンテキスト・アウェア・ポリシーは、それらが実行されているKubernetesクラスターからリソースにアクセスする必要がある。
+そのために、{short-project-name} SDKは、waPC通信プロトコルを使用してホストシステムと会話し、クラスタに関するデータを要求する関数を公開している。
+
+== waPCプロトコル契約
+
+内部的には、SDKはポリシーホスト環境によって公開されるこれらの関数に依存している：
+
+* `+list_resources_by_namespace+` :リソース・タイプと名前空間が与えられた場合、そのタイプで定義されているすべてのリソースをリストする。
+これは、`+Namespace+` のようにクラスタ全体のリソースをリストアップするために使用することはできません。
+* `+list_resources_all+`:リソースタイプが与えられたら、クラスタ全体で定義されているそのタイプのリソースをすべてリストアップします。
+これは、`+Namespace+` のようなクラスタ全体のリソースをリストアップするために使用できる。
+* `+get_resource+`:指定されたリソースタイプ、指定された名前、およびオプションの名前空間識別子で識別されるリソースを正確に検索します。
+
+このゲストホスト通信は、標準的なwaPCホスト呼び出しメカニズムを使用して実行されます。
+waPC相互通信メカニズムを実装しているゲストは、この情報をホストに要求することができます。
+
+waPCは、ゲストからホストへの呼び出しを実行する際、以下の関数引数を持ちます：
+
+* 装丁 `+kubewarden+`
+* 名前空間 `+kubernetes+`
+* 操作 -`+list_resources_all+`,`+list_resources_by_namespace+`, または `+get_resource+`
+* ペイロード - 入力ペイロード - 下記参照
+
+と返す：
+
+* ペイロード - 出力ペイロード - 下記参照
+
+契約上、あるいは慣習上、ポリシーは以下の方法でホストを呼び出すことで、Kubernetesクラスタ情報を取得できる：
+
+=== オペレーション `+list_resources_all+`
+
+==== インプット
+
+[,hcl]
+----
+# API Group version. Use `+v1+` for the `+core+` group and
+  # `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Resource kind
+  "kind": string,
+  # Label selector to filter the resources
+  "label_selector": string,
+  # Field selector to filter the resources
+  "field_selector": string,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+----
+
+==== 出力
+
+Kuberneteshttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#types-kinds[`+List+`]を返します。
+
+[IMPORTANT]
+====
+クラスタ全体のリソース（名前空間など）を取得するには、このAPI関数を使用します。
+====
+
+
+=== オペレーション `+list_resources_by_namespace+`
+
+==== インプット
+
+[,hcl]
+----
+{
+  # API Group version. Use `+v1+` for the `+core+` group and
+  # `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Resource kind
+  "kind": string,
+  # Namespace where the requested resource lives in
+  "namespace": string,
+  # Label selector to filter the resources
+  "label_selector": string,
+  # Field selector to filter the resources
+  "field_selector": string,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+}
+----
+
+==== 出力
+
+Kuberneteshttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#types-kinds[`+List+`]を返します。
+
+[CAUTION]
+====
+このAPI関数は、クラスタ全体のリソース（ネームスペースなど）を取得するために使用するとエラーを返します。
+クラスタ全体のリソースを扱う場合は、`+list_resources_all+` 。
+====
+
+
+=== オペレーション `+get_resource+`
+
+==== キャッシング
+
+`+get_resource+` 操作の結果は、パフォーマンスを向上させ、Kubernetes APIサーバーの不要な負荷を軽減するために、デフォルトで5秒間キャッシュされる。
+
+新鮮なデータが必要な場合は、`+disable_cache+` フィールドを使用してキャッシュをバイパスする。
+
+==== インプット
+
+[,hcl]
+----
+{
+  # API Group version. Use `+v1+` for the `+core+` group
+  # and `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Singular PascalCase name of the resource
+  "kind": string,
+  # Namespace scoping the search
+  "namespace": string,
+  # The name of the resource
+  "name": string,
+  # Disable caching of results obtained from Kubernetes API Server
+  "disable_cache": bool,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+}
+----
+
+==== 出力
+
+結果 `+GET /apis/$api_version/namespaces/$namespace/$kind/$name+`
