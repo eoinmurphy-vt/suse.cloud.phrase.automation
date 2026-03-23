@@ -1,0 +1,267 @@
+include::partial$variables.adoc[]
+= 生のポリシーを書く
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: カスタム検証および変異ロジックを定義することによって、任意のJSONドキュメントを評価する生ポリシーを記述する。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "raw-policies"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"raw policies"]。
+:sidebar_label: 生政策
+:current-version: {page-origin-branch}
+
+生ポリシーは、任意のJSONドキュメントを評価できるポリシーである。
+生政策の詳細については、xref:howtos/raw-policies.adoc[生政策の]ページを参照してください。
+
+== 例
+
+WASI実行モードの概要については、xref:tutorials/writing-policies/wasi/01-intro-wasi.adoc[WASI入門を]参照してください。
+
+[NOTE]
+====
+
+`+metadata.yml+` 設定の`+policyType+` フィールドを使用して、ポリシーを`+raw+` としてマークします。
+詳しくはxref:tutorials/writing-policies/metadata.adoc[メタデータの]仕様を参照されたい。
+====
+
+
+=== バリデーション
+
+例として、次のような形式のリクエストを受け付けるポリシーを書くことができます：
+
+[subs="+attributes",json]
+----
+{
+  "request": {
+    "user": "alice",
+    "action": "delete",
+    "resource": "products"
+  }
+}
+----
+
+と検証している：
+
+* `+user+` が有効なユーザーリストにある
+* `+action+` は有効なアクションのリストにある
+* `+resource+` は有効なリソースのリストにある
+
+https://github.com/kubewarden/go-wasi-policy-template[go WASI ポリシーテンプレートを]使用して、ポリシーの足場を作ることから始めます。
+
+最初に、リクエストのペイロードを表す型を定義する必要がある。
+
+`+kw_sdk.go+` が提供する`+ValidationRequest+` 型を使用するのではなく、`+Request+` と`+Settings+` を含むカスタム`+RawValidationRequest+` 型を宣言する必要があります：
+
+[,go]
+----
+// RawValidationRequest represents the request that is sent to the validate function by the Policy Server.
+type RawValidationRequest struct {
+    Request Request `+json:"request"+`
+    // Raw policies can have settings.
+    Settings Settings `+json:"settings"+`
+}
+
+// Request represents the payload of the request.
+type Request struct {
+    User     string `+json:"user"+`
+    Action   string `+json:"action"+`
+    Resource string `+json:"resource"+`
+}
+----
+
+次に、`+settings.go+` ファイルで`+Settings+` タイプと`+validateSettings+` 関数を定義する：
+
+[,go]
+----
+// Settings represents the settings of the policy.
+type Settings struct {
+    ValidUsers     []string `+json:"validUsers"+`
+    ValidActions   []string `+json:"validActions"+`
+    ValidResources []string `+json:"validResources"+`
+}
+
+func validateSettings(input []byte) []byte {
+    var response SettingsValidationResponse
+
+    settings := &Settings{}
+    if err := json.Unmarshal(input, &settings); err != nil {
+        response = RejectSettings(Message(fmt.Sprintf("cannot unmarshal settings: %v", err)))
+    } else {
+        response = validateCliSettings(settings)
+    }
+
+    responseBytes, err := json.Marshal(&response)
+    if err != nil {
+        log.Fatalf("can not marshal validation response: %v", err)
+    }
+    return responseBytes
+}
+
+func validateCliSettings(settings *Settings) SettingsValidationResponse {
+    if len(settings.ValidUsers) == 0 {
+        return RejectSettings(Message(
+            "At least one valid user must be specified"))
+    }
+
+    if len(settings.ValidActions) == 0 {
+        return RejectSettings(Message(
+            "At least one valid action must be specified"))
+    }
+
+    if len(settings.ValidResources) == 0 {
+        return RejectSettings(Message(
+            "At least one valid resource must be specified"))
+    }
+
+    return AcceptSettings()
+}
+----
+
+最後に、`+validate.go+` で検証ロジックを更新する：
+
+[,go]
+----
+func validate(input []byte) []byte {
+    var validationRequest RawValidationRequest
+    validationRequest.Settings = Settings{}
+    decoder := json.NewDecoder(strings.NewReader(string(input)))
+    decoder.DisallowUnknownFields()
+    err := decoder.Decode(&validationRequest)
+    if err != nil {
+        return marshalValidationResponseOrFail(
+            RejectRequest(
+                Message(fmt.Sprintf("Error deserializing validation request: %v", err)),
+                Code(400)))
+    }
+
+    return marshalValidationResponseOrFail(
+        validateRequest(validationRequest.Settings, validationRequest.Request))
+}
+
+func marshalValidationResponseOrFail(response ValidationResponse) []byte {
+    responseBytes, err := json.Marshal(&response)
+    if err != nil {
+        log.Fatalf("cannot marshal validation response: %v", err)
+    }
+    return responseBytes
+}
+
+func validateRequest(settings Settings, request Request) ValidationResponse {
+    if slices.Contains(settings.ValidUsers, request.User) &&
+        slices.Contains(settings.ValidActions, request.Action) &&
+        slices.Contains(settings.ValidResources, request.Resource) {
+        return AcceptRequest()
+    }
+
+    return RejectRequest(
+        Message("The request cannot be accepted."),
+        Code(403))
+}
+----
+
+=== 突然変異
+
+先の例を変更して、リクエストを拒否する代わりに変異させることができる。
+
+この場合、`+defaultUser+` 、`+defaultAction+` 、`+defaultRequest+` 、ユーザー、アクション、またはリソースが有効でない場合に、リクエストを変異させるために使用されます。
+
+新しいフィールドで`+Settings+` タイプを更新する必要があります：
+
+[,go]
+----
+// Settings represents the settings of the policy.
+type Settings struct {
+    ValidUsers []string `+json:"validUsers"+`
+    ValidActions []string `+json:"validActions"+`
+    ValidResources []string `+json:"validResources"+`
+    DefaultUser string `+json:"defaultUser"+`
+    DefaultAction string `+json:"defaultAction"+`
+    DefaultResource string `+json:"defaultResource"+`
+}
+
+func validateCliSettings(settings *Settings) SettingsValidationResponse {
+    if len(settings.ValidUsers) == 0 {
+        return RejectSettings(Message(
+            "At least one valid user must be specified"))
+    }
+
+    if len(settings.ValidActions) == 0 {
+        return RejectSettings(Message(
+            "At least one valid action must be specified"))
+    }
+
+    if len(settings.ValidResources) == 0 {
+        return RejectSettings(Message(
+            "At least one valid resource must be specified"))
+    }
+
+    if settings.DefaultUser == "" {
+        return RejectSettings(Message(
+            "Default user must be specified"))
+    }
+
+    if settings.DefaultAction == "" {
+        return RejectSettings(Message(
+            "Default action must be specified"))
+    }
+
+    if settings.DefaultResource == "" {
+        return RejectSettings(Message(
+            "Default resource must be specified"))
+    }
+
+    return AcceptSettings()
+}
+----
+
+また、`+ValidationResponse+` 構造体と`+kw_sdk.go+` の`+MutateRequest+` 関数を更新して、Kubernetes 固有の型を削除し、代わりに{short-project-name} 型を使用する必要があります：
+
+[,go]
+----
+// ValidationResponse defines the response given when validating a request
+type ValidationResponse struct {
+    Accepted bool `+json:"accepted"+`
+    // Optional - ignored if accepted
+    Message *string `+json:"message,omitempty"+`
+    // Optional - ignored if accepted
+    Code *uint16 `+json:"code,omitempty"+`
+    // Optional - used only by mutating policies
+    MutatedObject *Request `+json:"mutated_object,omitempty"+`
+}
+
+// MutateRequest accepts the request. The given `+mutatedObject+` is how
+// the evaluated object must look once accepted
+func MutateRequest(mutatedObject *Request) ValidationResponse {
+    return ValidationResponse{
+        Accepted:      true,
+        MutatedObject: mutatedObject,
+    }
+}
+----
+
+これで、`+validate+` 関数を更新して、リクエストが有効でない場合は変異させることができる：
+
+[,go]
+----
+func validateRequest(settings Settings, request Request) ValidationResponse {
+    if slices.Contains(settings.ValidUsers, request.User) &&
+        slices.Contains(settings.ValidActions, request.Action) &&
+        slices.Contains(settings.ValidResources, request.Resource) {
+        return AcceptRequest()
+    }
+
+    if !slices.Contains(settings.ValidUsers, request.User) {
+        request.User = settings.DefaultUser
+    }
+
+    if !slices.Contains(settings.ValidActions, request.Action) {
+        request.Action = settings.DefaultAction
+    }
+
+    if !slices.Contains(settings.ValidResources, request.Resource) {
+        request.Resource = settings.DefaultResource
+    }
+
+    return MutateRequest(&request)
+}
+----
