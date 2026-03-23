@@ -1,0 +1,177 @@
+= クラスタ参照
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+`+Cluster+` 定義には、`+kubernetesVersion+` と、クラスタをデプロイする`+machinePools+` のリストが含まれます。
+
+`+kubernetesVersion+` の選択方法については、xref:references/kubernetesversions.adoc[Kubernetes Versions]ページをご覧ください。
+
+`+machinePool+` は`+ObjectReference+` を持つコンフィギュレーションのバンドルであり、クラスタは適切な役割（etcd、control-plane、worker）を持つ`+machinePools+`にデプロイされ、数量（このプールからデプロイするノード数）といくつかの追加コンフィギュレーション（ローリング更新コンフィギュレーション、最大不健康ノードなど... ）が提供されます。
+
+.詳細はこちら
+[%collapsible]
+====
+例
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: ...
+  namespace: ...
+spec:
+  rkeConfig:
+    machinePools:
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+----
+====
+
+
+例えば、`+spec.rkeConfig.machineGlobalConfig+` の`+Cluster+` オブジェクトを使用してクラスタ・コンポーネントを無効にすることも可能です：
+
+.詳細はこちら
+[%collapsible]
+====
+.サービス無効化の例
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: ...
+  namespace: ...
+spec:
+  rkeConfig:
+    machinePools:
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+    machineGlobalConfig:
+      disable:
+        - servicelb
+        - ...
+----
+====
+
+
+== rkeConfig.machinePools
+
+`+machinePools+` のリスト。デプロイ先のクラスタには最低1つの`+machinePools+` 。
+
+== machinePools スペック参照
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| controlPlaneRole
+| ブール
+| 擬似
+| このプール内のマシンをコントロールプレーンとして設定する
+
+| etcdRole
+| ブール
+| 擬似
+| このプールのマシンを etcd に設定する
+
+| workerRole
+| ブール
+| 擬似
+| このプール内のマシンをワーカーとして設定する
+
+| 名称
+| ストリング
+| ゼロ
+| このプールの名前
+
+| 数量
+| イント
+| ゼロ
+| このプールからデプロイするマシンの数
+
+| unhealthyNodeTimeout
+| イント
+| ゼロ
+| 不健康なノードのヘルスチェックのタイムアウト
+
+| machineConfigRef
+| イント
+| ObjectReference
+| どのノードがこのプールの一部であるかを知るために使用されるオブジェクトへの参照。
+|===
+
+このプールを使用するには、最低でも`+quantity+` を1に設定する必要がある。
+基本的には、このプールからこのクラスタ用にセットアップされるノードの数を意味する。
+
+.詳細はこちら
+[%collapsible]
+====
+例
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: cluster-example
+  namespace: example-default
+spec:
+  rkeConfig:
+    machinePools:
+      - name: examplePool 
+        controlPlaneRole: true
+        etcdRole: true
+        workerRole: false
+        quantity: 3
+        unhealthyNodeTimeout: 0s
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: exampleSelector
+----
+====
+
+
+== machineConfigRef Spec リファレンス
+
+`+machineConfigRef+` は一般的なk8sの`+ObjectReference+` で、通常は`+kind+` `+name+` と`+apiVersion+` を含み、別のオブジェクトを指す。
+
+{elemental-product-name} では、これをxref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate] に設定している。
+これにより、セレクタを使って複数のオブジェクトを指すことができる。
+
+=== 例
+
+以下の例では、2つの異なる``+machinePool+を``使用して、`+MachineInventory+` ラベル（場所）に基づいてノードを選択する2つの異なる`+MachineInventorySelectorTemplate+` に基づいて、異なるノードをコントロールプレーンとワーカーノードに設定するクラスタを作成しています：
+
+[CAUTION]
+.警告
+====
+例のラベルは手動で設定されたラベルであり、{elemental-product-name} によって自動的に設定されるものではない。
+====
+
+.複数のマシンプールを持つクラスタの例
+[,yaml]
+----
+include::example$clusters/clusters-several-machinepools.yml[]
+----
