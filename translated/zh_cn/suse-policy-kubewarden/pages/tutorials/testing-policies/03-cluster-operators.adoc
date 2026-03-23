@@ -1,0 +1,319 @@
+include::partial$variables.adoc[]
+= 集群运算符测试
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用 kwctl 测试集群操作员策略，使用不同的配置和验证请求对象来验证策略设置。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["testing-policies", "cluster-operators"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "cluster operators", "testing"]
+:current-version: {page-origin-branch}
+
+作为 Kubernetes 群集操作员，您需要对{project-name} 政策进行测试。
+
+你会有这样的问题
+
+* 要获得所需的验证/突变结果，正确的策略设置是什么？
+* 我怎样才能确保当我..：
+ ** 将政策升级到更新的版本？
+ ** 添加/更改 Kubernetes 资源？
+ ** 更改策略的配置参数？
+ ** 等等？
+
+{short-project-name} 有一个实用工具、https://github.com/kubewarden/kwctl[`+kwctl+`]允许在 Kubernetes 外部测试策略。
+
+要使用`+kwctl+` ，需要输入以下信息来调用它：
+
+. 要运行的策略的 WebAssembly 二进制文件 URI。
+{short-project-name} 政策可从
+ ** 本地文件系统 `+file://+`
+ ** HTTP 服务器 `+https://+`
+ ** OCI 登记处`+registry://+` 。
+. 要测试的入场申请对象。
+你用`+--request-path+` 的论据给出了答案。
+将`+--request-path+` 设置为`+-+` ，即可使用`+stdin+` 。
+. 通过`+--settings-json+` 标志将运行时的策略设置作为内联 JSON 格式。
+或通过`+--settings-path+` 从文件系统加载的 JSON 或 YAML 文件。
+
+测试结束后`+kwctl+` ，将`+ValidationResponse+` 对象打印到标准输出。
+
+您可以下载`+kwctl+`https://github.com/kubewarden/kwctl/releases[在这里] 的预编译二进制文件。
+
+== 测试实例
+
+本节介绍如何使用不同配置和验证请求对象测试https://github.com/kubewarden/psp-apparmor[] psp-apparmor 策略。
+
+=== 创建`+AdmissionReview+` 申请
+
+您需要创建包含`+AdmissionReview+` 对象的文件来测试策略。
+
+您可以创建一个名为`+pod-req-no-specific-apparmor-profile.json+` 的文件，内容如下：
+
+.pod-req-no-specific-apparmor-profile.json
+[%collapsible]
+======
+
+[subs="+attributes",json]
+----
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "kind": {
+    "kind": "Pod",
+    "version": "v1"
+  },
+  "object": {
+    "metadata": {
+      "name": "no-apparmor"
+    },
+    "spec": {
+      "containers": [
+        {
+          "image": "nginx",
+          "name": "nginx"
+        }
+      ]
+    }
+  },
+  "operation": "CREATE",
+  "requestKind": {"version": "v1", "kind": "Pod"},
+  "userInfo": {
+    "username": "alice",
+    "uid": "alice-uid",
+    "groups": ["system:authenticated"]
+  }
+}
+----
+
+======
+
+该请求试图创建一个未指定使用任何 AppArmor 配置文件的 Pod。
+这是因为`+annotation+` 没有`+container.apparmor.security.beta.kubernetes.io/<container-name>+` 键。
+
+您可以创建一个名为`+pod-req-apparmor-unconfined.json+` 的文件，内容如下：
+
+.pod-req-apparmor-unconfined.json
+[%collapsible]
+======
+
+[subs="+attributes",json]
+----
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "kind": {
+    "kind": "Pod",
+    "version": "v1"
+  },
+  "object": {
+    "metadata": {
+      "name": "privileged-pod",
+      "annotations": {
+        "container.apparmor.security.beta.kubernetes.io/nginx": "unconfined"
+      }
+    },
+    "spec": {
+      "containers": [
+        {
+          "image": "nginx",
+          "name": "nginx"
+        }
+      ]
+    }
+  },
+  "operation": "CREATE",
+  "requestKind": {"version": "v1", "kind": "Pod"},
+  "userInfo": {
+    "username": "alice",
+    "uid": "alice-uid",
+    "groups": ["system:authenticated"]
+  }
+}
+----
+
+======
+
+该请求尝试创建一个 Pod，该 Pod 包含一个以`+unconfined+` AppArmor 配置文件运行的名为`+nginx+` 的容器。
+这仅用于教程目的。
+在`+unconfined+` 模式下运行是一种糟糕的安全做法。
+
+现在，您可以创建一个名为`+pod-req-apparmor-custom.json+` 的文件，内容如下：
+
+.pod-req-apparmor-custom.json
+[%collapsible]
+======
+
+[subs="+attributes",json]
+----
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "kind": {
+    "kind": "Pod",
+    "version": "v1"
+  },
+  "object": {
+    "metadata": {
+      "name": "privileged-pod",
+      "annotations": {
+        "container.apparmor.security.beta.kubernetes.io/nginx": "localhost/nginx-custom"
+      }
+    },
+    "spec": {
+      "containers": [
+        {
+          "image": "nginx",
+          "name": "nginx"
+        }
+      ]
+    }
+  },
+  "operation": "CREATE",
+  "requestKind": {"version": "v1", "kind": "Pod"},
+  "userInfo": {
+    "username": "alice",
+    "uid": "alice-uid",
+    "groups": ["system:authenticated"]
+  }
+}
+----
+
+======
+
+[NOTE]
+====
+这些都是简化的`+AdmissionReview+` 对象。
+只使用与我们的政策测试相关的字段。
+====
+
+
+=== 测试政策
+
+现在，您可以使用`+kwctl+` 测试创建未指定 AppArmor 配置文件的 Pod：
+
+[subs="+attributes",console]
+----
+$ kwctl run \
+    --request-path pod-req-no-specific-apparmor-profile.json \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4 \
+    | jq
+----
+
+策略接受请求并产生类似的输出：
+
+[subs="+attributes",console]
+----
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": true
+}
+----
+
+该策略拒绝创建带有`+unconfined+` AppArmor 配置文件的 Pod：
+
+[subs="+attributes",console]
+----
+$ kwctl run \
+    --request-path pod-req-apparmor-unconfined.json \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4 \
+    | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "These AppArmor profiles are not allowed: [\"unconfined\"]"
+  }
+}
+----
+
+你们两次运行政策时*都没有*提供任何设置。
+正如https://github.com/kubewarden/psp-apparmor#configuration[政策文件]所述，这样做的结果是阻止使用非默认配置文件。
+
+使用自定义`+nginx+` 配置文件的 Pod 也会被政策拒绝：
+
+[subs="+attributes",console]
+----
+$ kwctl run \
+    --request-path pod-req-apparmor-custom.json \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4 \
+    | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "These AppArmor profiles are not allowed: [\"localhost/nginx-custom\"]"
+  }
+}
+----
+
+您可以更改默认行为，允许使用选定的 AppArmor 配置文件：
+
+[subs="+attributes",console]
+----
+$ kwctl run \
+    --request-path pod-req-apparmor-custom.json \
+    --settings-json '{"allowed_profiles": ["runtime/default", "localhost/nginx-custom"]}' \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4 \
+    | jq
+----
+
+现在请求成功：
+
+[subs="+attributes",console]
+----
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": true
+}
+----
+
+== 自动化
+
+您可以使用https://github.com/bats-core/bats-core[] bats 自动执行所有这些步骤。
+
+您可以编写一系列测试，并将其执行集成到现有的 CI 和 CD 管道中。
+
+这些命令可以 "包装 "成`+bats+` 测试：
+
+.测试
+[%collapsible]
+======
+
+[,bash]
+----
+@test "all is good" {
+  run kwctl run \
+    --request-path pod-req-no-specific-apparmor-profile.json \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ $(expr "$output" : '.*"allowed":true.*') -ne 0 ]
+}
+
+@test "reject" {
+  run kwctl run \
+    --request-path pod-req-apparmor-custom.json \
+    registry://ghcr.io/kubewarden/policies/psp-apparmor:v0.1.4
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request rejected
+  [ $(expr "$output" : '.*"allowed":false.*') -ne 0 ]
+}
+----
+
+======
+
+如果`+bats+` 代码位于文件`+e2e.bats+` 中，则可以按如下方式运行测试：
+
+[subs="+attributes",console]
+----
+$ bats e2e.bats
+ ✓ all is good
+ ✓ reject
+
+2 tests, 0 failures
+----
+
+xref:tutorials/writing-policies/go/05-e2e-tests.adoc[本节]将详细介绍如何为策略编写端到端测试。
