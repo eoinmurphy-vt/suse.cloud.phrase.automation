@@ -1,0 +1,188 @@
+include::partial$variables.adoc[]
+
+= Konfigurieren von PolicyServern zur Verwendung einer privaten Sigstore-Instanz
+:description: Konfigurieren von PolicyServern zur Verwendung einer privaten oder selbst gehosteten Sigstore-Instanz für die Überprüfung von Richtliniensignaturen in {project-name}.
+:keywords: ["kubewarden", "kubernetes", "policyservers", "sigstore", "private sigstore", "policy signing"]
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-type: ["howto"]
+:doc-topic: ["operator-manual", "policy-servers", "private-sigstore"]
+:sidebar_label: Verwendung einer privaten Sigstore-Instanz
+:sidebar_position: 5
+
+Sie können einen PolicyServer so konfigurieren, dass er anstelle der standardmäßigen öffentlichen Sigstore-Infrastruktur eine private oder selbst gehostete Sigstore-Instanz für die Überprüfung von Richtliniensignaturen verwendet. Dies ist nützlich in Umgebungen mit Luftschleusen oder wenn Sie Ihren eigenen Sigstore-Einsatz betreiben.
+
+== Voraussetzungen
+
+* Eine laufende private Sigstore-Instanz mit Zugriff auf Fulcio-, Rekor-, TSA- und CT-Log-Dienste
+* `+kubectl+` Zugriff auf den Namensraum `+kubewarden+` 
+* Die https://docs.sigstore.dev/cosign/system_config/installation/[`+cosign+`]lokal installierte CLI.
+* https://jqlang.org/[`+jq+`] lokal installiert
+
+== Schritt 1 - Generieren Sie die `+ClientTrustConfig+` JSON
+
+Der PolicyServer erwartet ein `+ClientTrustConfig+` JSON, das die Vertrauensanker und die Signierkonfiguration Ihrer privaten Sigstore-Instanz beschreibt.
+
+=== Beschaffung von Zertifikaten und öffentlichen Schlüsseln
+
+Rufen Sie die folgenden Informationen von Ihrer privaten Sigstore-Instanz ab:
+
+* `+fulcio.pem+` - Fulcio CA-Zertifikatskette (PEM)
+* `+rekor.pub+` - Öffentlicher Schlüssel des Rekor-Transparenzprotokolls
+* `+tsa.pem+` - Zeitstempel Authority-Zertifikatskette (PEM)
+* `+ctfe.pub+` - CT-Log öffentlicher Schlüssel
+
+[source,shell]
+----
+# Fulcio CA certificate chain
+curl --fail -o fulcio.pem "${FULCIO_URL}/api/v1/rootCert"
+
+# Rekor transparency log public key
+curl --fail -o rekor.pub "${REKOR_URL}/api/v1/log/publicKey"
+
+# Timestamp Authority certificate chain
+curl --fail -o tsa.pem "${TSA_URL}/api/v1/timestamp/certchain"
+
+# CT log public key (from the Kubernetes secret in tuf-system namespace)
+kubectl get secret -o json -n tuf-system ctlog-public-key \
+  | jq -r ".data.public" | base64 -d > ctfe.pub
+----
+
+[WARNING]
+.Berücksichtigung der Sicherheit
+====
+
+Stellen Sie sicher, dass Sie die Zertifikate und Schlüssel sicher von Ihrer Sigstore-Instanz herunterladen. Andernfalls kann es passieren, dass Sie {project-name}mit kompromittierten Daten konfigurieren.
+
+Die obigen Befehle sind Beispiele dafür, wie man dies in einer Testumgebung tun kann.
+Wenden Sie sich an das zuständige Team in Ihrem Unternehmen, um zu erfahren, wie Sie diese Informationen ordnungsgemäß erhalten können.
+
+====
+
+=== Erzeugen Sie die vertrauenswürdige Root- und Signierkonfiguration
+
+Setzen Sie Umgebungsvariablen, die auf Ihre privaten Sigstore-Service-URLs verweisen:
+
+[source,shell]
+----
+export FULCIO_URL=https://fulcio.example.com
+export REKOR_URL=https://rekor.example.com
+export TSA_URL=https://tsa.example.com
+export CTLOG_URL=https://ctlog.example.com
+export ISSUER_URL=https://oidc.example.com
+----
+
+Führen Sie `+cosign+` aus, um die vertrauenswürdige Wurzel zu erzeugen:
+
+[source,shell]
+----
+cosign trusted-root create \
+  --fulcio="url=$FULCIO_URL,certificate-chain=fulcio.pem" \
+  --rekor="url=$REKOR_URL,public-key=rekor.pub,start-time=2024-01-01T00:00:00Z" \
+  --tsa="url=$TSA_URL,certificate-chain=tsa.pem" \
+  --ctfe="url=$CTLOG_URL,public-key=ctfe.pub,start-time=2024-01-01T00:00:00Z" \
+  --out trusted_root.json
+----
+
+Führen Sie `+cosign+` aus, um die Signierungskonfiguration zu erstellen:
+
+[source,shell]
+----
+cosign signing-config create \
+  --fulcio="url=$FULCIO_URL,api-version=1,start-time=2024-01-01T00:00:00Z,operator=sigstore.dev" \
+  --rekor="url=$REKOR_URL,api-version=1,start-time=2024-01-01T00:00:00Z,operator=sigstore.dev" \
+  --rekor-config="ANY" \
+  --oidc-provider="url=$ISSUER_URL/auth,api-version=1,start-time=2024-01-01T00:00:00Z,operator=sigstore.dev" \
+  --tsa="url=$TSA_URL/api/v1/timestamp,api-version=1,start-time=2024-01-01T00:00:00Z,operator=sigstore.dev" \
+  --tsa-config="EXACT:1" \
+  --out signing_config.json
+----
+
+[NOTE]
+====
+`+--oidc-provider+` ist fakultativ. Fügen Sie ihn nur ein, wenn Ihre private Sigstore-Instanz einen eigenen OIDC-Anbieter hat. Wenn Ihre Richtlinien mit Kubernetes-Service-Kontotoken signiert werden (über `+kubectl create token+`), lassen Sie dieses Flag weg.
+
+Der Wert `+start-time+` sollte auf ein Datum vor der Ausstellung Ihrer Zertifikate (oder das Bereitstellungsdatum Ihrer Sigstore-Instanz) gesetzt werden.
+====
+
+Eine vollständige Beschreibung aller verfügbaren Flags und JSON-Felddefinitionen für beide Befehle finden Sie in derhttps://docs.sigstore.dev/cosign/system_config/installation/[cosign CLI-Referenz]und in derhttps://github.com/sigstore/protobuf-specs[Sigstore client trust config specification].
+
+=== Kombinieren Sie in `+trust_config.json+`
+
+[source,shell]
+----
+cat << EOF > trust_config.json
+{
+  "mediaType": "application/vnd.dev.sigstore.clienttrustconfig.v0.1+json",
+  "trustedRoot": $(cat trusted_root.json),
+  "signingConfig": $(cat signing_config.json)
+}
+EOF
+----
+
+== Schritt 2 - Erstellen einer ConfigMap im Namespace `+kubewarden+` 
+
+Speichern Sie die `+ClientTrustConfig+` JSON in einer ConfigMap mit dem Schlüssel`+sigstore-trust-config+`. Die ConfigMap **muss** im Namensraum des Zulassungssteuerers liegen. In diesem Beispiel ist `+kubewarden+`:
+
+[source,shell]
+----
+kubectl --namespace kubewarden create configmap my-sigstore-trust-config \
+  --from-file=sigstore-trust-config=trust_config.json
+----
+
+== Schritt 3 - Erstellen einer Verifizierungskonfiguration ConfigMap
+
+Erstellen Sie eine Datei `+verification_config.yaml+`, in der die Zertifikatsidentitätseinschränkungen für Ihre signierten Richtlinien angegeben sind. Zum Beispiel bei der Verwendung eines Kubernetes-Dienstkonto-Tokens:
+
+[source,yaml]
+----
+allOf:
+  - kind: genericIssuer
+    issuer: https://kubernetes.default.svc.cluster.local
+    subject:
+      equal: https://kubernetes.io/namespaces/<namespace>/serviceaccounts/<serviceaccount>
+anyOf: null
+----
+
+Ersetzen Sie `+<namespace>+` und `+<serviceaccount>+` durch den Namespace und das Dienstkonto, die beim Signieren der Richtlinie verwendet wurden.
+
+Erstellen Sie die ConfigMap:
+
+[source,shell]
+----
+kubectl --namespace kubewarden create configmap my-verification-config \
+  --from-file=verification-config=verification_config.yaml
+----
+
+[NOTE]
+====
+Der ConfigMap-Schlüssel **muss** `+verification-config+` sein (nicht der Dateiname).{short-project-name} sucht nach genau diesem Schlüssel.
+====
+
+== Schritt 4 - Konfigurieren Sie den PolicyServer
+
+Setzen Sie `+spec.sigstoreTrustConfig+` und `+spec.verificationConfig+` auf Ihrem PolicyServer auf die Namen der von Ihnen erstellten ConfigMaps:
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: default
+spec:
+  image: ghcr.io/kubewarden/policy-server:latest
+  replicas: 1
+  sigstoreTrustConfig: my-sigstore-trust-config
+  verificationConfig: my-verification-config
+----
+
+Der Controller bindet die ConfigMaps in den Policy-Server-Pod ein und konfiguriert ihn so, dass er Ihre private Sigstore-Instanz für die Signaturprüfung verwendet und die in der Verifizierungskonfiguration angegebenen Identitätsbeschränkungen durchsetzt.
+
+[WARNING]
+.Berücksichtigung der Sicherheit
+====
+
+Jeder Benutzer mit Schreibzugriff auf die ConfigMap, die von `+sigstoreTrustConfig+`referenziert wird, kann die Überprüfung der Richtliniensignatur beeinflussen. Dies könnte es ihnen ermöglichen, eine andere Sigstore-Vertrauenswurzel zu ersetzen und die Signaturprüfung zu umgehen.
+
+Schränken Sie den Zugriff auf diese ConfigMap mit Kubernetes RBAC nach dem Prinzip der geringsten Berechtigung ein.
+
+====
