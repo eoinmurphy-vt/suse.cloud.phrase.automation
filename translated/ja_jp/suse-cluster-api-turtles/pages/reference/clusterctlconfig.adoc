@@ -1,0 +1,91 @@
+= ClusterctlConfig
+:revdate: 2025-11-14
+:page-revdate: {revdate}
+
+`+ClusterctlConfig+` リソースは、宣言的な方法で clusterctl (CAPI Operator) 設定のオーバーライドを管理することができます。clusterctlプロバイダとそのURL、およびバージョン制限を設定するために使用します。
+
+`+ClusterctlConfig+` スペック・フィールドは宣言的なユーザー入力である。Turtlesはリソースの作成や更新を行いませんので、プロバイダURLのオーバーライドを指定し、その状態を維持するのはユーザー次第です。埋め込みデフォルトや`+clusterctl+` プロバイダー定義のデフォルトセットよりも優先される。
+
+https://github.com/rancher/turtles/blob/main/docs/adr/0012-clusterctl-provider.md[ADR]
+
+== 使用方法
+
+`+ClusterctlConfig+` ：
+
+. `+turtles+` 名前空間に`+clusterctl-config+` という名前で`+ClusterctlConfig+` リソースを作成する。
+. `+ClusterctlConfig+` コントローラは、`+cluster-api-operator+` にマウントされた`+ConfigMap+` のアップデートを、`+ClusterctlConfig+` の仕様に基づき、必要な clusterctl 構成で処理する。
+. 生成されたプロバイダー・コンフィギュレーションに変更を適用するために、`+ClusterctlConfig+` オブジェクトを宣言的に管理します。`+ConfigMap+` の状態に基づき、`+kubelet+` がマウントポイントの更新を行うため、変更が反映されるまでに時間がかかる場合がある。
+
+以下は`+ClusterctlConfig+` マニフェストの例である：
+
+[,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: ClusterctlConfig
+metadata:
+  name: clusterctl-config
+  namespace: cattle-turtles-system
+spec:
+  providers:
+  - name: metal3
+    url: https://github.com/metal3-io/cluster-api-provider-metal3/releases/v1.10.1/infrastructure-components.yaml
+    type: InfrastructureProvider
+  images:
+  - name: metal3
+    repository: "my.registry.mirror"
+    tag: customTag
+----
+
+この例では、指定されたURLとタイプを持つ`+metal3+` プロバイダ用のclusterctl設定を生成します。
+
+== 仕様
+
+`+ClusterctlConfig+` 、主要なフィールドは以下の通りである：
+
+* `+providers[].name+` - プロバイダー名（例：metal3）
+* `+providers[].url+` - プロバイダー設定のURL（例えば
+https://github.com/metal3-io/cluster-api-provider-metal3/releases/v1.10.1/infrastructure-components.yaml). サポートされていれば、`+latest+` リリースを使用することもできるし、例えば最大バージョンを`+v1.10.1+` に固定することもできる。
+* `+providers[].type+` - プロバイダーのタイプ（例：InfrastructureProvider）
+
+* `+images[].name+` - 上書きするイメージ名（例：infrastructure-metal3、cluster-api、bootstrap-rke2、control-plane-rke2）。
+* `+images[].repository+` - からイメージを取得するコンテナレジストリのオーバーライドを設定します。
+* `+images[].tag+` - 画像のタグを指定できる
+
+== 認定プロバイダーのバージョンを上書きする
+
+{product_name} は、すべての認証済みプロバイダー・バージョンが固定された、検証済みのコンフィギュレーションを埋め込みます。 +
+通常、バージョンは{product_name} のリリースのたびに更新される。
+
+[WARNING]
+====
+- {product_name} は、認証されたプロバイダの組み込み構成のみを検証します。エンベデッド・コンフィギュレーションのカスタマイズは、最終的に非互換性やサポートされないシナリオにつながる可能性がある。
+====
+
+プロバイダのバージョンを上書きしたり、別のレジストリを使用して画像を取り出したりするには、`+ClusterctlConfig+` を定義します。 +
+イメージオーバーライドの詳細については、アップストリームのlink:https://cluster-api.sigs.k8s.io/clusterctl/configuration#image-overrides[ドキュメントを]参照してください。
+
+[source,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: ClusterctlConfig
+metadata:
+  name: clusterctl-config
+  namespace: cattle-turtles-system
+spec:
+  providers:
+  - name: rke2
+    url: "https://github.com/rancher/cluster-api-provider-rke2/releases/v0.20.1/control-plane-components.yaml"
+    type: ControlPlaneProvider
+  - name: rke2
+    url: "https://github.com/rancher/cluster-api-provider-rke2/releases/v0.20.1/bootstrap-components.yaml"
+    type: BootstrapProvider
+  images:
+  - name: control-plane-rke2
+    repository: "ghcr.io/rancher"
+  - name: bootstrap-rke2
+    repository: "ghcr.io/rancher"
+----
+
+== 削除
+
+`+ClusterctlConfig+` リソースが削除されると、コンフィグマップは元の状態に戻り、カメによって管理される。
