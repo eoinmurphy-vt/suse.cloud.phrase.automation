@@ -1,0 +1,214 @@
+= ストレージの設定
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+== ストレージのデフォルト
+
+SUSE Observabilityは、デフォルトでPVC（永続ボリューム請求）に特定のストレージクラスを指定していないため、EKSやAKSのようなクラウドプロバイダーにとっては、デフォルトのストレージクラスが使用されることになります。
+
+これらのストレージ・クラスのデフォルトは通常、PVCが削除されたときにPV（永続ボリューム）を削除するようになっている。しかし、スタックステート・リリースを削除するために`+helm delete+` を実行しても、PVC はネームスペース内に存在し続け、同じネームスペースで同じリリース名で`+helm install+` が実行された場合に再利用される。
+
+PVCを削除するには、`+kubectl delete pvc+` を使用して手動で削除するか、ネームスペース全体を削除します。
+
+[NOTE]
+====
+SUSE Observabilityでは、基礎となるストレージがフラッシュメモリ(SSD)または同等の性能である必要があります。
+====
+[NOTE]
+====
+本番環境では、データが破損する可能性があるため、SUSE ObservabilityのストレージプロビジョニングにはNFSを推奨およびサポートしません。
+====
+[NOTE]
+====
+疑問がある場合は、xref:/setup/install-stackstate/support-package-performance.adoc[パフォーマンス・スクリプトを]実行し、xref:/setup/install-stackstate/support-package-performance.adoc#_reference_performance[基準パフォーマンスと]比較することが可能である。
+====
+
+== ストレージのカスタマイズ
+
+Helmチャートでは、異なるボリュームに対して`+storageClass+` と`+size+` の設定をカスタマイズできます。これらの値ファイルの例は、ストレージ・クラスまたはボリューム・サイズの変更方法を示しています。これらを統合することで、両方を同時に変更することができる。
+`+size+` については、インストレーションプロセスで選択されたサイジングプロファイルに応じて、`+HA+` と`+NonHa+` の両方のサンプルを提供します。
+
+[tabs]
+====
+ストレージクラスの変更::
++
+--
+
+[,yaml]
+----
+global:
+  # The storage class for all of the persistent volumes
+  storageClass: "standard"
+----
+
+--
+
+HAのボリュームサイズの変更::
++
+--
+
+[,yaml]
+----
+clickhouse:
+  persistence:
+    # Size of persistent volume for each clickhouse pod
+    size: 50Gi
+elasticsearch:
+  volumeClaimTemplate:
+    resources:
+      requests:
+        # size of volume for each Elasticsearch pod
+        storage: 250Gi
+
+hbase:
+  hdfs:
+    datanode:
+      persistence:
+        # size of volume for HDFS data nodes
+        size: 250Gi
+
+    namenode:
+      persistence:
+        # size of volume for HDFS name nodes
+        size: 20Gi
+
+
+kafka:
+  persistence:
+    # size of persistent volume for each Kafka pod
+    size: 100Gi
+
+
+zookeeper:
+  persistence:
+    # size of persistent volume for each Zookeeper pod
+    size: 8Gi
+
+victoria-metrics-0:
+  server:
+    persistentVolume:
+      size: 250Gi
+victoria-metrics-1:
+  server:
+    persistentVolume:
+      size: 250Gi
+
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 2Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    state:
+      tmpToPVC:
+        volumeSize: 2Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    vmagent:
+      persistence:
+        size: 10Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 600Mi
+  stackpacks:
+    pvc:
+      size: 1Gi
+
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 1Gi
+minio:
+  persistence:
+    size: 500Gi
+----
+
+--
+体積サイズの変更 非ハ::
++
+--
+
+[,yaml]
+----
+clickhouse:
+  persistence:
+    # Size of persistent volume for each clickhouse pod
+    size: 50Gi
+
+elasticsearch:
+  volumeClaimTemplate:
+    resources:
+      requests:
+        # size of volume for each Elasticsearch pod
+        storage: 250Gi
+
+hbase:
+  stackgraph:
+    persistence:
+      # Size of persistent volume for the single stackgraph hbase pod
+      size: 100Gi
+
+kafka:
+  persistence:
+    # size of persistent volume for each Kafka pod
+    size: 100Gi
+
+
+zookeeper:
+  persistence:
+    # size of persistent volume for each Zookeeper pod
+    size: 8Gi
+
+victoria-metrics-0:
+  server:
+    persistentVolume:
+      size: 50Gi
+
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 2Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    state:
+      tmpToPVC:
+        volumeSize: 2Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    vmagent:
+      persistence:
+        size: 10Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 600Mi
+  stackpacks:
+    localpvc:
+      size: 1Gi
+    pvc:
+      size: 1Gi
+
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 1Gi
+minio:
+  persistence:
+    size: 500Gi
+----
+
+--
+====
+
+[NOTE]
+====
+NonHaの例は、100ノードを観測し、2週間データを保持する最大のNonHaインスタンスに属する。
+====
