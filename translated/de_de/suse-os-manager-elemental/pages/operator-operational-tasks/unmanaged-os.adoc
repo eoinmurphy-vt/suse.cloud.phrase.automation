@@ -1,0 +1,40 @@
+= Registrieren eines nicht verwalteten Betriebssystems
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Normalerweise verwaltet die {elemental_operator_url}[{elemental_operator_name}] Betriebssysteme, die von der {elemental_toolkit_url}[{elemental_toolkit_name}] installiert und konfiguriert werden. +
+Um zum Beispiel die Installation, das Upgrade und das Zurücksetzen des Betriebssystems zu automatisieren, stützt sich `+elemental-register+` auf die `+elemental+` CLI, um diese Vorgänge auszuführen.
+
+Es ist jedoch auch möglich, {elemental-product-name} "Toolkitless"-Systeme zu registrieren und bereitzustellen.
+
+In diesem Szenario muss xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_register_command_line_tool[elemental-register] auf dem System installiert werden. +
+Optional kann auch der xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agent] installiert werden. Beachten Sie, dass {elemental_operator_name} ohne die `+elemental-system-agent+` keinen k8s-Cluster auf dem Rechner bereitstellen kann. In diesem Fall kann die Website {elemental_operator_name} nur für die Bestandsaufnahme des Betriebssystems verwendet werden.
+
+Schließlich muss auf dem Management-Cluster die `+MachineRegistration+` das Flag `+spec.config.elemental.registration.no-toolkit+` aktivieren.
+
+Sobald `+no-toolkit+` auf `+MachineRegistration+` aktiviert ist und eine neue Registrierung über `+elemental-register --install+` auf dem System erfolgt, wird ein neuer `+MachineInventory+` auf dem Management-Cluster erstellt:
+
+[,bash]
+----
+kubectl -n fleet-default describe machineinventory my-unmanaged-os-machine
+----
+
+Die Website `+MachineInventory+` wird mit dem Vermerk `+elemental.cattle.io/os.unmanaged: "true"+` versehen, der darauf hinweist, dass dieses Gerät nicht verwaltet wird und nur über eingeschränkte Funktionen verfügt.
+
+Auf dem System werden nach erfolgreicher Registrierung automatisch die Dateien `+/etc/rancher/elemental/agent/config.yaml+` und `+/var/lib/elemental/agent/elemental_connection.json+` zur Konfiguration von `+elemental-system-agent+` erstellt.
+Die Komponente `+elemental-system-agent+` wird für die Bereitstellung von K8s und die Auslöser für Reset benötigt.
+
+Wenn ein xref:node-operational-tasks/reset.adoc[Maschinen-Reset] ausgelöst wird, z. B. durch direktes Löschen der `+MachineInventory+`, führt die `+elemental-system-agent+` einen einfachen Reset-Plan aus, der die `+/var/lib/elemental/.unmanaged_reset+` Sentinel-Datei erstellt. +
+Das Vorhandensein dieser Datei zeigt an, dass das Gerät zurückgesetzt werden muss. Dies kann das Beenden von Diensten, die Deinstallation von Paketen, das Formatieren von Geräten usw. beinhalten, je nachdem, wie der Rechner individuell verwaltet wird.
+
+== Unterstützte Funktionen
+
+* Registrierung eines `+MachineInventory+`
+* K8s-Bereitstellung (wenn der xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agent] auf dem Rechner installiert ist und läuft)
+* Rücksetzungsauslöser (wenn der xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agent] auf dem Rechner installiert ist und läuft)
+
+== Nicht unterstützte Funktionen
+
+* Cloud-init-gesteuerte xref:references/cloud-config-reference.adoc[Konfiguration]
+* xref:node-operational-tasks/upgrade.adoc[OS-Upgrades]
+* xref:node-operational-tasks/reset.adoc[OS-Reset]
