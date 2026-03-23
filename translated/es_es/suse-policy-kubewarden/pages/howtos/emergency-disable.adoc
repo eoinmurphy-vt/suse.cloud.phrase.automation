@@ -1,0 +1,65 @@
+include::partial$variables.adoc[]
+= Desactivar emergencia
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:sidebar_label: Desactivar emergencia
+:sidebar_position: 31
+:title: Desactivar emergencia
+:description: Aprenda a desactivar el {project-name} en situaciones de emergencia, deteniendo y borrando las configuraciones relacionadas, y luego restaurar.
+:keywords: ["{project-name}", kubewarden, ClusterAdmissionPolicies, AdmissionPolicies, configuration]
+:doc-persona: kubewarden-operator
+:doc-type: cómo
+:doc-topic: manual del operador
+
+En caso de emergencia, los equipos de operaciones pueden necesitar realizar acciones que {project-name} bloquearía.
+
+En este documento se explica cómo desactivar {short-project-name} para que los equipos de operaciones puedan hacer frente a los fallos del clúster. Una vez resuelta la situación, los equipos de operaciones pueden reiniciar {short-project-name}.
+
+== Desactivar {short-project-name}
+
+En primer lugar, detenga el controlador {short-project-name}. Para ello, se reduce su Despliegue a cero:
+
+[source,console]
+----
+kubectl scale deployment kubewarden-controller \
+  --replicas=0 \
+  -n kubewarden
+----
+
+[tip]
+====
+Asegúrese de utilizar el nombre del espacio de nombres en el que está desplegada la pila {short-project-name}.
+Aquí, la pila se despliega en el espacio de nombres `+kubewarden+`.
+====
+
+A continuación, elimine todos los `+ValidatingWebhookConfigurations+` y `+MutatingWebhookConfigurations+`creados por {short-project-name}:
+
+[source,console]
+----
+# Delete all the ValidatingWebhookConfiguration created by {short-project-name}
+kubectl delete validatingwebhookconfigurations \
+  -l app.kubernetes.io/part-of=kubewarden
+
+# Delete all the MutatingWebhookConfiguration created by {short-project-name}
+kubectl delete mutatingwebhookconfigurations \
+  -l app.kubernetes.io/part-of=kubewarden
+----
+
+== Restaurar {short-project-name}
+
+Cuando termine la emergencia, restaure la pila {short-project-name} trayendo de vuelta el controlador {short-project-name}:
+
+[source,console]
+----
+kubectl scale deployment kubewarden-controller \
+  --replicas=1 \
+  -n kubewarden
+----
+
+[tip]
+====
+- Asegúrese de utilizar el nombre del espacio de nombres en el que está desplegada la pila {short-project-name}.
+  Aquí, la pila se despliega en el espacio de nombres `+kubewarden+`.
+- Asegúrese de volver a escalar el regulador a su valor original. Este ejemplo asume que sólo hay una réplica del controlador en ejecución.
+====
+Una vez que el controlador está en marcha, reconcilia las políticas desplegadas. Los recursos `+ValidatingWebhookConfiguration+` y `+MutatingWebhookConfiguration+`, previamente eliminados, se vuelven a crear, aplicando así las políticas.
