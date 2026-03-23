@@ -1,59 +1,58 @@
 include::partial$variables.adoc[]
-= Mutierende Richtlinien
+= Mutierende Politik
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Anfragen neu aufbauen, indem mutierende Richtlinien innerhalb der ClusterAdmissionPolicy gemäß vordefinierten Einstellungen konfiguriert und verwaltet werden.
+:description: Wiederherstellen von Anfragen durch Konfigurieren und Verwalten von Änderungsrichtlinien innerhalb von ClusterAdmissionPolicy entsprechend den vordefinierten Einstellungen.
 :doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
 :doc-topic: ["mutating-policies"]
 :doc-type: ["explanation"]
-:keywords: ["{project-name}", "kubewarden", "mutierende Richtlinie", "kubernetes", "clusteradmissionpolicy", "admissionpolicy"]
-:sidebar_label: Mutierende Richtlinien
+:keywords: ["{project-name}", "kubewarden", "policy mutating", "kubernetes", "clusteradmissionpolicy", "admissionpolicy"]
+:sidebar_label: Mutierende Politik
 :sidebar_position: 10
 :current-version: {page-origin-branch}
 
-Mutierende Richtlinien erhalten eine Objektanfrage und bauen sie (mutieren sie) in eine neue Anfrage um. Dies erfolgt gemäß den definierten Werten in den Einstellungen der Richtlinie. Die Anfrage wird über die Kubernetes-API weitergeleitet und kann von anderen Richtlinien bewertet werden.
+Mutating Policies empfangen eine Objektanforderung und bauen sie um (mutieren sie) in eine neue Anforderung. Dies entspricht den in den Einstellungen der Richtlinie festgelegten Werten. Die Anfrage durchläuft die Kubernetes-API und wird möglicherweise von anderen Richtlinien bewertet.
 
-Um mutierendes Anfrageverhalten zuzulassen, setzen Sie das `ClusterAdmissionPolicy.mutating`-Feld auf `true`.
+Um ein verändertes Anfrageverhalten zu ermöglichen, setzen Sie das Feld `ClusterAdmissionPolicy.mutating`auf `true`.
 
-Wenn Sie jedoch das `ClusterAdmissionPolicy.mutating`-Feld auf `false` setzen, werden die mutierten Anfragen abgelehnt.
+Wenn Sie jedoch das Feld `ClusterAdmissionPolicy.mutating` auf `false` setzen, werden die mutierten Anträge abgelehnt.
 
-== Warum mutierende Richtlinien gefährlich sein können
+== Warum mutierende Politik gefährlich sein kann
 
-=== Unüberprüfte mutierende Richtlinien können Sicherheitsanfälligkeiten einführen
-
-[WARNING]
-====
-
-Um Missbrauch des Systems zu verhindern, sollten {project-name} Administratoren mutierende Richtlinien überprüfen. Mutierende Richtlinien könnten beispielsweise eine Arbeitslast so ändern, dass sie die Erstellung privilegierter Container erlaubt.
-
-====
-
-
-==== Behebung
-
-Im Zweifelsfall sollten Richtlinien in mutierende und validierende Richtlinien aufgeteilt werden, anstatt Richtlinien zu schreiben oder bereitzustellen, die sowohl validieren als auch mutieren. Dies ist besonders wichtig, wenn eine DSL (wie Rego) verwendet wird, um komplexe Richtlinien zu erstellen.
-
-=== Fehlkonfigurierte mutierende Richtlinien zusammen mit Drittanbieter-Kubernetes-Controllern können in einer Endlosschleife stecken bleiben.
+=== Ungeprüfte mutierende Richtlinien können Schwachstellen verursachen
 
 [WARNING]
 ====
 
-Mutierende Richtlinien geben Anfragen zurück, die über die Kubernetes-API weitergeleitet werden. Wenn es andere Kubernetes-Controller gibt, die auf dieselben Ressourcen überwachen, können sie diese in einer nachfolgenden Anfrage zurückmutieren. Dies könnte zu einer endlosen Rückkopplungsschleife von Mutationen führen.
+Um einen Missbrauch des Systems zu verhindern, sollten die Administratoren von {project-name} die Mutationsrichtlinien überprüfen. Die Änderung von Richtlinien könnte zum Beispiel einen Workload so verändern, dass er die Erstellung von privilegierten Containern erlaubt.
 
 ====
 
 
-==== Behebung
+==== Lösung
+
+Im Zweifelsfall sollten Sie Richtlinien in mutierende und validierende Richtlinien aufteilen, anstatt Richtlinien zu schreiben oder zu verteilen, die sowohl validieren als auch mutieren. Dies ist besonders wichtig, wenn eine DSL (wie Rego) zur Erstellung komplexer Richtlinien verwendet wird.
+
+=== Falsch konfigurierte Mutating Policies können in Verbindung mit Kubernetes-Controllern von Drittanbietern in einer Endlosschleife stecken bleiben
+
+[WARNING]
+====
+
+Bei der Mutation von Richtlinien werden Anfragen zurückgegeben, die über die Kubernetes-API laufen. Wenn es andere Kubernetes-Controller gibt, die auf dieselben Ressourcen warten, können sie diese in einer Folgeanforderung zurückverwandeln. Dies könnte zu einer unendlichen Rückkopplungsschleife von Mutationen führen.
+
+====
+
+
+==== Lösung
 
 Führen Sie die Mutation gegen:
 
-. Die niedrigere Art von Ressource (z. B: Pod).
-. Die höchste Art von Ressource (z. B: Deployment). Hinweis: Dies könnte dennoch zu Schleifen führen, wenn ein Controller diese Ressourcen verwaltet. Zum Beispiel Controller von GitOps-Lösungen (wie Fleet, Flux, Argo, ...) oder andere Drittanbieter-Controller, die ihre eigenen CRDs in Deployment-Objekte übersetzen.
+. Die untere Art der Ressource (z. B: Pod).
+. Die höchste Art von Ressource (z. B: Einsatz). Hinweis: Dies kann immer noch zu Schleifen führen, wenn ein Controller diese Ressourcen verwaltet. Zum Beispiel Controller von GitOps-Lösungen (wie fleet, flux, argo, ...) oder andere Controller von Drittanbietern, die ihre eigenen CRDs in Deployment-Objekte übersetzen.
 
 == Beispiele
 
-Sie können eine mutierende Richtlinie in Aktion sehen. Erstellen Sie das folgende
-`ClusterAdmissionPolicy` mit dem `mutating`-Feld, das auf `true` gesetzt ist:
+Sie können sehen, wie eine sich wandelnde Politik am Werk ist. Erstellen Sie die folgende`ClusterAdmissionPolicy`, wobei das Feld `mutating` auf `true` gesetzt wird:
 
 [subs="+attributes",bash]
 ----
@@ -91,13 +90,9 @@ EOF
 clusteradmissionpolicy.policies.kubewarden.io/psp-user-group created
 ----
 
-Sie verwenden die
-https://github.com/kubewarden/user-group-psp-policy[`psp-user-group`] Richtlinie, um
-Benutzer und Gruppen in Containern zu steuern und können die Anfragen mutieren. Im
-vorherigen Beispiel haben Sie das `runAsUser`-Feld gesetzt, und es wird zum
-Container `securityContext`-Abschnitt hinzugefügt.
+Sie verwenden diehttps://github.com/kubewarden/user-group-psp-policy[`psp-user-group`] Richtlinie zur Kontrolle von Benutzern und Gruppen in Containern und können die Anforderungen ändern. Im vorangegangenen Beispiel haben Sie das Feld `runAsUser` festgelegt und es dem Abschnitt `securityContext` des Behälters hinzugefügt.
 
-Da das `mutating`-Feld `true` ist, gelingt die folgende Anfrage:
+Da das Feld `mutating` `true` lautet, ist die folgende Anfrage erfolgreich:
 
 [subs="+attributes",bash]
 ----
@@ -117,7 +112,7 @@ EOF
 pod/pause-user-group created
 ----
 
-Sie können die Ergebnisse des Containers `securityContext` sehen:
+Sie können die Ergebnisse des Containers unter `securityContext` einsehen:
 
 [subs="+attributes",bash]
 ----
@@ -128,7 +123,7 @@ kubectl get pods pause-user-group -o jsonpath='{ .spec.containers[].securityCont
 {"runAsUser":1000}
 ----
 
-Jetzt ändern Sie das `ClusterAdmissionPolicy`, indem Sie das Feld `mutating` auf `false` setzen:
+Ändern Sie nun `ClusterAdmissionPolicy`, indem Sie das Feld `mutating` auf `false` setzen:
 
 [subs="+attributes",bash]
 ----
@@ -166,7 +161,7 @@ EOF
 clusteradmissionpolicy.policies.kubewarden.io/psp-user-group configured
 ----
 
-Da das `mutating`-Feld `false` ist, schlägt die folgende Anfrage fehl:
+Da das Feld `mutating` `false` lautet, schlägt die folgende Anfrage fehl:
 
 [subs="+attributes",bash]
 ----
@@ -186,5 +181,4 @@ EOF
 Error from server: error when creating ".\\pause-user-group.yaml": admission webhook "psp-user-group.kubewarden.admission" denied the request: Request rejected by policy psp-user-group. The policy attempted to mutate the request, but it is currently configured to not allow mutations.
 ----
 
-Zusammenfassend können Sie sehen, dass {short-project-name} dasselbe Verhalten wie die
-veralteten Kubernetes Pod-Sicherheitsrichtlinien (PSP) repliziert.
+Zusammenfassend lässt sich sagen, dass {short-project-name} das gleiche Verhalten wie die veralteten Kubernetes Pod Security Policies (PSP) nachbildet.
