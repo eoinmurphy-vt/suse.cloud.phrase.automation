@@ -1,0 +1,104 @@
+= 证书颁发机构验证
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+`+elemental-register+` 和`+elemental-system-agent+` 依靠https://documentation.suse.com/cloudnative/rancher-manager/latest/en/installation-and-upgrade/resources/update-rancher-certificate.html[的证书颁发机构配置] Rancher来验证xref:references/machineregistration-reference.adoc#_config_elemental_registration[MachineRegistration]URL，并远程监控计划。
+
+根据证书颁发机构是私有还是公用，可能需要指示代理强制执行`+strict+` CA 验证，或使用系统信任存储。
+
+从 Rancher`+2.9+` ，https://documentation.suse.com/cloudnative/rancher-manager/latest/en/installation-and-upgrade/references/tls-settings.html#_agent_tls_enforcement[agent-tls-mode]全局设置也将适用于 Elemental的安装。请注意，如果`+agent-tls-mode+` 设置发生变化，则需要xref:node-operational-tasks/reset.adoc[重置]元素机器，以使设置生效。
+
+== 私人 CA 证书生命周期
+
+在使用私有 CA 时，建议始终确保 Rancher 也使用相同的 CA。Elemental 将使用`+cacerts+` ，将 CA 证书纳入代理信任的范围。该值与`+https://my.rancher.example/cacerts+` URL 上的值相同。
+
+但要注意的是，在安装了元素机器后，将无法更新该值。当`+agent-tls-mode+` 设置为`+strict+` 时，更换 Rancher 上的 CA 证书可能会导致 Elemental 机器无法重新连接到 Rancher 并正常运行。
+
+因此，建议使用`+agent-tls-mode: system-store+` 设置，并在使用私有证书颁发机构时直接管理 Elemental 机器上 CA 证书的生命周期。
+
+CA 证书可直接安装在xref:operator-operational-tasks/custom-images.adoc[自定义操作系统镜像]中，或作为云启动配置传递到 Elemental 资源中。例如，初始 CA 证书可包含在xref:references/machineregistration-reference.adoc#_config_cloud_config[机器注册] `+cloud-config+` 中：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      write_files:
+        - path: /etc/pki/trust/anchors/rancher-ca.pem
+          permission: 0444
+          content: |-
+            -----BEGIN CERTIFICATE-----
+            MIIDETCCAfmgAwIBAgIRAK0J3NrgPllXUiGYrA9sTlUwDQYJKoZIhvcNAQELBQAw
+            IjEgMB4GA1UEAxMXZWxlbWVudGFsLXNlbGZzaWduZWQtY2EwHhcNMjQxMDA3MTEw
+            ODM5WhcNMzUwODAxMTEwODM5WjAiMSAwHgYDVQQDExdlbGVtZW50YWwtc2VsZnNp
+            Z25lZC1jYTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJm2esaQL82b
+            rWMpnurmyiutruWvdWUT0Dci2+I7vI1CRs7Gqq93in3+HOoEuaJhS4eZQT9AFyaq
+            msijMa3cTYUDhTbOAvPs27E/mSBeQyKd/hJuQ0B8vl47Z1ixOpUHdMOBsZDI0XF5
+            yjVTj4nTZXW5n0zZpnmEs4DhLJLJc6icjQLdHDsSj/LeTy8alyTtkOaWcPjFppNI
+            6M5a1BWJPhNKGlFpezqfjtJogxbOEAohpN4DUKvqebRWnC+4MjhqUcEW5sXatFTH
+            F7MGbVSqQk/f7lzIuke4nvWd0FGPyk/sD31rXT2/2eHkcTJEanRq3bwWQNXQynQ1
+            wdqIH1TtfMUCAwEAAaNCMEAwDgYDVR0PAQH/BAQDAgKkMA8GA1UdEwEB/wQFMAMB
+            Af8wHQYDVR0OBBYEFIv2OZVFAhh8HzoEwjlf5GivNf6IMA0GCSqGSIb3DQEBCwUA
+            A4IBAQAfNUNQKZ02oTo9q+/nbS8kIuhwzSTtNzKflQU5oibpDSAxYlx2gsYqppb/
+            w7voj+GiONQR22PrCFh+Kr7aGr/GZh6oXg47dK4Es2dVeE8qdqW3WtZ8oj/OJxmP
+            7TqWZdGf7TAxfgNzIpGjWFw/coJ7dcYbDrcZFWG5oQpTbLHK/ECMPWytGVRjrqE6
+            baLJ85AVqF9rcCb0giXzvzS6/IpyAe7+Q4WvdzY1uaLQSwkBtpt9OM/O35GmeFUR
+            OUkPxQ15e+3tUnDLUDnkTk3xMVRvJehnk/I75auqlUra55KLqfd6SUEbGP3MU9ZI
+            12xVJHQTSN8XWh0++9jNG0eSMe75
+            -----END CERTIFICATE-----
+      runcmd:
+        - update-ca-certificates
+----
+
+在更换 Rancher 上的 CA 证书之前，可以通过升级 Elemental 机器，将新的 CA 证书纳入机器。*新*CA 证书可在xref:references/managedosimage-reference.adoc#_cloudconfig[ManagedOSImage] `+cloudConfig+` 中配置：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: ManagedOSImage
+metadata:
+  name: ca-cert-upgrade
+  namespace: fleet-default
+spec:
+  # The cloudConfig will be applied after node reboot
+  cloudConfig:
+    write_files:
+      - path: /etc/pki/trust/anchors/rancher-ca-new.pem
+        permission: 0444
+        content: |-
+          -----BEGIN CERTIFICATE-----
+          MIIDEDCCAfigAwIBAgIQVgcMnY4HFB5+bZ9yhLaFkTANBgkqhkiG9w0BAQsFADAi
+          MSAwHgYDVQQDExdlbGVtZW50YWwtc2VsZnNpZ25lZC1jYTAeFw0yNDEwMDcxMjUx
+          MzZaFw0zNTA4MDExMjUxMzZaMCIxIDAeBgNVBAMTF2VsZW1lbnRhbC1zZWxmc2ln
+          bmVkLWNhMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvwokj48hQFF3
+          +v/ObqPOOyYszL/Nyv8/BomPgBia/GXGe8mkQHEWUXFS4P6KdMGQQU3X6Pm071qG
+          QEWEIy95szy1H/q1DgZQCM5fjYPcfFJMopQ28vJEk58/9PePr/GZRWAeAhmMKZeg
+          HP/wpuUMEdEh7vGYjKjVuIJiFgT2lVDKqrtRIon+L1iIP3IRmVa49UzmdW2wM79W
+          a1nv52+EZaw3UDSLPonvs29AZG8M+NuENlefHWEwYVpDEwF9lXinfL3wMw36gIo4
+          X4LmStP9WU4mvglrR8Zwj1M9COMrYbBYQ86jUGM0L0eNG52Uflsn+0ttLRhgkpba
+          wAl8jAZWdQIDAQABo0IwQDAOBgNVHQ8BAf8EBAMCAqQwDwYDVR0TAQH/BAUwAwEB
+          /zAdBgNVHQ4EFgQUmOGv0AwumUlwQDdULL2dLik/6FUwDQYJKoZIhvcNAQELBQAD
+          ggEBACMmDLbKOgz5Zo1pSLTYc08Nb5sRTK/bW24IZ67cfdPstvTQBDAH5+obAjus
+          N2Linl/IAsN8K2cnoBq1gM3sST+YDVOBdItZXwe8jybk3IoJPdzE63l//ReTyTSg
+          OamwUR6qHcLZ9XNwS4z8WYNy3mDLO6dgq7udb2DHm/0mvyi3Q0oRvsrI+9JCCrgz
+          YTFWEWhbpfUzH+dheISMYJx3l/iIFJajaASWKtGBMnp9G+RC2HhDcDwBnW/4JT1h
+          wqvat7kdRIxcWHtW482JKRyfa58QidqA7nIBblZJuWqpo4etAVZTCV/caFKbn/Ek
+          FrT88MNiy5xsimgQSdt9vptOvJc=
+          -----END CERTIFICATE-----
+    runcmd:
+      - update-ca-certificates
+  osImage: "registry.suse.com/suse/sl-micro/6.0/baremetal-os-container:2.1.2-3.59"
+  clusterTargets:
+    - clusterName: volcano
+  upgradeContainer:
+    envs:
+      # Use FORCE to force an upgrade.
+      # This is convenient when the `+osImage+` is the same, and only the `+cloudConfig+` changed.
+      - name: FORCE
+        value: "false"
+----
