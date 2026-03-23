@@ -1,0 +1,215 @@
+= KubernetesでOpen Telemetryを始める
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: {stackstate-product-name}
+
+このガイドでは、アプリケーションのモニタリングについて説明します。
+
+* クラスタAで実行されている監視対象のアプリケーション/ワークロード。
+* Open Telemetry コレクターは、観測されたアプリケーション（クラスタ A）の近くで動作し、{stackstate-product-name} にデータを送信します。
+* {stackstate-product-name} クラスタB、またはSUSE Cloud Observabilityで実行されます。
+
+image::otel/open-telemetry-collector-kubernetes.png[Kubernetes デプロイメントとして動作するコレクタを介した Open Telemetry によるコンテナ計測]
+
+== オープン・テレメトリー・コレクター
+
+[NOTE]
+====
+本番セットアップでは、コレクターをインストールすることを強く推奨する。なぜなら、コレクターによってサービスがデータを迅速にオフロードできるようになり、コレクターが再試行、バッチ処理、暗号化、あるいは機密データのフィルタリングなどの追加処理を行うことができるからである。
+====
+
+クラスタ A に OTel (Open Telemetry) コレクタをインストールして、以下のように構成します：
+
+* 多くの計測アプリケーションからデータを受信する。
+* 収集したデータをKubernetes属性で充実させる。
+* トレースのメトリクスを生成します。
+* API キーを使用した認証を含め、データを{stackstate-product-name} に転送する。
+
+NOTE: {stackstate-product-name} また、接続に問題がある場合は、データ送信を再試行する。
+
+=== サービス・トークンの作成
+
+サービス・トークンを作成するには2つの方法がある：
+
+* **{stackstate-product-name} UI**- 画面左上をクリックしてメインメニューを開き、`+StackPacks+` >`+Open Telemetry+` 。 まだそうしていない場合は、`+INSTALL+` ボタンをクリックします。`+CREATE NEW SERVICE TOKEN+` ボタンをクリックし、値をクリップボードにコピーする。
+* **{stackstate-product-name} CLI**-xref:/use/security/k8s-service-tokens.adoc#_manage_service_tokens[サービス・トークンの管理を]参照
+
+サービス・トークンの値は、以下の説明で`+<SERVICE_TOKEN>+` と記述されている場所で使用する必要があります。
+
+=== サービス・トークンのネームスペースとシークレットを作成する。
+
+`+open-telemetry+` ネームスペースにインストールし、サービス・トークンを使用する：
+
+[,bash]
+----
+kubectl create namespace open-telemetry
+kubectl create secret generic open-telemetry-collector \
+    --namespace open-telemetry \
+    --from-literal=API_KEY='<SERVICE_TOKEN>'
+----
+
+=== コレクタの設定とインストール
+
+Open Telemetryプロジェクトが提供するHelmチャートを使用してコレクターを設置する。Open Telemetry helm charts リポジトリが設定されていることを確認してください：
+
+[,bash]
+----
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+----
+
+Helmチャート用の`+otel-collector.yaml+` 値ファイルを作成する。{stackstate-product-name} `+<otlp-suse-observability-endpoint:port>+` を OTLP エンドポイントに置き換え（エンドポイントについてはxref:/setup/otel/otlp-apis.adoc[OTLP API を]参照）、 の代わりに Kubernetes クラスタの名前を挿入します：`+<your-cluster-name>+`
+
+.otel-collector.yaml
+[,yaml]
+----
+# Set the API key from the secret as an env var:
+extraEnvsFrom:
+  - secretRef:
+      name: open-telemetry-collector
+mode: deployment
+image:
+  # Use the collector container image that has all components important for k8s. In case of missing components the ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib image can be used which
+  # has all components in the contrib repository: https://github.com/open-telemetry/opentelemetry-collector-contrib
+  repository: "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s"
+ports:
+  metrics:
+    enabled: true
+presets:
+  kubernetesAttributes:
+    enabled: true
+    extractAllPodLabels: true
+# This is the config file for the collector:
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    # Scrape the collectors own metrics
+    prometheus:
+      config:
+        scrape_configs:
+        - job_name: opentelemetry-collector
+          scrape_interval: 10s
+          static_configs:
+          - targets:
+            - ${env:MY_POD_IP}:8888
+  extensions:
+    # Use the API key from the env for authentication
+    bearertokenauth:
+      scheme: SUSEObservability
+      token: "${env:API_KEY}"
+  exporters:
+    nop: {}
+    otlp/suse-observability:
+      auth:
+        authenticator: bearertokenauth
+      # Put in your own otlp endpoint, for example otlp-suse-observability.my.company.com:443
+      endpoint: <otlp-suse-observability-endpoint:port>
+      compression: snappy
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch: {}
+    resource:
+      attributes:
+      - key: k8s.cluster.name
+        action: upsert
+        # Insert your own cluster name
+        value: <your-cluster-name>
+      - key: service.instance.id
+        from_attribute: k8s.pod.uid
+        action: insert
+        # Use the k8s namespace also as the open telemetry namespace
+      - key: service.namespace
+        from_attribute: k8s.namespace.name
+        action: insert
+  connectors:
+    # Generate metrics for spans
+    spanmetrics:
+      metrics_expiration: 5m
+      namespace: otel_span
+  service:
+    extensions: [ health_check,  bearertokenauth ]
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, resource, batch]
+        exporters: [debug, spanmetrics, otlp/suse-observability]
+      metrics:
+        receivers: [otlp, spanmetrics, prometheus]
+        processors: [memory_limiter, resource, batch]
+        exporters: [debug, otlp/suse-observability]
+      logs:
+        receivers: [otlp]
+        processors: []
+        exporters: [nop]
+    telemetry:
+      metrics:
+        address: ${env:MY_POD_IP}:8888
+----
+
+
+[CAUTION]
+====
+Kubernetesスタックパックで{stackstate-product-name} エージェントも使用する場合は、* {stackstate-product-name} エージェントのインストールに使用したものと同じクラスタ名を使用*します。異なるクラスタ名を使用すると、Kubernetesコンポーネントのトレース視点が空になり、全体的に{stackstate-product-name} 、ユーザーにとって情報の関連付けが非常に難しくなります。
+====
+
+構成ファイルを使用してコレクタをインストールする：
+
+[,bash]
+----
+helm upgrade --install opentelemetry-collector open-telemetry/opentelemetry-collector \
+  --values otel-collector.yaml \
+  --namespace open-telemetry
+----
+
+コレクターは、レシーバー、プロセッサー、エクスポーターなど、より多くの設定を提供します。詳細はxref:/setup/otel/collector.adoc[コレクターのページを]ご覧ください。本番使用では、しばしば大量のスパンが生成される。したがって、xref:/setup/otel/sampling.adoc[サンプリングを]設定する。
+
+== アプリケーションから遠隔測定データを収集する
+
+テレメトリーデータを収集する一般的な方法は、Open Telemetry SDK を使用してアプリケーションを計測することです。
+
+* xref:/setup/otel/instrumentation/java.adoc[ジャワ]
+* xref:/setup/otel/instrumentation/dot-net.adoc[.NET]
+* xref:/setup/otel/instrumentation/node.js.adoc[Node.js]
+
+他の言語については、https://opentelemetry.io/docs/languages/[opentelemetry.io]のドキュメントに従い、xref:/setup/otel/instrumentation/sdk-exporter-config.adoc[以下の]手順に従って、インストールしたコレクターにデータを送信するように SDK エクスポーターを設定してください。
+
+== 結果を見る
+
+{stackstate-product-name} にアクセスし、Open Telemetry Stackpack がインストールされていることを確認する（メインメニュー \-> Stackpacks から）。
+
+ポッドがトラフィックを得ているなら、Open Telemetry \-> services and service instances overviews のサービス名で見つけられるはずです。トレースは、サービスとサービス インスタンス コンポーネントのxref:/use/traces/k8sTs-explore-traces.adoc[トレース エクスプローラ]およびxref:/use/views/k8s-traces-perspective.adoc[トレース パースペクティブに]表示されます。スパン・メトリクスと言語固有のメトリクス（利用可能な場合）は、コンポーネントのxref:/use/views/k8s-metrics-perspective.adoc[メトリクス・パースペクティブで]利用可能になります。
+
+Kubernetesのstackpackもインストールされている場合、インスツルメンテッドポッドもトレースxref:/use/views/k8s-traces-perspective.adoc[パースペクティブで]トレースが利用できるようになります。
+
+== Rancher RBAC
+
+xref:/setup/security/rbac/rbac_rancher.adoc[Rancher RBACが]機能するためには、遠隔測定データには以下のリソース属性が必要です：
+
+* `+k8s.cluster.name+` - Kubernetesスタックパックで使用される*クラスタ*名
+* `+k8s.namespace.name+` - Rancher*プロジェクトによって*管理される*名前空間*
+
+これは上記のような構成で実現できる。 そこでは、`+opentelemetry-collector+` Helmチャートの`+kubernetesAttributes+` プリセットが、各パイプラインに`+k8sattributes+` プロセッサーを注入する。
+
+== 次のステップ
+
+ifdef::ss-ff-stackpacks2_enabled[]
+xref:/setup/custom-integrations/metric-bindings/index.adoc[ガイドに従って]、アプリケーションのコンポーネント、例えばサービスやサービスインスタンスに新しいチャートを追加することができます。また、メトリクスを使用してxref:use/alerting/k8s-add-monitors-cli.adoc[新しいモニターを]作成し、アプリケーションが利用できない場合やパフォーマンスに問題がある場合にxref:/use/alerting/notifications/configure.adoc[通知を]受け取るように設定することも可能です。
+endif::[]
+
+ifndef::ss-ff-stackpacks2_enabled[]
+xref:/use/metrics/k8s-add-charts.adoc[ガイドに従って]、アプリケーションのコンポーネント、例えばサービスやサービスインスタンスに新しいチャートを追加することができます。また、メトリクスを使用してxref:/use/alerting/k8s-monitors.adoc[新しいモニターを]作成し、アプリケーションが利用できない場合やパフォーマンスに問題がある場合にxref:/use/alerting/notifications/configure.adoc[通知を]受け取るように設定することも可能です。
+endif::[]
+
+== 詳細はこちら
+
+* xref:/use/security/k8s-service-tokens.adoc[サービス・トークン]
+* xref:/setup/otel/otlp-apis.adoc[オープン・テレメトリーAPI]
+* xref:/setup/otel/collector.adoc[オープン・テレメトリー・コレクターの設定のカスタマイズ]
+* xref:/setup/otel/instrumentation/README.adoc[オープン・テレメトリーSDK]
