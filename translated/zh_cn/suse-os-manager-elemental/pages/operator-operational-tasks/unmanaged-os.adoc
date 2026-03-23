@@ -1,0 +1,40 @@
+= 注册非托管操作系统
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+通常，{elemental_operator_url}[{elemental_operator_name}] 管理由{elemental_toolkit_url}[{elemental_toolkit_name}] 安装和配置的操作系统。 +
+例如，为了自动进行操作系统安装、升级和重置，`+elemental-register+` 依靠`+elemental+` CLI 执行这些操作。
+
+不过，也可以注册和提供{elemental-product-name} "无工具包 "系统。
+
+在这种情况下，需要在系统中安装xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_register_command_line_tool[elemental-register]。 +
+可选择安装xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[元素系统代理]。请注意，如果没有`+elemental-system-agent+` ，{elemental_operator_name} 将无法在机器上配置任何 k8s 群集。在这种情况下，{elemental_operator_name} 只能用于操作系统清单。
+
+最后，在管理群集上，`+MachineRegistration+` 必须启用`+spec.config.elemental.registration.no-toolkit+` 标志。
+
+一旦`+no-toolkit+` 在`+MachineRegistration+` 上启用，并在系统上使用`+elemental-register --install+` 进行新注册，就会在管理群集上创建一个新的`+MachineInventory+` ：
+
+[,bash]
+----
+kubectl -n fleet-default describe machineinventory my-unmanaged-os-machine
+----
+
+`+MachineInventory+` 将标注`+elemental.cattle.io/os.unmanaged: "true"+` 注释，强调该机器不受管理，功能有限。
+
+注册成功后，系统会自动创建`+/etc/rancher/elemental/agent/config.yaml+` 和`+/var/lib/elemental/agent/elemental_connection.json+` 文件，以配置`+elemental-system-agent+` 。
+K8s 的配置和重置触发器需要`+elemental-system-agent+` 组件。
+
+当触发xref:node-operational-tasks/reset.adoc[机器重置]（例如直接删除`+MachineInventory+` ）时，`+elemental-system-agent+` 将执行简单的重置计划，创建`+/var/lib/elemental/.unmanaged_reset+` 哨兵文件。 +
+该文件的存在表明机器需要重置。这可能涉及停止服务、卸载软件包、格式化设备等，具体取决于机器的定制管理方式。
+
+== 支持的功能
+
+* 注册 `+MachineInventory+`
+* K8s 配置（当xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[元素系统代理]已安装并在机器上运行时）
+* 重置触发器（当xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[元素系统代理]已安装并在机器上运行时）
+
+== 不支持的功能
+
+* 云启动驱动xref:references/cloud-config-reference.adoc[配置]
+* 操作系统xref:node-operational-tasks/upgrade.adoc[升级]
+* 操作系统xref:node-operational-tasks/reset.adoc[重置]
