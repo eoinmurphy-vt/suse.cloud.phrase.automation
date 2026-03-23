@@ -1,0 +1,127 @@
+= 已知问题
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2025-09-15
+:page-revdate: {revdate}
+
+已知问题 "会定期更新，旨在告知您下一个即将发布的版本中可能无法立即解决的任何问题。如需了解最新信息，请查看https://github.com/k3s-io/k3s/issues[项目问题跟踪器] K3s上的开放和固定问题。如果您运行的不是 K3s 的最新版本，请确保同时搜索已关闭的问题和发行说明，以确保您的问题尚未得到解决。
+
+== Kine/SQL 2147483647 (MAX INT) 修订限制
+
+在使用 K3s 时，如果xref:datastore/ha.adoc[外部 SQL 数据库]是在 2024 年 5 月之前的 K3s 版本上创建的，则必须对数据库进行模式迁移，以便在数据库中存储超过 210 万个修订版。当当前数据存储版本达到 2147483647 时，没有更新模式的数据库将变为只读。
+
+您可以通过检查针对 Kubernetes API 发出的列表调用响应中的`+resourceVersion+` 字段，检查数据存储的当前版本。
+例如，在以下输出中，当前版本是 12345：
+
+[,bash]
+----
+$ kubectl get --raw /api/v1/namespaces?labelSelector=none
+{"kind":"NamespaceList","apiVersion":"v1","metadata":{"resourceVersion":"12345"},"items":[]}
+----
+
+== Docker Snap
+
+如果您计划将 K3s 与 Docker 容器运行时结合使用，则不推荐使用 Docker snap 软件包，因为它在运行 K3s 时可能会出现问题。使用操作系统提供的本地软件包管理系统安装 Docker。
+
+== Iptables
+
+如果您的节点在 nftables 模式下使用 iptables v1.6.1 或更早版本，可能会遇到问题。我们建议使用较新的 iptables（如 1.6.1+）或运行 iptables 传统模式，以避免出现问题。
+
+[,bash]
+----
+update-alternatives --set iptables /usr/sbin/iptables-legacy
+update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+----
+
+Iptables 1.8.0-1.8.4 版本也有可能导致 K3 故障的已知问题。一些流行的 Linux 发行版默认安装了这些版本。其中一个错误会导致重复规则的累积，从而对节点的性能和稳定性产生负面影响。有关如何确定您是否受此问题影响的信息，请参见https://github.com/k3s-io/k3s/issues/3117[Issue #3117]。
+
+K3s 包含已知良好版本的 iptables（v1.8.8），经测试可正常运行。使用`+--prefer-bundled-bin+` 选项启动 K3s，或从操作系统中卸载 iptables/nftables 软件包，即可让 K3s 使用其捆绑的 iptables 版本。
+
+[IMPORTANT]
+.版本闸门
+====
+
+`+--prefer-bundled-bin+` 标志从 2022-12 版本（v1.26.0+k3s1、v1.25.5+k3s1、v1.24.9+k3s1、v1.23.15+k3s1）开始可用。
+====
+
+== 无根模式
+
+使用无根模式运行 K3s 是试验性的，有几个xref:advanced.adoc#_known_issues_with_rootless_mode[已知的问题。]
+
+[#hardened-125]
+== 将加固集群从 v1.24.x 升级到 v1.25.x
+
+Kubernetes 从 v1.25 版中删除了 PodSecurityPolicy，转而使用 Pod 安全标准。有关 PSS 的更多信息，请参阅https://kubernetes.io/docs/concepts/security/pod-security-standards/[上游文档]。对于 K3S，如果在节点上配置了`+PodSecurityPolicy+` ，则必须采取一些手动步骤。
+
+. 在所有节点上，更新`+kube-apiserver-arg+` 值，删除`+PodSecurityPolicy+` admission-plugin。添加以下 arg 值：`+'admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml'+`但先不要重启或升级 K3S。下面是一个示例，说明要加固的节点在更新后的配置文件可能是什么样子：
++
+[,yaml]
+----
+protect-kernel-defaults: true
+secrets-encryption: true
+kube-apiserver-arg:
+  - 'admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml'
+  - 'audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log'
+  - 'audit-policy-file=/var/lib/rancher/k3s/server/audit.yaml'
+  - 'audit-log-maxage=30'
+  - 'audit-log-maxbackup=10'
+  - 'audit-log-maxsize=100'
+kube-controller-manager-arg:
+  - 'terminated-pod-gc-threshold=10'
+  - 'use-service-account-credentials=true'
+kubelet-arg:
+  - 'streaming-connection-idle-timeout=5m'
+----
+
+. 创建`+/var/lib/rancher/k3s/server/psa.yaml+` 文件，内容如下。您可能还想免除更多命名空间。下面的示例豁免了`+kube-system+` （必填）、`+cis-operator-system+` （可选，但在通过 Rancher 运行安全扫描时很有用）和`+system-upgrade+` （进行xref:upgrades/automated.adoc[自动升级]时必填）。
++
+[,yaml]
+----
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: PodSecurity
+  configuration:
+ apiVersion: pod-security.admission.config.k8s.io/v1beta1
+ kind: PodSecurityConfiguration
+ defaults:
+   enforce: "restricted"
+   enforce-version: "latest"
+   audit: "restricted"
+   audit-version: "latest"
+   warn: "restricted"
+   warn-version: "latest"
+ exemptions:
+   usernames: []
+   runtimeClasses: []
+   namespaces: [kube-system, cis-operator-system, system-upgrade]
+----
+
+. 正常进行升级。如果进行xref:upgrades/automated.adoc[自动升级]，请确保`+system-upgrade-controller+` pod 运行所在的命名空间已根据https://kubernetes.io/docs/concepts/security/pod-security-admission/#pod-security-levels[Pod 安全级别]设置为特权空间：
++
+[,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: system-upgrade
+  labels:
+ # This value must be privileged for the controller to run successfully.
+ pod-security.kubernetes.io/enforce: privileged
+ pod-security.kubernetes.io/enforce-version: v1.25
+ # We are setting these to our _desired_ `+enforce+` level, but note that these below values can be any of the available options.
+ pod-security.kubernetes.io/audit: privileged
+ pod-security.kubernetes.io/audit-version: v1.25
+ pod-security.kubernetes.io/warn: privileged
+ pod-security.kubernetes.io/warn-version: v1.25
+----
+
+. 升级完成后，从群集中删除任何剩余的 PSP 资源。在许多情况下，用于加固`+/var/lib/rancher/k3s/server/manifests/+` 的自定义文件中可能存在 PodSecurityPolicies 和相关 RBAC 资源。删除这些资源后，k3s 将自动更新。有时，由于时间关系，其中一些可能会留在群集中，在这种情况下，您需要手动删除它们。如果之前遵循了《xref:security/hardening-guide.adoc[加固指南》]，则应能通过以下方式删除它们：
+
+[,sh]
+----
+# Get the resources associated with PSPs
+$ kubectl get roles,clusterroles,rolebindings,clusterrolebindings -A | grep -i psp
+
+# Delete those resources:
+$ kubectl delete clusterrole.rbac.authorization.k8s.io/psp:restricted-psp clusterrole.rbac.authorization.k8s.io/psp:svclb-psp clusterrole.rbac.authorization.k8s.io/psp:system-unrestricted-psp clusterrolebinding.rbac.authorization.k8s.io/default:restricted-psp clusterrolebinding.rbac.authorization.k8s.io/system-unrestricted-node-psp-rolebinding && kubectl delete -n kube-system rolebinding.rbac.authorization.k8s.io/svclb-psp-rolebinding rolebinding.rbac.authorization.k8s.io/system-unrestricted-svc-acct-psp-rolebinding
+----
