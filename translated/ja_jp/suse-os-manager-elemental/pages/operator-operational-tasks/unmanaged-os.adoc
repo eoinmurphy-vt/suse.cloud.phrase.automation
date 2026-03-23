@@ -1,0 +1,40 @@
+= アンマネージドOSの登録
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+通常、{elemental_operator_url}[{elemental_operator_name}]は、{elemental_toolkit_url}[{elemental_toolkit_name}]によってインストールされ設定されたオペレーティング・システムを管理する。 +
+例えば、OSのインストール、アップグレード、リセットを自動化するために、`+elemental-register+` 、これらの操作を実行するために`+elemental+` CLIに依存しています。
+
+しかし、{elemental-product-name} 「ツールキットレス」システムを登録し、提供することも可能である。
+
+このシナリオでは、xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_register_command_line_tool[elemental-registerを]システムにインストールする必要がある。 +
+オプションで、xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agentを]インストールすることもできる。`+elemental-system-agent+` がないと、{elemental_operator_name} はマシン上で k8s クラスタをプロビジョニングできないことに注意してください。この場合、{elemental_operator_name} はOSのインベントリ目的でのみ使用できる。
+
+最後に、管理クラスター上で、`+MachineRegistration+` 、`+spec.config.elemental.registration.no-toolkit+` フラグを有効にする必要があります。
+
+`+MachineRegistration+` 上で`+no-toolkit+` が有効化され、システム上で`+elemental-register --install+` を使用して新規登録が発生すると、管理クラスタ上に新しい`+MachineInventory+` が作成される：
+
+[,bash]
+----
+kubectl -n fleet-default describe machineinventory my-unmanaged-os-machine
+----
+
+`+MachineInventory+` には`+elemental.cattle.io/os.unmanaged: "true"+` の注釈が付き、このマシンは管理されておらず、機能が限られていることが強調される。
+
+システム上では、登録に成功すると、`+/etc/rancher/elemental/agent/config.yaml+` と`+/var/lib/elemental/agent/elemental_connection.json+` ファイルが自動的に作成され、`+elemental-system-agent+` を設定する。
+`+elemental-system-agent+` コンポーネントはK8sのプロビジョニングとリセットトリガーに必要です。
+
+xref:node-operational-tasks/reset.adoc[マシンリセットが]トリガーされると、たとえば`+MachineInventory+` を直接削除すると、`+elemental-system-agent+` は単純なリセットプランを実行し、`+/var/lib/elemental/.unmanaged_reset+` センチネルファイルを作成する。 +
+このファイルの存在は、マシンにリセットが必要であることを示している。これは、マシンがどのようにカスタム管理されているかによって、サービスの停止、パッケージのアンインストール、デバイスのフォーマットなどを含むかもしれない。
+
+== 対応機能
+
+* 登録 `+MachineInventory+`
+* K8sのプロビジョニング(xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agentが]マシンにインストールされ、実行されている場合)
+* リセットトリガー（xref:rancher-os-management/architecture/architecture-components.adoc#_elemental_system_agent_daemon[elemental-system-agentが]マシンにインストールされ、実行されている場合）
+
+== サポートされていない機能
+
+* クラウドイニット駆動xref:references/cloud-config-reference.adoc[構成]
+* OSのxref:node-operational-tasks/upgrade.adoc[アップグレード]
+* OSxref:node-operational-tasks/reset.adoc[リセット]
