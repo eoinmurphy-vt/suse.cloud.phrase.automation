@@ -1,0 +1,102 @@
+= Fehlersuche bei offener Telemetrie
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+Es gibt viele Konfigurationsoptionen, aber noch wichtiger ist, dass jede (Kubernetes-)Umgebung etwas anders ist. Um herauszufinden, wo das Problem liegt, wählt man am schnellsten einen Pod aus, von dem Telemetriedaten erwartet werden:
+
+. Überprüfen Sie den Anfang der Protokolle für den Pod. SDKs protokollieren Warnungen oder Fehler, wenn die Instrumentierung beim Start fehlschlägt.
+. Überprüfen Sie die Protokolle auch auf Fehler im Zusammenhang mit dem Senden von Daten an den Kollektor
+. Überprüfen Sie die Protokolle des/der Collector-Pods auf Konfigurations- oder Initialisierungsfehler; diese werden direkt nach dem Start des Pods protokolliert
+. Überprüfen Sie die Kollektorprotokolle auch auf Fehler beim Senden von Daten an SUSE Observability
+
+Die Fehler in den Protokollen geben normalerweise einen guten Hinweis auf das Problem. Wir führen die häufigsten Ursachen dafür auf, dass Open Telemetry-Daten für einige oder alle Ihrer instrumentierten Anwendungen nicht verfügbar sind. Wenn das Problem hier nicht aufgeführt ist, können Sie auch in der https://opentelemetry.io/docs/languages/[sprachspezifischen SDK-Dokumentation] oder in der https://opentelemetry.io/docs/collector/troubleshooting/[collector-Dokumentation] von Open Telemetry nachsehen.
+
+== Verwenden Sie denselben Kubernetes-Clusternamen
+
+Stellen Sie sicher, dass Sie denselben Kubernetes-Clusternamen für denselben Cluster verwenden, wenn:
+
+* Installieren des offenen Telemetriekollektors
+* Installieren des SUSE Observability-Agenten
+* Installieren des Kubernetes StackPack
+
+Wenn unterschiedliche Namen für denselben Cluster verwendet werden, kann SUSE Observability die Daten von Open Telemetry nicht mit den Daten des SUSE Observability-Agenten abgleichen, und die Perspektive "Traces" bleibt leer.
+
+== Der Kollektor kann keine Daten an SUSE Observability senden
+
+=== Der OTLP-Endpunkt von SUSE Observability und der API-Schlüssel sind falsch konfiguriert
+
+Bei Verbindungsfehlern ist es möglich, dass der OTLP-Endpunkt nicht korrekt ist. Wenn Authentifizierungs-/Autorisierungsfehler auftreten (Statuscodes 401 und 403), ist der API-Schlüssel wahrscheinlich nicht (mehr) gültig. Stellen Sie sicher, dass der konfigurierte OTLP-Endpunkt die URL für Ihr SUSE Observability ist, mit dem Präfix `+otlp-+` und dem Suffix `+:443+`. Der OTLP-Endpunkt für `+play.stackstate.com+` lautet zum Beispiel `+otlp-play.stackstate.com:443+`.
+
+Um sicherzustellen, dass der API-Schlüssel richtig konfiguriert ist, überprüfen Sie dies:
+
+. das Geheimnis enthält einen gültigen API-Schlüssel (überprüfen Sie dies in SUSE Observability)
+. das Geheimnis wird als Umgebungsvariable auf dem Pod verwendet
+. die Erweiterung `+bearertokenauth+` verwendet das richtige Schema und den Wert der Umgebungsvariablen `+API_KEY+` 
+. die Erweiterung `+bearertokenauth+` wird vom Exporter `+otlp/suse-observability+` verwendet
+
+=== Einige Proxys und Firewalls funktionieren nicht gut mit gRPC
+
+Wenn der Collector Daten über einen Proxy oder eine Firewall an SUSE Observability senden muss, kann es vorkommen, dass diese den Datenverkehr entweder vollständig blockieren oder möglicherweise einige Teile der gRPC-Nachrichten verwerfen oder die langlebige gRPC-Verbindung unerwartet vollständig abbrechen. Die einfachste Lösung besteht darin, von gRPC auf HTTP umzusteigen, indem Sie die Konfiguration des Exporters `+otlp/suse-observability+` **und die Verweise darauf im Abschnitt Pipelines** durch den Exporter `+otlphttp/suse-observability+` ersetzen.
+
+Hier ist `+<otlp-http-suse-observability-endpoint>+` ähnlich wie `+<otlp-suse-observability-endpoint>+`, aber statt des Präfixes `+otlp-+` hat es das Präfix `+otlp-http-+`, zum Beispiel `+otlp-http-play.stackstate.com+`. Weitere Einzelheiten finden Sie in der xref:/setup/otel/collector.adoc#_exporters[Kollektorkonfiguration].
+
+== Die instrumentierte Anwendung kann keine Daten an den Kollektor senden
+
+=== Die URL ist falsch oder der Verkehr ist blockiert
+
+Wenn das SDK Fehler protokolliert, die besagen, dass der DNS-Name des Collectors nicht aufgelöst werden kann, kann es sein, dass die konfigurierte Collector-URL falsch ist. In Kubernetes wird Ihre Anwendung normalerweise in einem vom Collector getrennten Namespace bereitgestellt. Dies bedeutet, dass das SDK mit dem vollständig qualifizierten Domänennamen für den Collector-Dienst konfiguriert werden muss:`+http://<service-name>.<namespace>.svc.cluster.local:4317+`. In den xref:/setup/otel/collector.adoc[Installationsschritten für den Collector] war dies `+http://opentelemetry-collector.open-telemetry.svc.cluster.local:4317+`, aber wenn Sie einen anderen Namensraum oder einen anderen Versionsnamen für den Collector verwendet haben, kann dies in Ihrer Situation anders sein.
+
+Wenn das SDK Zeitüberschreitungen bei der Netzwerkverbindung protokolliert, kann es sein, dass entweder eine falsche Konfiguration auf dem Collector vorliegt oder der <<_the_language_sdk_uses_the_wrong_port,falsche Port>> verwendet wird. Es ist aber auch möglich, dass die Kubernetes-Netzwerkrichtlinien den Netzwerkverkehr von Ihrer Anwendung zum Collector blockieren. Dies wird am besten von Ihrem Kubernetes-Administrator überprüft. Die Netzwerkrichtlinien sollten zumindest den TCP-Verkehr auf dem konfigurierten Port (4317 und/oder 4318) von allen Ihren Anwendungen zum Collector zulassen.
+
+=== Das Sprach-SDK unterstützt gRPC nicht
+
+Nicht alle Sprach-SDKs bieten Unterstützung für gRPC. Wenn OTLP über gRPC nicht unterstützt wird, ist es am besten, zu OTLP über HTTP zu wechseln. In der xref:/setup/otel/instrumentation/sdk-exporter-config.adoc#_grpc_vs_http[SDK-Exporterkonfiguration] wird beschrieben, wie man diese Umstellung vornimmt.
+
+=== Das Sprach-SDK verwendet den falschen Port
+
+Die Verwendung des falschen Anschlusses wird in der Regel als Verbindungsfehler angezeigt, kann sich aber auch darin äußern, dass Netzwerkverbindungen unerwartet geschlossen werden. Vergewissern Sie sich, dass der SDK-Exporter beim Senden von Daten den richtigen Port verwendet. Siehe die xref:/setup/otel/instrumentation/sdk-exporter-config.adoc#_grpc_vs_http[SDK-Exporter-Konfiguration].
+
+== Kubernetes-Pods mit aktiviertem hostNetwork
+
+Der Open Telemetry Collector reichert die Telemetriedaten mit Kubernetes-Metadaten an. So wie es konfiguriert ist, werden alle Telemetriedaten, die nicht angereichert werden können, verworfen. Der Collector kann jedoch keine Pods anreichern, die mit der automatischen Einstellung `+hostNetwork: true+` ausgeführt werden. Dies ist nicht möglich, da die Pod-Identifizierung anhand der IP-Adresse des Pods erfolgt und Pods, die das Host-Netzwerk nutzen, die IP-Adresse des Hosts verwenden.
+
+Um dem Collector die Identifizierung eines Pods zu erleichtern, können wir das Attribut `+k8s.pod.uid+` zu den Metadaten hinzufügen, indem wir das SDK anweisen, es direkt hinzuzufügen. Ändern Sie dazu Ihre Pod-Spezifikation und fügen Sie die folgenden Umgebungsvariablen zu Ihrem instrumentierten Anwendungscontainer hinzu:
+
+[,yaml]
+----
+env:
+  - name: POD_UID
+    valueFrom:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: metadata.uid
+  - name: OTEL_RESOURCE_ATTRIBUTES
+    value: k8s.pod.uid=$(POD_UID)
+----
+
+Wenn die Umgebungsvariable `+OTEL_RESOURCE_ATTRIBUTES+` bereits gesetzt ist, fügen Sie einfach die Variable `+k8s.pod.uid+` hinzu, wobei Sie ein Komma als Trennzeichen verwenden. Der Wert ist eine kommagetrennte Liste.
+
+== Node.js application on Google Kubernetes Engine
+
+Das Node.js-SDK, nur auf GKE, erwartet, dass der Kubernetes-Namespace über die Umgebungsvariable `+NAMESPACE+` festgelegt ist. Wenn es nicht gesetzt ist, wird das Attribut `+k8s.namespace.name+` trotzdem hinzugefügt, allerdings mit einem leeren Wert.  Dies verhindert, dass der Kubernetes-Attributprozessor den korrekten Namespace-Namen einfügen kann. Bis dieses Problem behoben ist, können Sie Ihre Pod-Spezifikation aktualisieren und diese Umgebungsvariable zu den instrumentierten Containern hinzufügen:
+
+[,yaml]
+----
+env:
+  - name: NAMESPACE
+    valueFrom:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: metadata.namespace
+----
+
+== Keine Metriken für Node.js-Anwendung verfügbar
+
+Die automatische Instrumentierung für Node.js, die über Umgebungsvariablen konfiguriert wird, unterstützt nur Traces. Zumindest solange, bis das https://github.com/open-telemetry/opentelemetry-js/issues/4551[Problem] gelöst ist. Um die Metriken der automatischen Instrumentierung zu aktivieren, sind Codeänderungen erforderlich. Bitte folgen Sie den Anweisungen in der https://opentelemetry.io/docs/languages/js/exporters/#_usage_with_nodejs[Dokumentation], um diese Änderungen vorzunehmen.
+
+== Kubernetes-Attribute können nicht hinzugefügt werden
+
+Während der Installation des Collectors werden in Kubernetes eine Cluster-Rolle und eine Cluster-Rollenbindung erstellt, die es dem Collector ermöglichen, Metadaten von Kubernetes-Ressourcen zu lesen. Wenn dies fehlschlägt oder sie entfernt werden, kann der Collector die Kubernetes-API nicht mehr abfragen. Dies wird als Fehler im Kollektorprotokoll angezeigt. Die Fehler enthalten die Ressourcentypen, für die die Metadaten nicht abgerufen werden konnten.
+
+Um dies zu beheben, installieren Sie den Collector mit dem Helm-Diagramm neu und stellen Sie sicher, dass Sie über die erforderlichen Berechtigungen zum Erstellen der Clusterrolle und der Clusterrollenbindung verfügen. Bitten Sie alternativ Ihren Cluster-Administrator, die Installation des Collectors mit den erforderlichen Berechtigungen durchzuführen.
