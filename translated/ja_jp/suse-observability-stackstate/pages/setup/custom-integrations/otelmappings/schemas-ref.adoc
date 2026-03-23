@@ -1,0 +1,467 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= スキーマ
+:revdate: 2025-12-23
+:page-revdate: {revdate}
+:description: オープン・テレメトリー・マッピング・スキーマ
+
+== 概要
+
+このページでは、`+OtelComponentMapping+` または`+OtelRelationMapping+` を定義するためのスキーマについて、コンストラクト、式の構文、セマンティクスの詳細な説明とともに説明します。
+
+== OTel コンポーネントと関係のマッピングのスキーマ
+
+=== OtelComponentMapping
+
+各コンポーネントのマッピング：
+
+* 条件を使用してテレメトリーを選択します。
+* 式を使用して値を抽出します。
+* 安定識別子で識別される単一の論理コンポーネントを生成する。
+
+複数の遠隔測定レコードが同じコンポーネント識別子を解決することがある。
+
+[,yaml]
+----
+_type: "OtelComponentMapping"
+name: string
+input:
+  signal: ["TRACES" | "METRICS"]
+  resource:
+    condition: <cel-boolean>        # default: true
+    action: CONTINUE                # default
+    scope:
+      condition: <cel-boolean>      # default: true
+      action: CONTINUE              # default
+      span:                         # TRACES only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+      metric:                       # METRICS only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+        datapoint:                  # METRICS only
+          condition: <cel-boolean>  # default: true
+          action: CONTINUE          # default
+vars:                               # Optional
+  - name: string
+    value: <cel-expression>
+output:
+  identifier: <cel-string>
+  name: <cel-string>
+  typeName: <cel-string>
+  typeIdentifier: <cel-string>      # Optional
+  domainName: <cel-string>
+  domainIdentifier: <cel-string>    # Optional
+  layerName: <cel-string>
+  layerIdentifier: <cel-string>     # Optional
+  required:                         # Optional (required means that if any expression fails, the mapping fails)
+    version: <cel-string>           # Optional
+    additionalIdentifiers:          # Optional
+      - <cel-string>
+    tags:                           # Optional
+      - source: <cel-string>
+        target: string
+      - source: <cel-string>
+        pattern: regex
+        target: string
+  optional:                         # Optional (besides being optional on the schema, optional means that if any expression under `+optional+` fails, the mapping will continue, but without the failed expression/field)
+    version: <cel-string>           # Optional
+    additionalIdentifiers:          # Optional
+      - <cel-string>
+    tags:                           # Optional
+      - source: <cel-string>
+        target: string
+      - source: <cel-map>
+        pattern: regex
+        target: string
+expireAfter: duration-ms
+----
+
+=== OtelRelationMapping
+
+それぞれの関係マッピング：
+
+* `+sourceId+` と`+targetId+` を解決する。
+* 関係タイプを割り当てる。
+* 既存または将来のコンポーネント間の有向エッジを生成する。
+
+関係は、ソースとターゲットのコンポーネントが存在するときに具現化される。
+
+[,yaml]
+----
+_type: "OtelRelationMapping"
+name: string
+input:
+  signal: ["TRACES" | "METRICS"]
+  resource:
+    condition: <cel-boolean>        # default: true
+    action: CONTINUE                # default
+    scope:
+      condition: <cel-boolean>      # default: true
+      action: CONTINUE              # default
+      span:                         # TRACES only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+      metric:                       # METRICS only
+        condition: <cel-boolean>    # default: true
+        action: CONTINUE            # default
+        datapoint:                  # METRICS only
+          condition: <cel-boolean>  # default: true
+          action: CONTINUE          # default
+vars:                               # Optional
+  - name: string
+    value: <cel-expression>
+output:
+  sourceId: <cel-string>
+  targetId: <cel-string>
+  typeName: <cel-string> 
+  typeIdentifier: <cel-string>      # Optional
+expireAfter: duration-ms
+----
+
+== コンポーネントとリレーションのアイデンティティ、マージ、ライフサイクル
+
+=== コンポーネント・アイデンティティ
+
+`+output.identifier+` フィールドはコンポーネントの主なIDを定義し、トポロジー全体で「グローバルに」一意でなければならない。`+output.required.additionalIdentifiers+` 、コンポーネントの識別子をさらに指定することができる。 少なくとも1つの重複する識別子を持つコンポーネントは、同じ論理エンティティとみなされ、プラットフォームによってマージされる。このため、識別装置の構造は設計上重要な選択となる。
+
+識別子は必要である：
+
+* {stackstate-product-name} 識別子（すなわち、`+urn:...+` ）の書式に従うこと。詳細はxref:/configure/topology/identifiers.adoc[識別子の]ドキュメントを参照。
+* 時間を超えて安定していること。
+* 意図したカーディナリティ（サービス、インスタンス、データベースなど）を反映する。
+* 無制限の寸法は避ける。
+
+[NOTE]
+====
+`+output.required.additionalIdentifiers+` リストを使って、生成されたコンポーネントに関連付ける追加の識別子を指定できます。これは、コンポーネントを他のシステムの外部識別子と関連付けるのに便利である。
+====
+
+=== 関係アイデンティティ
+
+関係identityは、`+output.sourceId-output.targetId+` という形の合成である。ここで、`+sourceId+` と`+targetId+` は構成要素識別子である(たとえば、`+output.identifier+` から)。
+
+=== リフレッシュと期限切れ
+
+各マッピングは`+expireAfter+` 。この値は、新しい一致するテレメトリによってリフレッシュされることなく、コンポーネントまたはリレーションがトポロジに留まる時間を制御する。リフレッシュが起こらない場合、コンポーネントまたはリレーションはトポロジーから削除される。
+
+内部的には、OTel コレクタは、テレメトリが一致するとコンポーネントを継続 的にリフレッシュします。このリフレッシュウィンドウは、マッピングごとの`+expireAfter+` フィールドに基づいています。
+
+== 入力走査モデル
+
+トポロジーマッピングは、OpenTelemetryデータを階層的に横断します。 `+resource → scope → metric/span → datapoint+`
+
+各レベルは定義することができる：
+
+* 条件：CELのブール式。
+* アクション：条件にマッチした場合に何をするか。
+
+=== 信号ごとに利用可能なフィールド
+
+選択された信号は、どのデータ構造と属性が式の評価に利用できるかを決定する。
+
+**トレーズ**
+
+へのアクセスを提供する：
+
+* resource.attributes
+* スコープ名、スコープバージョン、スコープ属性
+* span.name、span.kind、span.statusMessage、span.statusCode、span.attributes
+
+例を挙げよう：
+
+[source]
+----
+resource.attributes['service.name'] == 'checkout'
+# OR
+span.kind == 'SPAN_KIND_SERVER' && span.attributes['http.method'] == 'POST'
+----
+
+**METRICS**
+
+へのアクセスを提供する：
+
+* resource.attributes
+* スコープ名、スコープバージョン、スコープ属性
+* metric.name、metric.description、metric.unit
+* データポイント属性
+
+例を挙げよう：
+
+[source]
+----
+metric.name == 'traces_service_graph_request_total'
+# OR
+datapoint.attributes['connection_type'] == 'database'
+----
+
+
+=== 条件と行動
+
+**条件**
+
+条件は、与えられたレベルで処理を継続するかどうかを決定する。条件が false と評価された場合、そのテレメトリ要素のマッピングはスキップされます。
+
+デフォルト：
+
+* 条件のデフォルトは「true」である。これにより、各レベルでの明示的な条件を省略することができ、フォールスルーとして機能する。
+
+制約：
+
+* 複数の入力信号が宣言されている場合（例えば、`+TRACES+` と`+METRICS+` ）、式内のデータはコモンア ンチェスターレベルからのみアクセスできる。
+* 下位／子供レベルからのデータ／フィールドへのアクセスは禁止されている。例えば、スコープレベルのフィールドはリソースレベルではアクセスできない。
+* 他の入力信号からのデータ／フィールドアクセスはできない。例えば、メトリックレベルのフィールドはスパンレベルからはアクセスできず、その逆も同様である。
+
+条件は親レベルからデータにアクセスすることができる。例えば、スパンレベルでは、スコープレベルとリソースレベルのデータにアクセスすることができる。
+
+[,yaml]
+----
+input:
+  signal:
+    - "TRACES"
+  resource:
+    condition: "${'service.name' in resource.attributes}"
+    # action omitted since the default is `+CONTINUE+`
+    scope:
+      action: "CREATE" # input block describes that it expects to filter until this level only
+      condition: "${scope.name.contains('http') && resource.attributes['service.name'] == 'cart-svc'}" # it's allowed to access resource-level fields at scope-level
+----
+
+**行動**
+
+サポートされているアクション
+
+* CONTINUE - 次のレベルへ評価を続ける。
+* CREATE - このレベルでコンポーネントまたはリレーションを作成します。
+
+デフォルト：
+
+* アクションのデフォルトは「CONTINUE」である。
+
+つまり、マッピングを適用するには、入力レベルで明示的に`+CREATE+` 。
+
+以下は、有効な入力宣言の例である：
+
+**トレーズ**
+
+[,yaml]
+----
+input:
+  signal:
+    - "TRACES"
+  resource:
+    condition: "${'service.name' in resource.attributes}"
+    # action omitted since the default is `+CONTINUE+`
+    scope:
+      # action and condition have been omitted since the defaults are `+CONTINUE+` and `+true+` respectively
+      span:
+        action: "CREATE"
+        condition: "${span.attributes['http.method'] == 'POST'}"
+----
+
+**METRICS**
+
+[,yaml]
+----
+input:
+  signal:
+    - "METRICS"
+  resource:
+    # action and condition have been omitted since the defaults are `+CONTINUE+` and `+true+` respectively
+    scope:
+      condition: "scope.name == 'traces_service_graph'"
+      metric:
+        # action omitted since the default is `+CONTINUE+`
+        condition: "metric.name == 'traces_service_graph_request_total'"
+        datapoint:
+          action: "CREATE"
+          condition: |
+            'client' in datapoint.attributes &&
+            'server' in datapoint.attributes
+----
+
+== 変数 (vars)
+
+マッピングは、繰り返しを避け、読みやすさを向上させるために変数を定義することができる。
+
+変数：
+
+* CEL式で評価される。
+* 入力フィルターがマッチする最も深い入力レベルで利用可能なフィールドを参照することができる。例えば、入力選択がスパンレベルで`+CREATE+` アクションを持つ場合、リソース、スコープ、スパンの各フィールドを使用することができます。
+* 出力フィールド間で再利用できる。
+
+例
+
+[,yaml]
+----
+vars:
+- name: "service"
+  value: "${resource.attributes['service.name']}"
+----
+
+変数は、出力式を評価する前に解決される。
+
+== 出力
+
+`+output+` セクションは、OpenTelemetry のシグナル（トレース/メトリクス）をどのようにコンポーネントやリレーションにマッピングするかを定義します。
+
+出力フィールド：
+
+* CEL式を使用して値を動的に生成する。
+* 入力フィルターがマッチする最も深い入力レベルで利用可能なフィールドを参照することができる。例えば、入力選択がスパンレベルで`+CREATE+` アクションを持つ場合、リソース、スコープ、スパンの各フィールドを使用することができます。
+
+フィールドの値を動的に生成する必要がない場合は、スキーマが宣言する`+<cel-string>+` 式を指定する文字列リテラルを設定することができる。
+
+=== 必要対不必要オプションのサブセクション
+
+コンポーネント・マッピング・スキーマでは、2つのエラー処理動作を区別している：
+
+==== 必須
+
+required以下の式が失敗すると、マッピング全体が失敗する。
+
+==== オプショナル
+
+optional以下の式が失敗した場合、マッピングは続行されるが、失敗したフィールドは含まれない。
+
+==== タグマッピング
+
+コンポーネントマッピングは、コンポーネントをメタデータで豊かにするためのタグマッピングを定義することができる。
+
+つのフォームがサポートされている：
+
+**ダイレクト・マッピング**
+
+[,yaml]
+----
+- source: "value"
+  target: "key"
+----
+結果 `+key:value+`
+
+[,yaml]
+----
+- source: "${resource.attributes['service.name']}"
+  target: "service.name"
+----
+与えられた： `+resource.attributes { 'service.name': 'cart-svc' }+`
+
+結果 `+service.name:cart-svc+`
+
+ダイレクトマッピングのソースはaである必要がある：
+
+* 文字列リテラル
+* 文字列式
+
+**正規表現に基づく抽出**
+
+[,yaml]
+----
+- source: "${resource.attributes}"
+  pattern: "telemetry.sdk\.(.*)"
+  target: "telemetry.sdk.${1}"
+----
+与えられた： `+resource.attributes: { 'telemetry.sdk.language': 'go', 'telemetry.sdk.version': '1.23.1' }+`
+
+結果 `+telemetry.sdk.language:go;telemetry.sdk.version:1.23.1+`
+
+正規表現に基づくマッピングは、複数のキャプチャ・グループをサポートしており、これらはターゲット式の位置で参照することができる。
+
+正規表現に基づくマッピングのソースが必要である：
+
+* マップ式
+
+複数のキャプチャグループを使用した例：
+
+[,yaml]
+----
+- source: "${resource.attributes}"
+  pattern: "^(os|host|cloud|azure|gcp)\.(.*)"
+  target: "${1}.${2}"
+----
+
+正規表現ベースのマッピングでは、キャプチャグループはターゲットに置き換えられる。
+
+== CEL expression (`+<cel-*>+`) の説明：
+
+* `+<cel-string>+` - 文字列を返す必要がある：
+** 文字列リテラル（例："hello"）
+** `+${...}+` （例："${resource.attributes['service.name']}"）でくくられた文字列表現。
+** 文字列補間 (例："urn:opentelemetry:namespace/${resource.attributes['namespace']}:service/${resource.attributes['service.name']}")-注意：文字列補間では、式全体が `+$\{...}+`
+* `+cel-boolean+` - はブール値を返す必要がある：
+** 論理リテラル（例："true"）
+** boolean式（例えば、"'namespace' in resource.attributes"）。 `+${...}+`
+* `+cel-map+` - マップを返す必要がある：
+** マップ・リテラル（例："${{'a'：1, 'b': 'two'}}")
+** マップ式 (例: "${resource.attributes}")
+* `+cel-expression+` - は "any "型を返す：
+** 文字列式
+** ブール式
+** マップ式 (例: "${resource.attributes}" - 属性マップを返す)
+** リスト式 (例: "${resource.attributes['process.command_args']}" - リストを返す)
+
+=== 補間
+
+文字列補間を使うと、文字列リテラルの中に式を埋め込むことができる。CEL仕様では直接サポートされていないが、OTelマッピングのコンフィグでは、`+prefix-$\{expression1}/suffix-$\{expression2}+` という形式の補間構文が提供されており、`+++` 演算子を使った文字列の連結として内部的に書き換えられる（たとえば、`+"prefix-" + expression1 + "/suffix-" + expression2+` ）。
+
+この書き換え動作を理解することは、2つの理由から重要である：
+
+1. *入れ子補間はサポートされていない*：文字列式は`+${...}+` で区切られるため、補間式を入れ子にすることはできない。しかし、`+++` 演算子を使えば、直接連結を書くことができる。例えば、こうだ：
++
+[source]
+----
+${
+  'service.instance.id' in resource.attributes ?
+    resource.attributes['service.name'] + " - " + resource.attributes['service.instance.id'] :
+    resource.attributes['service.name'] + " - instance"
+}
+----
+
+2. *文字列以外の値には型キャストが必要です*：CELは強く型付けされており、連結時に自動的に型を変換することはない。異なる型の値を補間する場合、文字列でない型を明示的に文字列にキャストする必要がある。
++
+例えば、`+process.pid+` が整数（例えば、`+1+` ）の場合、この式は失敗する：
++
+[source]
+----
+${resource.attributes['service.name']}/${resource.attributes['process.pid']}
+----
++
+正しい形式では、まずダイナミック値を具象型にキャストし、それから文字列に変換する必要がある：
++
+[source]
+----
+${resource.attributes['service.name']}/${string(int(resource.attributes['process.pid']))}
+----
++
+ダブルキャスト（`+string(int(...))+` ）が必要なのは、そのためである：
++
+* `+resource.attributes['process.pid']+` 動的 (`+dyn+`) 型を返す
+* `+int()+` 動的な値を具体的な整数型にキャストします。
+* `+string()+` 整数を連結用の文字列に変換する。
++
+その他の型には、同様のパターンを使う：浮動小数点数には`+string(double(...))+` 、ブーリアンには`+string(bool(...))+` 。
+
+=== CEL言語リファレンス
+
+CELは、コンフィギュレーションとポリシーのユースケースのために設計された、安全で副作用のない表現言語である。OpenTelemetryのトポロジーマッピングでは、CELは次のように使われる：
+
+* マッピングが適用されるかどうかを決定する条件を定義する
+* テレメトリ属性から変数を計算
+* 識別子、名前、タグを動的に構築する
+
+式は、処理される OpenTelemetry シグナル（例えば、リソース、スコープ、スパン、メトリック、データポイント）から派生した、明確に定義された、型付けされたコンテキストに対して評価される。
+
+https://github.com/google/cel-spec/blob/master/doc/langdef.md[CELのlangdefを]参照されたい。
+
+https://playcel.undistro.io/ のようなオンラインCELプレイグラウンドは、式の妥当性を素早くチェックするのに役立つツールだ。
+
+== よくあるパターンとベストプラクティス
+
+* 意図しないカーディナリティを避けるために、条件付きでマッピングをガードする。
+* 欠けている属性は常に守備的に処理する
+* 識別子を安定させ、予測可能にする
+* 複雑な式や可読性を高めるために変数を使用する。
+* 信号の頻度に適した expireAfter 値を使用する。
+
+OTelマッピングのトラブルシューティングについては、xref:/setup/custom-integrations/otelmappings/troubleshooting.adoc[トラブルシューティングの]ページを参照してください。
+
+endif::ss-ff-stackpacks2_enabled[]
