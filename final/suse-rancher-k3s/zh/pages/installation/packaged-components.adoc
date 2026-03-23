@@ -1,59 +1,59 @@
 = 管理打包组件
-:page-languages: [en, ja, ko, zh]
+:page-languages: [EN, JA, KO, ZH]
 :revdate: 2026-01-05
 :page-revdate: {revdate}
 
-== 自动部署清单（AddOns）
+== 自动部署清单（附加组件）
 
-在服务器节点上，`/var/lib/rancher/k3s/server/manifests` 中找到的任何文件将以类似于 `kubectl apply` 的方式自动部署到 Kubernetes，无论是在启动时还是在文件在磁盘上更改时。从此目录中删除文件不会从集群中删除相应的资源。
+在服务器节点上，在`/var/lib/rancher/k3s/server/manifests` 中找到的任何文件都会以类似于`kubectl apply` 的方式自动部署到 Kubernetes，无论是在启动时还是文件在磁盘上发生变化时。删除该目录下的文件不会从群集中删除相应的资源。
 
-清单被跟踪为 `AddOn` 自定义资源，位于 `kube-system` 名称空间中。在应用清单文件时遇到的任何错误或警告可以通过在相应的 `AddOn` 上使用 `kubectl describe` 查看，或者通过使用 `kubectl get event -n kube-system` 查看该名称空间的所有事件，包括来自部署控制器的事件。
+Manifest 在`kube-system` 命名空间中作为`AddOn` 自定义资源进行跟踪。应用清单文件时遇到的任何错误或警告，都可通过在相应的`AddOn` 上使用`kubectl describe` 查看，或使用`kubectl get event -n kube-system` 查看该命名空间的所有事件，包括来自部署控制器的事件。
 
-=== 打包组件
+=== 包装组件
 
-K3s 附带了一些打包组件，这些组件通过清单目录作为附加组件进行部署：`coredns`、`traefik`、`local-storage` 和 `metrics-server`。嵌入式 `servicelb` 负载均衡器控制器没有清单文件，但出于历史原因，可以像 `AddOn` 一样被禁用。
+K3s 随附了许多打包组件，可通过清单目录作为 AddOns 部署：`coredns`,`traefik`,`local-storage`, 和`metrics-server` 。嵌入式`servicelb` LoadBalancer 控制器没有清单文件，但出于历史原因，可以像禁用`AddOn` 一样禁用它。
 
-打包组件的清单由 K3s 管理，不应被更改。每当 K3s 启动时，文件会被重新写入磁盘，以确保其完整性。
+打包组件的清单由 K3 管理，不得更改。每次启动 K3s 时，这些文件都会被重新写入磁盘，以确保其完整性。
 
-=== 用户附加组件
+=== 用户附加功能
 
-您可以在清单目录中放置额外的文件，以作为 `AddOn` 进行部署。每个文件可以包含多个 Kubernetes 资源，以 `---` YAML 文档分隔符分隔。有关在清单中组织资源的更多信息，请参见 Kubernetes 文档的 https://kubernetes.io/docs/concepts/cluster-administration/manage-deployment/[管理资源] 部分。
+您可以在清单目录中放置其他文件，以便作为`AddOn` 部署。每个文件可包含多个 Kubernetes 资源，用`---` YAML 文档分隔符分隔。有关在清单中组织资源的更多信息，请参阅 Kubernetes 文档中的https://kubernetes.io/docs/concepts/cluster-administration/manage-deployment/[管理资源]部分。
 
 ==== 文件命名要求
 
-清单目录中每个文件的`AddOn`文件名是根据文件的基本名称生成的。
-确保清单目录中的所有文件（或任何子目录中的文件）具有唯一的名称，并遵循 Kubernetes https://kubernetes.io/docs/concepts/overview/working-with-objects/names/[对象命名限制]。
-还应注意不要与默认 K3s 打包组件使用的名称冲突，即使这些组件被禁用。
+清单目录中每个文件的`AddOn` 名称都来自文件基名。
+确保清单目录（或任何子目录）中的所有文件都有唯一的名称，并遵守 Kuberneteshttps://kubernetes.io/docs/concepts/overview/working-with-objects/names/[对象命名限制]。
+还应注意不要与 K3s 默认打包组件使用的名称冲突，即使这些组件已禁用。
 
-以下是一个错误示例，如果文件名包含下划线，将会报告该错误：
+下面是文件名中包含下划线时会报错的示例：
 
 ____
-`处理配置失败：无法处理 /var/lib/rancher/k3s/server/manifests/example_manifest.yaml：
-   Addon.k3s.cattle.io "example_manifest" 无效：metadata.name：无效值："example_manifest"：一个小写的 RFC 1123 子域名必须由小写字母数字字符、'-' 或 '.' 组成，并且必须以字母数字字符开头和结尾（例如 'example.com'，用于验证的正则表达式是 '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')`
+`处理配置失败：处理 /var/lib/rancher/k3s/server/manifests/example_manifest.yaml 失败：
+   Addon.k3s.cattle.io "example_manifest "无效： metadata.name：无效值："example_manifest"：小写 RFC 1123 子域必须由小写字母数字字符、"-"或".例如："example.com"，用于验证的 regex 为"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([a-z0-9])?[-a-z0-9]*)*"。`
 ____
 
 [WARNING]
 ====
-如果您有多个服务器节点，并且在多个服务器上放置额外的 AddOn 清单，您有责任确保这些文件在各个节点之间保持同步。K3s 不会在节点之间同步 AddOn 内容，如果不同的服务器尝试部署冲突的清单，则无法保证正确的行为。
+如果您有多个服务器节点，并在多个服务器上放置了额外的附加组件清单，您有责任确保文件在这些节点上保持同步。K3s 不会在节点之间同步 AddOn 内容，如果不同的服务器尝试部署相互冲突的清单，K3s 无法保证行为的正确性。
 ====
 
 
-== 禁用清单
+== 禁用 Manifests
 
-有两种方法可以禁用从清单目录中部署特定内容。
+有两种方法可以禁用清单目录中特定内容的部署。
 
 [#_using_the_disable_flag]
-=== 使用 `--disable` 标志
+=== 使用`--disable` 标志
 
-上述列出的打包组件的 AddOns，以及放置在 `manifests` 目录中的任何额外清单的 AddOns，可以使用 `--disable` 标志禁用。被禁用的 AddOns 会从集群中主动卸载，并且源文件会从 `manifests` 目录中去除。
+可以使用`--disable` 标志禁用上述打包组件的附加功能，以及放置在`manifests` 目录中的任何其他清单的附加功能。停用的附加功能会主动从群集中卸载，源文件也会从`manifests` 目录中删除。
 
-例如，要禁用在新集群上部署 traefik，或要卸载它并从现有集群中去除清单，您可以使用 `--disable=traefik` 启动 K3s。可以通过用逗号分隔名称或重复标志来禁用多个项目。
+例如，要禁止在新群集上安装 traefik，或者要卸载 traefik 并从现有群集中删除清单，可以使用`--disable=traefik` 启动 K3s。用逗号分隔名称或重复标记，可禁用多个项目。
 
 === 使用 .skip 文件
 
-对于 `/var/lib/rancher/k3s/server/manifests` 下的任何文件，您可以创建一个 `.skip` 文件，这将导致 K3s 忽略相应的清单。`.skip` 文件的内容无关紧要，只检查其存在。请注意，在 AddOn 已经创建后创建 `.skip` 文件不会删除或以其他方式修改它或它创建的资源；该文件将被简单地视为不存在。
+对于`/var/lib/rancher/k3s/server/manifests` 下的任何文件，都可以创建一个`.skip` 文件，使 K3s 忽略相应的清单。`.skip` 文件的内容并不重要，重要的是检查它是否存在。请注意，在创建 AddOn 后创建`.skip` 文件不会删除或以其他方式修改 AddOn 或其创建的资源；该文件只会被视为不存在。
 
-例如，在第一次启动 K3s 之前，在清单目录中创建一个空的 `traefik.yaml.skip` 文件，将导致 K3s 跳过部署 `traefik.yaml`：
+例如，在首次启动 K3s 之前在 manifests 目录中创建一个空的`traefik.yaml.skip` 文件，会导致 K3s 跳过部署`traefik.yaml` ：
 
 [,bash]
 ----
@@ -68,8 +68,8 @@ kube-system   metrics-server-5489f84d5d-7zwkt          1/1     Running   0      
 kube-system   coredns-85cb69466-vcq7j                  1/1     Running   0          74s
 ----
 
-如果在创建 `traefik.skip` 文件之前已经部署了 Traefik，Traefik 将保持不变，并且在 K3s 升级时不会受到未来更新的影响。
+如果在创建`traefik.skip` 文件之前已经部署了特拉菲克，特拉菲克将保持原样，不会受到 K3s 升级时未来更新的影响。
 
-== Helm AddOns
+== 舵手插件
 
-有关通过自动部署清单管理 Helm 图表的信息，请参阅关于 xref:add-ons/helm.adoc[Helm.] 的部分。
+有关通过自动部署清单管理 Helm 图表的信息，请参阅有关xref:add-ons/helm.adoc[Helm]的章节。
