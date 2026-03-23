@@ -1,0 +1,41 @@
+= 派生ステート・モニター
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+== 概要
+
+論理(ビジネス)コンポーネントに直接のモニタはないが、技術的な依存関係の問題の影響を受けるObservabilityシナリオでは、派生状態モニタ関数を使用して、論理コンポーネントに接続された技術コンポーネントから状態を導出できます。
+このモニターは、コンポーネントの依存関係をトラバースし、（例えばメトリクスからの）直接的な観察に基づいて、最もクリティカルな健全性の状態を選択する。これは、`+componentTypes+` パラメータで選択されたすべてのコンポーネントに派生状態を適用する。
+トラバーサル中に、観測された（導出されていない）健康状態を持つコンポーネントのみが、健康導出のために考慮される。派生状態を持つコンポーネントは評価でスキップされるが、より深い依存関係--例えば、他の論理コンポーネントに依存する論理コンポーネントに到達するためにトラバースされる。
+
+== 派生健康状態モニターの例
+
+`+derived-state-monitor+` 関数を使って実装されたモニターは次のようになる：
+
+----
+  - _type: "Monitor"
+    name: "Aggregated health state of a Deployment, StatefulSet, ReplicaSet and DaemonSet"
+    tags:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+      - derived
+      - propagated
+    identifier: "urn:custom:monitor:..."
+    status: "DISABLED"
+    description: "Description"
+    function: {{ get "urn:stackpack:common:monitor-function:derived-state-monitor" }}
+    arguments:
+      componentTypes: "deployment, replicaset, statefulset, daemonset"
+    intervalSeconds: 30
+    remediationHint: "Investigate component [{{ causeComponentName }}](/#/components/{{ causeComponentUrnForUrl }}) as is causing the workload to be unhealthy."
+----
+
+* この関数の引数は`+componentTypes+` で、`+,+` で区切られた値の文字列として、さまざまなコンポーネントタイプを表現することができます。
+* この関数は、修復ガイドで使用する3つの値を提供する。
+ ** `+componentName+` 論理コンポーネントの名前。
+ ** `+causeComponentName+` は、状態が伝搬されるコンポーネント名で、リンクを作成できるように`+causeComponentUrnForUrl+` 。
+
+xref:/use/alerting/k8s-add-monitors-cli.adoc[CLIを使用してコンポーネントに閾値モニターを追加する]。
