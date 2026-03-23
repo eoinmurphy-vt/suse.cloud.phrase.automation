@@ -1,0 +1,218 @@
+include::partial$variables.adoc[]
+= {short-project-name} ウェブフックのハード化
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:sidebar_label: ウェブフック
+:description: ネットワークポリシーと認証を設定して、Kubernetesクラスタ内のWebhookへのアクセスを制限し、特に無効な呼び出し元からの接続を制限します。
+:keywords: kubewarden, kubernetes, セキュリティ
+:doc-persona: キューブウォーデンオペレーター、キューブウォーデンインテグレーター
+:doc-type: 参照
+:doc-topic: リファレンス、セキュリティ
+
+{project-name} スタックは、Kubernetesクラスタでポリシーを実施するためにWebhookを使用する。
+各`+PolicyServer+` インスタンスは、Kubernetes API サーバーがリソースの検証と変異を行うために呼び出す Webhook を公開している。さらに、`+kubewarden-controller+`は、{short-project-name} プロジェクトが提供するカスタム・リソースを検証し、変異させるためのウェブフックを公開している。
+
+攻撃対象を減らすために、これらのWebhookへのアクセスを、有効な呼び出し元だけに制限する必要がある：
+
+* Kubernetes APIサーバー
+* xref:/explanations/audit-scanner/audit-scanner.adoc[監査スキャナーの]コンポーネント。
+
+ネットワーク・ポリシーと認証を別々に、あるいは一緒に使って、攻撃からウェブフックを守ることができる。
+
+== ネットワークポリシーを使用して外部トラフィックをブロック
+
+Webhookは、Kubernetes APIサーバと監査スキャナコンポーネントからのリクエストのみを受け付けることが想定されている。しかし、デフォルトでは、ウェブフックはどのソースからのトラフィックも受け入れることができる。ネットワークポリシーをサポートするContainer Network Interface（CNI）を使用している場合は、APIサーバーから発信されないトラフィックをブロックするポリシーを作成できます。
+
+Kubernetesに組み込まれたNetworkPolicyリソースは、クラスタホストからのトラフィックをブロックしたり許可したりすることはできない。また、`+kube-apiserver+` プロセスは常にホスト・ネットワーク上で実行されている。したがって、使用中のCNIの高度なネットワークポリシーリソースを使用する必要があります。CalicoとCiliumの例が続く。詳細については、お使いのCNIのマニュアルを参照してください。
+
+=== キャラコ
+
+`+crd.projectcalico.org/v1+` APIグループのNetworkPolicyリソースを使用して、以下のようなネットワークポリシーを定義します：
+
+[source,yaml]
+----
+apiVersion: crd.projectcalico.org/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-k8s-and-audit-scanner
+  namespace: kubewarden
+spec:
+  selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+  types:
+    - Ingress
+  ingress:
+    - action: Allow
+      protocol: TCP
+      source:
+        nets:
+        - 192.168.42.0/24
+      destination:
+        selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+    - action: Allow
+      protocol: TCP
+      source:
+        namespaceSelector: 'kubernetes.io/metadata.name == "kubewarden"'
+      destination:
+        selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+----
+
+[NOTE]
+====
+
+このネットワークポリシーは、{short-project-name} 1.23.0で導入されたラベルセレクタを使用する。古いバージョンを使用している場合は、ポリシー内のラベルを展開に合わせて更新します。
+
+具体的には
+
+[source,yaml]
+----
+selector: 'app.kubernetes.io/component in {"kubewarden-controller", "policy-server"}'
+----
+
+セレクタとして使用する：
+
+[source,yaml]
+----
+selector: 'app.kubernetes.io/name == "kubewarden-controller" || has(kubewarden/policy-server)'
+----
+====
+
+=== 繊毛
+
+`+cilium.io/v2+` API グループの CiliumNetworkPolicy リソースを使用して、次のようなネットワーク・ポリシーを定義します：
+
+[source,yaml]
+----
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-k8s-and-audit-scanner
+  namespace: kubewarden
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - policy-server
+          - controller
+  ingress:
+    - fromEntities:
+      - host
+      - remote-node
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kubewarden
+----
+
+[NOTE]
+====
+
+このネットワークポリシーは、{short-project-name} 1.23.0で導入されたラベルセレクタを使用する。古いバージョンを使用している場合は、ポリシー内のラベルを展開に合わせて更新します。
+
+具体的には
+
+[source,yaml]
+----
+matchExpressions:
+  - key: app.kubernetes.io/component
+    operator: In
+    values:
+      - policy-server
+      - controller
+----
+
+と表現する：
+
+[source,yaml]
+----
+endpointSelector:
+matchExpressions:
+  - key: app.kubernetes.io/name
+    operator: In
+    values:
+      - kubewarden-controller
+  - key: kubewarden/policy-server
+    operator: Exists
+----
+====
+
+== Kubernetes API ServerがWebhookに対して認証する必要がある
+
+[TIP]
+====
+
+K3sのKubernetes APIサーバーがWebhookに認証するための設定方法については、xref:/howtos/security-hardening/webhook-mtls.adoc[webook mTLS how-toを]参照してください。
+
+====
+
+{short-project-name} スタックによって公開されるウェブフックは、Kubernetes API サーバーまたは監査スキャナーコンポーネントからのリクエストのみを受け付ける必要があります。デフォルトでは、これらのウェブフックはクライアントの認証を必要としない。どんなリクエストにも応えてくれる。
+
+APIサーバーと監査スキャナー・プロセスだけがアクセスできるように、認証情報を必要とするようにWebhookを構成することができる。詳細はhttps://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#authenticate-apiservers[Kubernetes documentation]を参照。
+
+. `+ValidatingAdmissionWebhook+` と`+MutatingAdmissionWebhook+` プラグインを設定するための`+AdmissionConfiguration+` ファイルを指して、クライアント証明書を Webhook に提示するように API サーバを設定する：
++
+以下の内容で、`+admission.yaml+` という名前のファイルを作成する：
++
+[source,yaml]
+----
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: ValidatingAdmissionWebhook
+ configuration:
+   apiVersion: apiserver.config.k8s.io/v1
+   kind: WebhookAdmissionConfiguration
+   kubeConfigFile: "/etc/k8s/admission/kubeconfig"
+- name: MutatingAdmissionWebhook
+ configuration:
+   apiVersion: apiserver.config.k8s.io/v1
+   kind: WebhookAdmissionConfiguration
+   kubeConfigFile: "/etc/k8s/admission/kubeconfig"
+----
++
+これは、`+PodSecurity+` など、他のプラグインの設定に使われるものと同じ設定ファイルです。あなたのディストリビューションやセットアップが追加の入場プラグインを使用している場合は、それらも設定する必要があります。
+
+. 入場プラグインが参照する`+kubeconfig+` ファイルを作成します。{short-project-name} はクライアント証明書認証にのみ対応しているため、TLS キーペアを生成し、client-certificate と client-key、または client-certificate-data と client-key-data のいずれかを使用するように kubeconfig を設定します。
++
+例えば、こうだ：
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Config
+users:
+- name: '*.kubewarden.svc'
+  user:
+    client-certificate: /path/to/client/cert
+    client-key: /path/to/client/key
+----
+
+. `+AdmissionConfiguration+`ファイルを指すフラグ`+--admission-control-config-file+` を付けて`+kube-apiserver+` バイナリを起動する。これを行う方法はディストリビューションによって異なり、ホスト型のKubernetesプロバイダーなど、普遍的にサポートされているわけではない。お使いのKubernetesディストリビューションのドキュメントを参照してください。
+
+. APIサーバーのクライアント証明書を発行したルートCAの証明書を、{short-project-name} スタックで利用できるようにする。
++
+そのコンテンツを、`+client-ca.crt+` というキーを使って、`+kubewarden+`ネームスペース下の`+ConfigMap+` に入れる。
++
+ルートCAが`+/etc/k8s/admission/certs/rootCA.crt+` 、以下のコマンドで`+ConfigMap+` ：
++
+[source,console]
+----
+kubectl create configmap -n kubewarden api-server-mtls \
+   --from-file=client-ca.crt=/etc/k8s/admission/certs/rootCA.crt
+----
+
+. 最後に、`+kubewarden-controller+` Helmチャートをインストールする際、以下の値を有効にしてください：
++
+- `+mTLS.enable+` を`+true+` に設定する。
+- `+mTLS.configMapName+` 、以前に作成した`+ConfigMap+` の名前を設定する。
++
+`+ConfigMap+` の名前は`+api-server-mtls+` で、`+kubewarden-controller+` をインストールする Helm コマンドは次のようになる：
++
+[source,console]
+----
+helm install --wait -n kubewarden kubewarden-controller kubewarden/kubewarden-controller \
+   --set mTLS.enable=true \
+   --set mTLS.configMapName=api-server-mtls
+----
++
+{short-project-name} コントローラは、監査スキャナコンポーネントが使用するクライアント証明書を作成する。証明書は、必要なときにコントローラによって自動的に回転される。
