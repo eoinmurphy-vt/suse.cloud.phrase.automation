@@ -1,0 +1,269 @@
+= 所需权限
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 概述
+
+SUSE Observability 自身的所有组件均可运行，无需任何额外权限。不过，要成功安装 SUSE Observability，您需要一些额外的权限，或确保满足本页所述的要求。
+
+== 服务对服务的认证和授权
+
+为了允许 SUSE Observability 服务之间进行通信，SUSE Observability 使用 Kubernetes 服务账户。为了验证它们的有效性和作用，舵手图创建了`+ClusterRole+` 和`+ClusterRoleBinding+` 资源。不是 Kubernetes/OpenShift 管理员的用户通常无法创建这些集群范围内的资源。在这种情况下，可以禁用创建功能，而由群集管理员xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_manually_create_cluster_wide_resources[手动创建]角色和角色绑定。
+
+=== 禁用自动创建全群集资源
+
+在用于安装 SUSE Observability 的`+values.yaml+` 文件中添加以下部分，即可禁用在安装 SUSE Observability 时自动创建全集群资源的功能：
+
+[tabs]
+====
+values.yaml::
++
+--
+
+[,yaml]
+----
+cluster-role:
+  enabled: false
+----
+
+--
+====
+
+[NOTE]
+====
+如果已禁用创建群集角色和群集角色绑定，请务必按照以下xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_manually_create_cluster_wide_resources[说明]手动创建它们。
+====
+
+
+=== 手动创建整个群集的资源
+
+如果需要手动创建整个集群的资源，请让 Kubernetes/OpenShift 管理员在 Clsuter 中创建以下 3 个资源。
+
+[NOTE]
+====
+验证是否为绑定`+ServiceAccount+` 的两个`+ClusterRoleBinding+` 资源指定了正确的服务帐户和命名空间。示例假定使用了`+suse-observability+` 命名空间，并将`+suse-observability+` 用作版本，如果使用了其他命名空间，则更改示例中的命名空间。此外，需要将引用的服务帐户更改为`+<release>-suse-observability-api+` 。
+====
+
+
+[tabs]
+====
+clusterrole-authorization.yaml::
++
+--
+
+[,yaml]
+----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: suse-observability-authorization
+rules:
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - list
+----
+
+--
+====
+
+[tabs]
+====
+clusterrolebinding-authentication.yaml::
++
+--
+
+[,yaml]
+----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: suse-observability-authentication
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: suse-observability-api
+  namespace: suse-observability
+----
+
+--
+====
+
+[tabs]
+====
+clusterrolebinding-authorization.yaml::
++
+--
+
+[,yaml]
+----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: suse-observability-authorization
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: suse-observability-authorization
+subjects:
+- kind: ServiceAccount
+  name: suse-observability-api
+  namespace: suse-observability
+----
+
+--
+====
+
+== 舱位安全标准
+
+如果您的 Kubernetes 集群已 https://kubernetes.io/docs/concepts/security/pod-security-standards/[启用]，则需要为`+suse-observability+` 命名空间配置适当的安全策略。SUSE Observability 需要基线 Pod 安全标准才能正常运行。
+
+=== 配置 Pod 安全标准
+
+将基线 Pod 安全标准应用到`+suse-observability+` 命名空间：
+
+[,bash]
+----
+kubectl label ns suse-observability pod-security.kubernetes.io/enforce=baseline --overwrite
+kubectl label ns suse-observability pod-security.kubernetes.io/audit=baseline --overwrite
+kubectl label ns suse-observability pod-security.kubernetes.io/warn=baseline --overwrite
+----
+
+[NOTE]
+====
+如果在群集中启用了 Pod 安全标准，则必须确保在部署 SUSE Observability 之前正确配置 Elasticsearch 先决条件。
+由于基线 Pod 安全标准不允许使用特权容器，因此您需要按照xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_elasticsearch[说明]在主机级别配置所需的`+vm.max_map_count+` 内核参数。
+====
+
+
+== Elasticsearch
+
+SUSE Observability 使用 Elasticsearch 来存储索引。对于运行 Elasticsearch 的节点还有一些额外要求。
+
+由于`+vm.max_map_count+` Linux 系统设置通常低于 Elasticsearch 启动所需的设置，因此使用了以特权模式和根用户身份运行的 init 容器。init 容器默认为启用，以便更改`+vm.max_map_count+` 系统设置。
+
+=== 禁用具有特权的 Elasticsearch 启动容器
+
+如果您或您的 Kubernetes/OpenShift 管理员不希望默认启用 Elasticsearch 启动容器特权，可以在用于安装 SUSE Observability 的文件`+values.yaml+` 中禁用此行为：
+
+[tabs]
+====
+values.yaml::
++
+--
+
+[,yaml]
+----
+elasticsearch:
+  sysctlInitContainer:
+    enabled: false
+----
+
+--
+====
+
+[NOTE]
+====
+如果禁用，则需要确保将`+vm.max_map_count+` 设置从常用默认值`+65530+` 更改为`+262144+` 。如果不这样做，Elasticsearch 将无法启动，其 pod 将陷入重启循环。
+====
+
+
+要查看当前`+vm.max_map_count+` 设置，请运行以下命令。请注意，它运行的是特权 pod：
+
+[,text]
+----
+kubectl run -i --tty sysctl-check-max-map-count --privileged=true  --image=busybox --restart=Never --rm=true -- sysctl vm.max_map_count
+----
+
+如果当前的`+vm.max_map_count+` 设置至少不是`+262144+` ，则需要以其他方式增加设置，否则 Elasticsearch 将无法启动，其 pod 将陷入重启循环。日志将包含如下错误信息：
+
+[,text]
+----
+bootstrap checks failed
+max virtual memory areas vm.max_map_count [65530] is too low, increase to at least [262144]
+----
+
+=== 为 Elasticsearch 增加 Linux 系统设置
+
+根据 Kubernetes/OpenShift 管理员的偏好，可以通过更改默认节点配置（例如通过启动脚本）或在节点启动后让 DaemonSet 执行此操作，在所有节点上将`+vm.max_map_count+` 设置为更高的默认值。前者在很大程度上取决于您的计算机设置，因此没有通用的解决方案。
+
+下面的示例可作为 DaemonSet 更改`+vm.max_map_count+` 设置的起点：
+
+[,yaml]
+----
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: set-vm-max-map-count
+  namespace: kube-system
+  labels:
+    k8s-app: set-vm-max-map-count
+spec:
+  selector:
+    matchLabels:
+      name: set-vm-max-map-count
+  template:
+    metadata:
+      labels:
+        name: set-vm-max-map-count
+    spec:
+      # Make sure the setting always gets changed as soon as possible:
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready
+        operator: Exists
+      # Optional node selector (assumes nodes for Elasticsearch are labeled `+elasticsearch:yes+`
+      # nodeSelector:
+      #  elasticsearch: yes
+      initContainers:
+        - name: set-vm-max-map-count
+          image: busybox
+          securityContext:
+            runAsUser: 0
+            privileged: true
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          resources:
+            limits:
+              cpu: 100m
+              memory: 100Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+      # A pause container is needed to prevent a restart loop of the pods in the daemonset
+      # See also this Kubernetes issue https://github.com/kubernetes/kubernetes/issues/36601
+      containers:
+        - name: pause
+          image: busybox
+          command: ["sleep", "infinity"]
+          resources:
+            limits:
+              cpu: 50m
+              memory: 50Mi
+            requests:
+              cpu: 50m
+              memory: 50Mi
+----
+
+为了限制适用的节点数量，可以对节点进行标记。如示例所示，该 DaemonSet 和 Elasticsearch 部署上的 NodeSelectors 都可以设置为只在带有特定标签的节点上运行。对于 Elasticsearch，可以通过值指定节点选择器：
+
+[,yaml]
+----
+elasticsearch:
+  nodeSelector:
+    elasticsearch: yes
+  sysctlInitContainer:
+    enabled: false
+----
+
+== 另见
+
+* xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[在 Kubernetes 上安装 SUSE Observability]
+* xref:/setup/install-stackstate/kubernetes_openshift/openshift_install.adoc[在 OpenShift 上安装 SUSE Observability]
