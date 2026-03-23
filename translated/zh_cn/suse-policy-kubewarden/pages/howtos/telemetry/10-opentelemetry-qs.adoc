@@ -1,0 +1,141 @@
+include::partial$variables.adoc[]
+= 打开遥测快速启动
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用官方的 Kubernetes Helm 图表，以侧车模式配置和部署 OpenTelemetry 收集器，以实现简单、增强的部署。
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "telemetry", "opentelemetry", "quick-start"]
+:doc-type: ["howto"]
+:keywords: ["kubewarden", "kubernetes", "opentelemetry", "open telemetry", "quickstart"]
+:sidebar_label: 打开遥测
+:current-version: {page-origin-branch}
+
+https://opentelemetry.io/[OpenTelemetry]是云原生计算基金会（CNCF）的一个可观测性框架。它使您的微服务能够提供指标、日志和跟踪。
+
+{project-name}其组件使用 OpenTelemetry SDK 向 OpenTelemetry 收集器（称为代理）报告数据。
+
+本指南介绍如何使用 Kubernetes Helm 官方图表在`+sidecar+` 模式下部署 OpenTelemetry 收集器。
+
+这是一种使用 OpenTelemetry 的简单部署模式。它的最终设置是这样的：
+
+* {short-project-name} 堆栈的每个 Pod（策略服务器、控制器）都有一个 OpenTelemetry 侧卡。
+* 通过 OpenTelemetry Protocol (OTLP)，副车从{short-project-name} 组件接收跟踪和监控信息
+* OpenTelemetry 采集器：
+ ** 将跟踪事件发送到中央 Jaeger 实例
+ ** 公开特定端口上的 Prometheus 指标
+
+{short-project-name} Helm 图表并未涵盖 OpenTelemetry 采集器的所有可能部署方案。还可以配置{short-project-name} ，将数据发送到 OpenTelemetry 收集器。有关这种情况的文档，请参阅xref:./40-custom-otel-collector.adoc[自定义 OpenTelemetry 指南]。
+
+首先在 Kubernetes 集群中部署 OpenTelemetry，这样就可以在下面专门讨论跟踪和度量的章节中使用它。
+
+== 建立 Kubernetes 集群
+
+[NOTE]
+====
+本节将逐步说明如何为遥测快速启动创建 Kubernetes 集群。
+
+如果您已经有一个可用的 Kubernetes 集群，请随意跳过本节。
+====
+
+您可以使用https://minikube.sigs.k8s.io/docs/[minikube] 创建一个用于测试的 Kubernetes 集群。
+
+Minikube 有许多后端，在这种情况下，您可以使用依赖于 libvirt 的https://minikube.sigs.k8s.io/docs/drivers/kvm2/[] kvm2 驱动程序。
+
+假设`+libvirtd+` 已在计算机上正确运行，请执行以下命令：
+
+[subs="+attributes",console]
+----
+minikube start --driver=kvm2
+----
+
+该命令的输出结果类似于下面的内容：
+
+[subs="+attributes",console]
+----
+$ minikube start --driver=kvm2
+😄  minikube v1.23.2 on Opensuse-Leap 15.3
+✨  Using the kvm2 driver based on user configuration
+👍  Starting control plane node minikube in cluster minikube
+🔥  Creating kvm2 VM (CPUs=2, Memory=6000MB, Disk=20000MB) ...
+🐳  Preparing Kubernetes v1.22.2 on Docker 20.10.8 ...
+    ▪ Generating certificates and keys ...
+    ▪ Booting up control plane ...
+    ▪ Configuring RBAC rules ...
+🔎  Verifying Kubernetes components...
+    ▪ Using image gcr.io/k8s-minikube/storage-provisioner:v5
+🌟  Enabled addons: storage-provisioner, default-storageclass
+🏄  Done! kubectl is now configured to use "minikube" cluster and "default" namespace by default
+----
+
+集群准备就绪后，您可以继续阅读本指南的其余部分。
+
+=== 安装特拉菲克
+
+在使用 Kubernetes`+Ingress+`资源公开 Jaeger UI 时，以下遥测指南使用https://traefik.io/traefik/[Traefik]作为 Ingress 控制器。
+
+使用 Helm 图表安装特莱菲克：
+
+[,console]
+----
+helm repo add traefik https://traefik.github.io/charts
+helm repo update
+
+helm install --wait \
+  --namespace traefik \
+  --create-namespace \
+  traefik traefik/traefik
+----
+
+以下指南通过`+ingressClassName: traefik+` 创建标准 Kubernetes`+Ingress+` ，并通过特莱飞客服务路由 Jaeger 查询用户界面。
+
+如果你不想安装特拉菲克，追踪指南也会保留`+kubectl port-forward+` 作为直接访问 Jaeger 的备用方法。
+
+[#install-opentelemetry]
+== 安装 OpenTelemetry
+
+[NOTE]
+====
+有关最新支持的组件版本，请参见xref:/reference/dependency-matrix.adoc[依赖关系矩阵]。
+====
+
+您可以使用https://github.com/open-telemetry/opentelemetry-operator[OpenTelemetry Operator] 来管理 OpenTelemetry Collector sidecar 到 PolicyServer pod 的自动注入。
+
+OpenTelemetry Operator 需要在集群中安装https://cert-manager.io/docs/installation/[cert-manager]。
+
+
+[subs="+attributes",console]
+----
+helm repo add jetstack https://charts.jetstack.io
+
+helm install --wait \
+    --namespace cert-manager \
+    --create-namespace \
+    --set crds.enabled=true \
+    --version 1.18.2 \
+    cert-manager jetstack/cert-manager
+----
+
+一旦 cert-manager 运行，就可以安装 OpenTelemetry 操作员 Helm 图表：
+
+[NOTE]
+====
+
+在撰写本报告时（2024-11-11），OpenTelemetry 操作员图表的最新版本是 `+0.65.0+`
+
+====
+
+[subs="+attributes",console]
+----
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+
+helm install --wait \
+  --namespace open-telemetry \
+  --create-namespace \
+  --version 0.97.1 \
+  --set "manager.collectorImage.repository=otel/opentelemetry-collector-contrib" \
+  my-opentelemetry-operator open-telemetry/opentelemetry-operator
+----
+
+== OpenTelemetry 集成
+
+现在可以进入下一章，启用应用程序指标（通过 Prometheus 集成）和应用程序跟踪（通过 Jaeger 集成）。
