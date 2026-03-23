@@ -1,0 +1,468 @@
+= MachineRegistration-Referenz
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Die Ressource MachineRegistration ermöglicht:
+
+* um den Registrierungsprozess zu konfigurieren
+* zur Bereitstellung von Parametern für die Betriebssysteminstallation
+* um die xref:rancher-os-management/architecture/services/architecture-services.adoc[{elemental-product-name} Dienste] zu definieren, die für den registrierenden Rechner aktiviert sind. Nach der Erstellung wird die Registrierungs-URL generiert, die von den Knoten verwendet wird, um sich zu registrieren und den xref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[Onboarding-Prozess des Rechners] zu starten.
+
+Die MachineRegistration hat eine `+Ready+` Bedingung, die wahr wird, wenn {elemental_operator_name} erfolgreich die Registrierungs-URL und eine zugehörige `+ServiceAccount+` generiert hat. Von diesem Zeitpunkt an kann der Zielhost eine Verbindung mit der Registrierungs-URL herstellen, um den Bereitstellungsprozess zu starten.
+
+Eine HTTP-GET-Anfrage an die Registrierungs-URL gibt die _Registrierungsdatei_ zurück: eine .yaml-Datei, die die Registrierungsdaten enthält (d. h. den Abschnitt _spec:config:elemental:registration_ aus der gerade erstellten MachineRegistration).
+Die Registrierungsdatei enthält alle erforderlichen Daten, damit der Zielhost die Selbstregistrierung durchführen und die Bereitstellung von {elemental-product-name} starten kann.
+
+Es gibt mehrere Schlüssel, die unter einer `+MachineRegistration+` resource spec konfiguriert werden können.
+
+.MachineRegistration
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineName: name
+  machineInventoryLabels:
+    label: value
+  machineInventoryAnnotations:
+    annotation: value
+  config:
+    cloud-config:
+        ...
+    elemental:
+        registration:
+            ...
+        install:
+            ...
+----
+
+== `+config.cloud-config+`
+
+Enthält die Cloud-Konfiguration, die in den Knoten injiziert werden soll.
+Sowohl die yip- als auch die cloud-init-Syntax werden unterstützt. Ausführliche Informationen finden Sie in der xref:references/cloud-config-reference.adoc[Cloud-Konfigurationsreferenz].
+
+== `+config.network+`
+
+Enthält die deklarative Netzwerkkonfiguration, die die Integration mit https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220125-ipam-integration.md#ipam-provider[CAPI IPAM-Providern] unterstützt. +
+Weitere Informationen finden Sie in der xref:operator-operational-tasks/declarative-networking/networking.adoc[deklarativen Netzwerkreferenz].
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| configurator
+| String
+| nmc
+| Der zu verwendende Netzwerkkonfigurator (`+nmc+`, `+nmstate+`, oder `+nmconnections+`)
+
+| ipAddresses
+| objRefMap
+| leer
+| Eine Karte der `+IPPool+` Referenzen. Map-Schlüssel können für die IP-Adressensubstitution in der Netzwerkkonfigurationsvorlage verwendet werden.
+
+| Konfiguration
+| obj
+| leer
+| Die Netzwerkkonfigurationsvorlage. Die Syntax hängt von der verwendeten `+configurator+` ab.
+|===
+
+== `+config.elemental.registration+`
+
+Enthält die für die Verbindung und die Erstregistrierung auf {elemental_operator_name} verwendete Konfiguration.
+
+Unterstützt die folgenden Werte:
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| url
+| String
+| leer
+| URL zur Verbindung mit dem {elemental_operator_name}
+
+| ca-cert
+| String
+| leer
+| CA zur Validierung des vom Server unter 'url' bereitgestellten Zertifikats (erforderlich, wenn das Zertifikat nicht von einer öffentlichen CA signiert ist)
+
+| no-smbios
+| bool
+| falsch
+| Ob SMBIOS-Daten an den Server gesendet werden sollen {elemental_operator_name}
+
+| kein Toolkit
+| bool
+| falsch
+| Deaktiviert die Unterstützung von {elemental_toolkit_url}[{elemental_toolkit_name"}] und ermöglicht die Registrierung eines xref:operator-operational-tasks/unmanaged-os.adoc[nicht verwalteten Betriebssystems]
+|===
+
+[CAUTION]
+====
+Die folgenden Werte sind nur für Entwicklungszwecke gedacht.
+====
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| Autorisierung
+| String
+| tpm
+| Bei der Registrierung zu verwendende Authentifizierungsmethode, eine von `+tpm+`, `+mac+` oder `+sys-uuid+`. Siehe xref:rancher-os-management/authentication.adoc[Authentifizierung] für weitere Informationen 
+
+| emulate-tpm
+| bool
+| falsch
+| Hier wird eine Software-Emulation des TPMs verwendet (erforderlich für Hosts ohne TPM-Hardware)
+
+| emulierte-tpm-Saatgut
+| int64
+| 1
+| Seed zur Verwendung mit 'emulate-tpm' korrigiert. Setzen Sie den Wert auf -1, um einen Zufallswert zu erhalten. Siehe xref:operator-operational-tasks/tpm.adoc[TPM] für weitere Informationen
+|===
+
+== `+config.elemental.install+`
+
+Enthält die Installationskonfiguration, die beim Booten von einer ISO-Datei über `+elemental-register --install+` angewendet und an https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental_install.md[`+elemental install+`]
+
+Unterstützt die folgenden Werte:
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| Firmware
+| String
+| efi
+| Zu installierende Firmware ('efi' oder 'bios')
+
+| Gerät
+| String
+| leer
+| Gerät zur Installation des Systems auf
+
+| Geräteselektor
+| String
+| leer
+| Regeln für die Auswahl des Geräts, auf dem das System installiert werden soll
+
+| no-format
+| bool
+| falsch
+| Formatieren Sie keine Disketten. Es wird vorausgesetzt, dass die Partitionen COS_STATE, COS_RECOVERY, COS_PERSISTENT und COS_OEM bereits auf der Zielplatte vorhanden sind.
+
+| config-urls
+| Liste
+| leer
+| Speicherorte der Cloud-init-Konfigurationsdateien
+
+| iso
+| String
+| leer
+| Führt eine Installation von der ISO-Url anstelle der laufenden ISO durch
+
+| system-uri
+| String
+| leer
+| Legt die Quelle des Systemabbilds und dessen Typ fest (z. B. 'docker:registry.org/image:tag'), anstatt das laufende ISO zu verwenden
+
+| Fehlersuche
+| bool
+| falsch
+| Debug-Ausgabe einschalten
+
+| tty
+| String
+| leer
+| Benanntes tty zu grub hinzufügen
+
+| Ausschalten
+| bool
+| falsch
+| Herunterfahren des Systems nach der Installation
+
+| Neustart
+| bool
+| falsch
+| Starten Sie das System nach der Installation neu
+
+| snapshotter
+| obj
+| leer
+| Snapshotter-Konfiguration. Siehe <<#_config_elemental_install_snapshotter,`+config.elemental.install.snapshotter+`.>>
+
+| auswerfen-cd
+| bool
+| falsch
+| Versuchen Sie, die CD beim Neustart auszuwerfen
+|===
+
+[CAUTION]
+====
+Wenn sowohl `+iso+` als auch `+system-uri+` verwendet werden, hat der Wert `+iso+` Vorrang.
+====
+
+Für eine erfolgreiche Installation ist nur die Angabe der Felder `+device+` oder `+device-selector+` erforderlich, die übrigen Parameter sind optional.
+
+Wenn sowohl `+device+` als auch `+device-selector+` angegeben sind, wird der Wert von `+device+` verwendet und `+device-selector+` ignoriert.
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      install:
+        device: /dev/sda
+        debug: true
+        reboot: true
+        eject-cd: true
+        system-uri: registry.suse.com/rancher/sle-micro/5.5:latest
+----
+====
+
+== `+config.elemental.install.device-selector+`
+
+Das Feld `+device-selector+` kann verwendet werden, um das Gerät während der Installation dynamisch auszuwählen. Das Feld enthält eine Liste von Regeln, die wie folgt aussieht:
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+.Beispiel Geräteselektor basierend auf dem Gerätenamen
+[,yaml]
+----
+device-selector:
+  - key: Name
+    operator: In
+    values:
+      - /dev/sda
+      - /dev/vda
+      - /dev/nvme0
+----
+====
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+.Beispiel Geräteselektor basierend auf der Gerätegröße
+[,yaml]
+----
+device-selector:
+  - key: Size
+    operator: Lt
+    values:
+      - 100Gi
+  - key: Size
+    operator: Gt
+    values:
+      - 30Gi
+----
+====
+
+Die derzeit unterstützten Operatoren sind:
+
+|===
+| Operator | Beschreibung
+
+| In
+| Der Schlüssel entspricht einem der angegebenen Werte
+
+| NotIn
+| Der Schlüssel stimmt mit keinem der angegebenen Werte überein
+
+| Gt
+| Der Schlüssel ist größer als ein einzelner angegebener Wert
+
+| Lt
+| Der Schlüssel ist kleiner als ein einzelner angegebener Wert
+|===
+
+Die derzeit unterstützten Tasten sind:
+
+|===
+| Schlüssel | Beschreibung
+
+| Name
+| Der Gerätename (z. B. /dev/sda)
+
+| Größe
+| Die Größe des Geräts (Werte können über Kubernetes-Ressourcen angegeben werden, z. B. 100Gi)
+|===
+
+Die Regeln werden UND-verknüpft, d. h. alle Regeln müssen mit dem Zielgerät übereinstimmen.
+
+== `+config.elemental.install.snapshotter+`
+
+Sie können konfigurieren, wie Elemental Snapshots auf dem installierten Rechner verwaltet. Neue Snapshots werden zum Beispiel erstellt, wenn der Rechner mit einem neuen Betriebssystem-Image xref:node-operational-tasks/upgrade.adoc[aktualisiert wird].
+
+Der loopdevice-Snapshotter packt neue Images auf einem ext4-Dateisystem aus, während der btrfs-Snapshotter die zugrunde liegende https://archive.kernel.org/oldwiki/btrfs.wiki.kernel.org/index.php/SysadminGuide.html#Snapshots[`+btrfs+` Snapshots-Funktionalität] nutzt, wodurch der für die Speicherung mehrerer Snapshots benötigte Plattenplatz erheblich reduziert wird.
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| Typ
+| String
+| loopdevice
+| Typ des Geräts, das zur Verwaltung von Snapshots in Betriebssystem-Images verwendet wird ("loopdevice" oder "btrfs").
+
+|===
+
+== `+config.elemental.reset+`
+
+Enthält die Reset-Konfiguration, die über `+elemental-register --reset+` angewendet wird, wenn von der Wiederherstellungspartition gebootet und an https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental_reset.md[`+elemental reset+`]
+
+Unterstützt die folgenden Werte:
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| aktiviert
+| bool
+| falsch
+| Bei MachineInventories, die von dieser MachineRegistration erstellt werden, ist die Rücksetzfunktion aktiviert.
+
+| reset-persistent
+| bool
+| true
+| Formatieren Sie die Partition COS_PERSISTENT
+
+| reset-oem
+| bool
+| true
+| Formatieren Sie die Partition COS_OEM
+
+| config-urls
+| Liste
+| leer
+| Cloud-init-Konfigurationsdateien
+
+| system-uri
+| String
+| leer
+| Legt die Quelle des Systemabbilds und dessen Typ fest (z. B. 'docker:registry.org/image:tag'), anstatt das laufende ISO zu verwenden
+
+| Fehlersuche
+| bool
+| falsch
+| Debug-Ausgabe einschalten
+
+| Ausschalten
+| bool
+| falsch
+| Herunterfahren des Systems nach dem Zurücksetzen
+
+| Neustart
+| bool
+| true
+| Neustart des Systems nach dem Zurücksetzen
+|===
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      reset:
+        enabled: true
+        reset-persistent: true
+        reset-oem: true
+        reboot: true
+        system-uri: registry.suse.com/rancher/sle-micro/5.5:latest
+----
+====
+
+== `+machineName+`
+
+Dies bezieht sich auf den Namen, der für den Knoten und die Kubernetes-Ressourcen festgelegt wird, die einen Hostnamen benötigen (z. B. von rke2 bereitgestellte Pods, die den Knoten-Hostnamen als Teil des Pod-Namens verwenden)`+String+` type.
+
+[NOTE]
+====
+Wenn `+elemental:registration:no-smbios+` auf `+false+` (Standard) eingestellt ist, wird machineName mit https://www.dmtf.org/standards/smbios[SMBIOS-Daten] interpoliert, die es Ihnen ermöglichen, Hardware-Informationen zu speichern.
+
+Wird kein `+machineName+` angegeben, wird ein Standardwert in der Form `+m-$UUID+` eingestellt.
+Die UUID wird, falls vorhanden, aus den SMBIOS-Daten entnommen, andernfalls wird eine zufällige UUID generiert.
+====
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineName: hostname-test-4
+----
+====
+
+== `+machineInventoryLabels+`
+
+Beschriftungen, die auf die `+MachineInventory+` gesetzt werden, die von diesem `+MachineRegistration+``+Key: value+` Typ erstellt wird. Diese Bezeichnungen werden verwendet, um ein Auswahlkriterium im xref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate] festzulegen.
+
+{elemental-product-name} Knoten wird `+elemental-register+` alle 24 Stunden ausgeführt. +
+Es ist möglich, die `+machineInventoryLabels+` so zu aktualisieren, dass alle registrierten Knoten die neuen Bezeichnungen bei der nächsten erfolgreichen Aktualisierung der Registrierung übernehmen.
+
+[IMPORTANT]
+====
+Wenn `+elemental:registration:no-smbios+` auf `+false+` (Standard) eingestellt ist, werden die Etiketten mit https://www.dmtf.org/standards/smbios[SMBIOS-Daten] interpoliert. Dies ermöglicht die Speicherung von Hardware-Informationen in benutzerdefinierten Etiketten.
+====
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineInventoryLabels:
+    my.prefix.io/element: fire
+    my.prefix.io/cpus: 32
+    my.prefix.io/manufacturer: "${System Information/Manufacturer}"
+    my.prefix.io/productName: "${System Information/Product Name}"
+    my.prefix.io/serialNumber: "${System Information/Serial Number}"
+    my.prefix.io/machineUUID: "${System Information/UUID}"
+----
+====
+
+== `+machineInventoryAnnotations+`
+
+Anmerkungen, die auf das `+MachineInventory+` gesetzt werden, das von diesem `+MachineRegistration+``+Key: value+` Typ erstellt wird.
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineInventoryAnnotations:
+    owner: bob
+    version: 1.0.0
+----
+====
