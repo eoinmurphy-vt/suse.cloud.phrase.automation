@@ -1,0 +1,135 @@
+include::partial$variables.adoc[]
+= WASI
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Goコンパイラの制限によりwaPC通信メカニズムが使用できない場合、システムプリミティブと相互作用するWASIポリシーを記述します。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "wasi"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "wasi"]
+:sidebar_label: WASI
+:current-version: {page-origin-branch}
+
+https://wasi.dev/[WebAssembly System Interface (WASI)]は、ブラウザの外側でWebAssemblyを実行できるインターフェースのセットを提供するWebAssembly標準です。
+
+[CAUTION]
+====
+
+通常のポリシーを記述する作成者は、ポリシーを記述するためにプレーン WASI システム・インタフェースを決して使用しないでください。
+
+このページは、{project-name} メンテナや、最先端のWASMプラットフォームを試してみたい低レベルのポリシー作成者のためのものです。
+====
+
+
+WASIを使用すると、STDOUT、STDERR、STDIN、環境変数などのようなシステムプリミティブと相互作用するWebAssemblyモジュールを持つことができます。
+
+{short-project-name} ポリシーのコンパイルに使用されるコンパイラの多くは、WASI インターフェースをターゲットとする WebAssembly モジュールを生成します。
+ただし、{short-project-name} ポリシーは、https://github.com/wapc[waPC]プロジェクトを使用して、ポリシーとポリシーランタイム (`+kwctl+` または`+policy-server+`) の間の双方向通信を実装します。{short-project-name} 通信プロトコルの使用については、xref:reference/spec/01-intro-spec.adoc[ここで]説明します。
+
+waPCプロジェクトがまだ使えない特別なケースもある。
+このような状況では、WASIが提供するインターフェイスを使ってポリシーを書くことができる。
+
+[IMPORTANT]
+====
+
+{short-project-name} {short-project-name} 1.7.0リリース以降のWASIポリシーに対応しています。
+====
+
+
+== 制限事項
+
+WASIポリシーはwaPC/Regoポリシーに比べて評価時のパフォーマンスが劣るため、通常の環境では使用すべきではありません。
+
+[NOTE]
+====
+
+ポリシーとホスト間の双方向通信は実現できるが、言語SDKの内部で変更を加える必要がある。これは、xref:/reference/spec/host-capabilities/01-intro-host-capabilities.adoc[ホスト能力を]使用し、xref:/explanations/context-aware-policies.adoc[コンテキストを意識した]ポリシーを書くために必要である。
+
+現在、{short-project-name} GoとJavaScript/TypeScript SDKのみがWASIポリシーに公開している。
+
+ご興味のある方は、ぜひご連絡ください。そうすれば、取り組みに優先順位をつけることができる。
+
+====
+
+
+== 使用例
+
+プレーンWASI」ポリシーを書く唯一の理由は、waPC通信メカニズムが使えない場合です。
+
+現在のところ（2023年6月現在）、これを行う正当な理由は、公式Goコンパイラを使ってWebAssemblyモジュールを作成する場合だけです。
+
+1.21リリースから、公式GoコンパイラーはWASIインターフェイスをターゲットとするWebAssemblyモジュールを生成できるようになりました。
+しかし、これらのモジュールはまだWebAssemblyランタイムに関数をエクスポートできない。
+この制限は、https://github.com/golang/go/issues/42372[] 、waPCプロトコルの採用を妨げている。
+
+{short-project-name} プロジェクト・チームは、{short-project-name} Go ポリシーを記述する際に、TinyGoxref:tutorials/writing-policies/go/01-intro-go.adoc[コンパイラーを]使用することを推奨している。
+
+しかし、ある種の複雑なGoコードベースは、TinyGoコンパイラーではコンパイルできない。
+例えば、https://github.com/google/cel-go[]CEL-goやhttps://github.com/kyverno/kyverno/[Kyvernoの]ようなコードベースが含まれる。
+このような状況では、公式のGoコンパイラーを使うのが有効だ。
+
+== 通信プロトコル
+
+このセクションでは、プレーン WASI ポリシーの書き方について説明します。
+
+通常のCLIプログラムとしてコードを書く必要がある。
+プログラムは以下のサブコマンドを取らなければならない：
+
+* `+validate+`このコマンドは、ポリシー・エンジンがアドミッション要求を評価するために呼び出されます。
+* `+validate-settings+`このコマンドはポリシー設定を検証するためにポリシーエンジンによって呼び出されます。
+
+どちらの場合も、検証されるデータはSTDIN経由で提供される。
+ポリシーはSTDOUT経由で答えを提供しなければならない。
+STDERRはデバッグ・メッセージやエラー・メッセージに使うことができる。
+
+=== バリデーション
+
+リクエストの検証は、`+validate+` サブコマンドを使用してポリシー CLI プログラムを起動するときに行われます。
+
+STDINには、`+ValidationRequest+` オブジェクトを記述したJSONドキュメントが含まれていなければならない。
+ポリシーは、`+ValidationResponse+` オブジェクトを含む JSON ドキュメントを STDOUT に書き込まなければならない。
+
+xref:reference/spec/03-validating-policies.adoc[ここでは]、`+ValidationRequest+` と`+ValidationResponse+` の両オブジェクトについて説明する。
+
+=== 突然変異
+
+変異するポリシーは、検証するポリシーと同じように機能する。
+ポリシーCLIプログラムは、`+validate+` サブコマンドを使用して呼び出される。
+
+STDINには、`+ValidationRequest+` オブジェクトを記述したJSONドキュメントが含まれていなければならない。
+ポリシーは、`+ValidationResponse+` オブジェクトを含む JSON ドキュメントを STDOUT に書き込まなければならない。
+
+xref:reference/spec/03-validating-policies.adoc[ここでは]、`+ValidationRequest+` と`+ValidationResponse+` の両オブジェクトについて説明する。
+
+変異が必要な場合、`+ValidationResponse+` オブジェクトは、作成されるオブジェクトを含むキー、`+mutated_object+` を持たなければならない。
+このプロセスをxref:reference/spec/04-mutating-policies.adoc[ここで]説明する。
+
+== Context-aware
+
+今のところ、Go SDK経由でのみサポートされています。Go SDKは、通常通りコンテキスト認識機能を公開してxref:explanations/context-aware-policies.adoc[います]。
+
+WASI Goのコンテキストを意識したポリシーの例として、https://github.com/kubewarden/go-wasi-context-aware-test-policy[go-wasi-context-aware-test-policyを]参照してください。
+
+=== 設定の検証
+
+ポリシーは、`+validate-settings+` というサブコマンドを提供しなければならない。
+このコマンドは、ユーザーによって提供された設定を検証するために使用される。
+
+プログラムは、ユーザーによって提供された設定を保持するJSONオブジェクトをSTDINで受け取らなければならない。
+そして、それらを検証し、`+SettingsValidationResponse+` オブジェクトをSTDOUTに書き込む。
+
+`+SettingsValidationResponse+` のフォーマットと設定の検証プロセスについては、xref:reference/spec/02-settings.adoc[ここで]説明する。
+
+== ポリシーのメタデータ
+
+{short-project-name} の各ポリシーには、`+kwctl annotate+` コマンドで注釈を付ける必要がある。
+プレーンWASIポリシーのポリシーメタデータはこの値を持たなければならない：
+
+[subs="+attributes",yaml]
+----
+executionMode: wasi
+----
+
+== テンプレートプロジェクト
+
+https://github.com/kubewarden/go-wasi-policy-template[このGitHubリポジトリには]、WASIプロトコルを使用したGoベースのポリシーのテンプレートが含まれています。
