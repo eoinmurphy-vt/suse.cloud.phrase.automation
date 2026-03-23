@@ -1,0 +1,203 @@
+include::partial$variables.adoc[]
+
+= 監査スキャナ - ポリシーレポート
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Kubernetesクラスタ内でReportまたはClusterReportオブジェクトを使用して、監査スキャナのポリシースキャン結果を保存および照会します。
+:doc-persona: ["kubewarden-user"、"kubewarden-operator"、"kubewarden-policy-developer"、"kubewarden-integrator"]]。
+:doc-topic: [説明」、「監査スキャナー」、「ポリシー・レポート」]。
+:doc-type: [“explanation”]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "audit scanner", "policy reports" ]。
+:sidebar_label: 政策レポート
+:current-version: {page-origin-branch}
+
+{project-name} Audit Scanner を使用する場合、https://openreports.io/[OpenReports]Custom Resources を使用してポリシースキャンの結果を保存します。
+
+[CAUTION]
+====
+
+{project-name} 1.33では、監査スキャナ機能はデフォルトで[openreports.io](https://openreports.io)からOpenReports CRDにレポートを保存します。
+
+K8s Policyワーキンググループのlink:https://htmlpreview.github.io/?https://github.com/kubernetes-sigs/wg-policy-prototypes/blob/045372e558b896695b2daae92e8c7a04d4d40282/policy-report/docs/index.html[PolicyReport]CRDは、デフォルトではインストールされず、非推奨とマークされ、将来のリリースで削除される予定です。
+
+非推奨のPolicyReports、つまり、1.33以前の動作を使用し続けたいユーザは、以下を行う必要があります：-`+.Values.install.installPolicyReportCRDs+` の`+kubewarden-crds+` Helm chart 値を`+true+` に変更する。 -`+.Values.auditScanner.reportCRDsKind+` の`+kubewarden-controller+` Helm chart 値を`+openreports+` から`+policyreport+` に変更する。
+
+====
+
+
+これらのOpenReport CRDは、監査結果を構造化して保存・管理する方法を提供します。
+
+監査スキャナ・ポリシーのスキャン結果は、`+Report+` および`+ClusterReport+` を使用して保存します。
+監査スキャナは、リソースのスコープに応じて、スキャンされた各リソースに対して`+Report+` または`+ClusterReport+` を作成します。`+Report+` オブジェクトはリソースのネームスペースで使用でき、`+ClusterReport+` オブジェクトはクラスタスコープで使用できます。
+
+スキャナーによって生成される監査結果には以下のようなものがある：
+
+* 政策評価
+* スキャンされたリソース
+* 評価結果（合格、不合格、スキップ）
+* 評価がいつ行われたかを示すタイムスタンプ。
+
+また、ポリシーに重大度やカテゴリの注釈を定義することもできます。
+
+オペレータは、`+kubectl+` を使用してレポートを照会できます。また、https://kyverno.github.io/policy-reporter[policy-reporter]オープンソースプロジェクトによって提供されるオプションのUIを使用して、OpenReports CRDのモニタリングと監視を行うこともできます。
+
+== レポートの照会
+
+kubectl CLIを使えば、スキャン結果を問い合わせることができる：
+
+デフォルト・ネームスペースのレポートを一覧表示します：
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get report -o wide
+NAME                                   KIND   NAME            PASS   FAIL   WARN   ERROR   SKIP   AGE
+44da974b-6057-4745-a92c-9dd8a1b01cc4   Pod    nginx-secrets   6      1      0      0       0      33m
+----
+
+クラスタ全体のレポートを一覧表示します：
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get clusterreport -o wide
+NAME                                   KIND        NAME                 PASS   FAIL   WARN   ERROR   SKIP   AGE
+6c66175f-e15f-47e8-8c33-2c63d5ecde3e   Namespace   namespace1           3      1     0       0       0      1h
+d0ffbf4f-7348-4350-af7b-fdbfc079cc49   Namespace   namespace2           0      4     0       0       0      1h
+e48d9bbc-a9c4-4c36-8519-bc7390d9ec64   Namespace   namespace3           4      0     0       0       0      15h
+----
+
+特定のレポートの詳細を取得します：
+
+[source,console,subs="+attributes"]
+----
+kubectl get report 44da974b-6057-4745-a92c-9dd8a1b01cc4 -o yaml
+----
+
+特定のClusterReportの詳細を取得します：
+
+[source,console,subs="+attributes"]
+----
+kubectl get clusterreport e48d9bbc-a9c4-4c36-8519-bc7390d9ec64 -o yaml
+----
+
+== レポート例
+
+次の例は、`+default+` 名前空間の`+Deployment+` リソース`+deployment1+` に対する`+Report+` を示しています。レポートは、`+Pod+`が`+safe-labels+` AdmissionPolicy に失敗したことを示す。
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: PolicyReport
+metadata:
+  creationTimestamp: “2024-02-29T06:55:37Z”
+  generation: 6
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  namespace: default
+  ownerReferences:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: deployment1
+      uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  resourceVersion: “2685996”
+  uid: c5a88847-d678-4733-8120-1b83fd6330cb
+results:
+  - category: Resource validation
+    message: “The following mandatory labels are missing: cost-center”
+    policy: namespaced-default-safe-labels
+    properties:
+      policy-resource-version: “2684810”
+      policy-uid: 826dd4ef-9db5-408e-9482-455f278bf9bf
+      policy-name: “safe-labels”
+      policy-namespace: “default”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: deployment1
+  namespace: default
+  resourceVersion: “3”
+  uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== ClusterReportの例
+
+次の例は、`+Namespace+` リソース`+default+` の`+ClusterReport+` を示しています。このレポートは、リソースが`+safe-annotations+` ClusterAdmissionPolicyの検証に失敗したことを示します。
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: ClusterPolicyReport
+metadata:
+  creationTimestamp: “2024-02-28T14:44:37Z”
+  generation: 3
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  ownerReferences:
+    - apiVersion: v1
+      kind: Namespace
+      name: default
+      uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  resourceVersion: “2403034”
+  uid: 20a3d00e-e955-4f21-a887-317d40f3f052
+results:
+  - category: Resource validation
+    message: “The following mandatory annotations are not allowed: owner”
+    policy: clusterwide-safe-annotations
+    properties:
+      policy-resource-version: “2396437”
+      policy-uid: 46780d6e-e51a-4d65-8572-a6af01380aa7
+      policy-name: “safe-annotations”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: v1
+  kind: Namespace
+  name: default
+  resourceVersion: “37”
+  uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== ポリシーレポーターUI
+
+ポリシー・レポーターは、`+kubewarden-controller+` のサブチャートとして出荷されます。詳細については、xref:howtos/audit-scanner.adoc[監査スキャナーのインストール]ページを参照してください。
+
+Policy Reporter UI は、すべての違反を表示するダッシュボードを提供します。下のスクリーンショットをご覧ください：
+
+image::policy-reporter_dashboard.png[ポリシーレポーターダッシュボードの例]
+
+{short-project-name} は、Policy Reporter UI に、{short-project-name} ポリシーだけを表示する事前設定済みのフィルタと、拡張情報を同梱しています：
+
+image::policy-reporter_policyreports.png[ポリシー・レポーター PolicyReports の例]
+
+Policy Reporterの他の機能には、異なるクライアント（Grafana Loki、Elasticsearch、チャット・アプリケーションなど）への結果の転送、メトリクス・エンドポイントなどがある。詳しくはhttps://kyverno.github.io/policy-reporter[policy-reporterのコミュニティドキュメントを]参照。
