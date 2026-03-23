@@ -1,0 +1,228 @@
+= Cloud-Konfiguration Referenz
+:revdate: 2025-10-21
+:page-revdate: {revdate}
+
+Es wird erwartet, dass Node OS-Images, die mit dem https://github.com/elemental-toolkit[{elemental-product-name} Toolkit] erstellt wurden, mit https://github.com/rancher/yip[] yip initialisiert und konfiguriert werden. Yip ist ein kleines Dienstprogramm, das eine Reihe von Aktionen und Konfigurationen auf das mit yaml-Dateien beschriebene System anwendet. Yip wird als Bibliothek in die elementare Client-Binärdatei integriert und konsumiert (siehe `+elemental run-stage --help+`). Yip gruppiert die Konfigurationen und Aktionen, die auf beliebige _Stufen_ angewendet werden sollen, z. B. würde der Befehlsaufruf `+elemental run-stage network+` nur definierte Aktionen und Konfigurationen für die Stufe namens `+network+` anwenden. Aus der Sicht von Yip können Phasen jederzeit ausgeführt werden, da sie einfach eine Reihe von Aktionen unter einem beliebigen Namen zusammenfassen.
+
+{elemental-product-name} Toolkit integriert fünf vordefinierte Stufen in den OS-Boot-Prozess.
+
+. *`+pre-rootfs+`*: Diese Phase läuft beim Frühstart innerhalb der Init-Ram-Diskette, kurz vor dem Mounten des Root-Geräts (normalerweise unter `+/sysroot+`). In dieser Phase können die Schritte für den ersten Start festgelegt werden, die vor dem Einbinden des Root-Geräts erforderlich sind. Ein gutes Beispiel ist die Erweiterung der Root-Partition. Ausgeführt im Rahmen der `+initrd-root-device.target+`.
+. *`+rootfs+`*: Diese Phase läuft beim Frühstart innerhalb der Init-Ram-Diskette, direkt nach dem Mounten des Root-Geräts (normalerweise unter `+/sysroot+`). In dieser Phase können Sie die ersten Boot-Schritte festlegen, z. B. das Erstellen neuer Partitionen. In dieser Phase werden in der Regel ephemere und dauerhafte Pfade definiert. Ausgeführt im Rahmen der `+initrd-root-fs.target+`.
+. *`+initramfs+`*: Diese Phase läuft ebenfalls innerhalb der Init-Ram-Diskette ab, allerdings in einer späteren Phase, kurz bevor man zu root wechselt. Diese Stufe läuft in einer chroot-Umgebung auf dem eigentlichen Root-Gerät. Dieser Schritt ist praktisch, um einige Systemparameter zu setzen, die für systemd nach dem Wechsel zu root relevant sein könnten. Zum Beispiel könnten hier zusätzliche systemd-Unit-Dateien hinzugefügt werden, bevor das systemd vom eigentlichen Root ausgeführt wird. Ausgeführt im Rahmen der `+initrd.target+`.
+. *`+fs+`*: Dieser Schritt ist der erste, der nach dem Wechsel zu Root ausgeführt wird, und er wird als Teil von `+sysinit.target+` ausgeführt, sobald alle lokalen Dateisysteme und Einhängepunkte, die in fstab definiert sind, eingehängt und bereit sind.
+. *`+network+`*: Diese Phase wird als Teil der `+multi-user.target+` und nach Erreichen der `+network-online.target+` ausgeführt. In dieser Phase können Aktionen und Konfigurationen ausgeführt werden, die eine Netzwerkverbindung erfordern. Diese Stufe wird beispielsweise für die allererste Knotenregistrierung und die Installation von einer Live-ISO verwendet.
+. *`+boot+`*: Dieser Schritt wird als Teil des multi-user.target und vor dem getty.target ausgeführt. Dies ist die Standardstufe für die Ausführung von Cloud-Konfigurationsdaten, die mit der unterstützten Cloud-init-Syntax bereitgestellt werden. Siehe Abschnitt xref:references/cloud-config-reference.adoc#_compatibility_with_cloud_init_format[Cloud-Init-Kompatibilität].
+
+Standardmäßig liest `+elemental+` die yaml-Konfigurationsdateien aus den folgenden Pfaden in dieser Reihenfolge: `+/system/oem+`, `+/oem+` und `+/usr/local/cloud-config+`.
+
+In {elemental-product-name} Operator können alle Kubernetes-Ressourcen, die ein `+cloud-config+` Feld enthalten, entweder in einer <<_configuration_syntax,yip->> oder <<_compatibility_with_cloud_init_format,cloud-init-kompatiblen>> Syntax ausgedrückt werden. Dazu gehören Ressourcen wie `+MachineRegistration+`, `+SeedImage+` und `+ManagedOSImage+`.
+
+[NOTE]
+====
+Im Gegensatz zu ähnlichen Projekten wie _Cloud Init_ speichert Yip keine Aufzeichnungen oder Zwischenspeicher der ausgeführten Phasen und Schritte, sondern alle Phasen und die dazugehörige Konfiguration werden bei jedem Start ausgeführt.
+====
+
+== Elemental-Client-Cloud-Konfigurationshaken
+
+Zusätzlich zu den definierten Cloud-Konfigurationsstufen beim Booten, die im vorherigen Abschnitt beschrieben wurden, berücksichtigt der Elemental-Client auch einige spezifische Stufen, die als Hooks bezeichnet werden, um das Verhalten dieser Unterbefehle anzupassen: `+install+`, `+upgrade+`, `+reset+` und `+build-disk+`. Jeder dieser Unterbefehle hat seinen eigenen Satz von vier verschiedenen Cloud-Konfigurationsstufen, die in analogen Phasen der Ausführung des jeweiligen Unterbefehls ausgeführt werden.
+
+Hooks sind im Wesentlichen eine Möglichkeit, permanente Änderungen am System vorzunehmen, die nicht einfach als Teil eines OCI-Containers ausgedrückt werden können oder die mit den Konfigurationsoptionen von `+elemental+` nicht einfach zu erreichen sind. Ein gutes Beispiel ist die Handhabung der Firmware in der EFI-Partition für Raspberry Pi-Geräte.
+
+[WARNING]
+====
+Beachten Sie, dass die meisten Hooks in der Host-Umgebung mit Privilegien ausgeführt werden, so dass sie potenziell destruktiv sind. In den meisten Fällen reichen normale Cloud-Konfigurationsvorgänge beim Booten aus, um das System einzurichten. Auch um zusätzliche Software in ein Abbild einzubinden, ist die bevorzugte Option, ein xref:operator-operational-tasks/custom-images.adoc[abgeleitetes Abbild] zu erstellen und nicht den Missbrauch von Hooks zur Installation zusätzlicher Software.
+====
+
+=== Hakenstufen
+
+Vorherige Phasen: before-install, before-upgrade, before-reset, before-disk Diese Phasen werden ausgeführt, sobald die Arbeitsverzeichnisse und die Umgebung vorbereitet sind, aber bevor die eigentliche Aktion beginnt. Bei den Installations-, Upgrade- und Reset-Schritten geschieht dies, sobald alle zugehörigen Partitionen erstellt und eingehängt sind, aber bevor ein Image bereitgestellt wird.
+
+After-Chroot-Phasen: after-install-chroot, after-upgrade-chroot, after-reset-chroot, after-disk-chroot Diese Phasen werden nach der Bereitstellung des Zielsystems im Arbeitsbereich in einer chroot-Umgebung ausgeführt, in der das aktuelle Image verwurzelt ist. Da dies in einer Chroot-Umgebung geschieht, analysiert der Elemental-Client die Hooks, die im bereitgestellten Image und nicht im Host vorhanden sind. Nur /oem wird mit dem Host geteilt, falls verfügbar.
+
+Nachstufen: after-install, after-upgrade, after-reset, after-disk Diese Stufen werden ausgeführt, nachdem das Zielsystem von der Host-Umgebung in den Arbeitsbereich verlagert wurde. In diesem Stadium sind alle Partitionen noch eingehängt und im RW-Modus verfügbar. Dieser spezielle Satz von Schritten analysiert die im Host vorhandenen Hooks und den entsprechenden Satz von Pfaden, die in das bereitgestellte Image verwurzelt sind. Der Hook wird jedoch nicht in einer Chroot-Umgebung ausgeführt. Dies ist hilfreich, um `+after-*+` Haken innerhalb des bereitgestellten Images bereitzustellen.
+
+Post-Phasen: post-install, post-upgrade, post-reset, post-disk Diese Phasen werden am Ende ausgeführt, bevor der Befehl beendet und ein Bereinigungsprozess gestartet wird. In diesem Stadium ist das Abbild bereits bereitgestellt und in einem schreibgeschützten Subvolume oder Dateisystem gesperrt. In diesem Stadium sind die Partitionen noch montiert.
+
+[NOTE]
+====
+Beachten Sie, dass die Montagehaken nicht als Teil der xref:references/machineregistration-reference.adoc#_config_cloud_config[`+MachineRegistration.config.cloud-config+`]. Um Installationshaken zur Verfügung zu stellen, können sie als Teil des xref:[`+SeedImage.cloud-config+`]enthalten sein, da sie auf dem Installationsmedium vorhanden sein müssen.
+====
+
+== Konfigurationssyntax
+
+Yip hat seine eigene Syntax, die im Wesentlichen die Definition von _Stufen_ und eine Liste von Schritten für jede Stufe erfordert. Die Schritte werden der Reihe nach ausgeführt, und jeder Schritt kann eine Kombination verschiedener Aktionstypen sein (z. B. Befehle ausführen, Dateien erstellen, Hostnamen festlegen usw.).
+
+Betrachten Sie das folgende Beispiel:
+
+[,yaml]
+----
+stages:
+  initramfs:
+  - name: "Setup users"
+    ensure_entities:
+    - path: /etc/shadow
+      entity: |
+          kind: "shadow"
+          username: "root"
+          password: "root"
+  boot:
+  - files:
+    - path: /tmp/script.sh
+      content: |
+        #!/bin/sh
+        echo "test"
+      permissions: 0777
+      owner: 1000
+      group: 100
+  - commands:
+    - /tmp/script.sh
+----
+
+In dem obigen Beispiel gibt es zwei Stufen: `+initramfs+` und `+boot+`. In der Phase `+initramfs+` wird ein Beispielbenutzer initialisiert. Die Phase `+boot+` umfasst zwei Schritte, einen zur Erstellung einer ausführbaren Skriptdatei und einen zweiten, der das Skript tatsächlich ausführt.
+
+Yip unterstützt auch `+*.before+` und `+*.after+` Suffix-Modifikatoren für eine bestimmte Stufe. Zum Beispiel führt die Ausführung der Stufe `+network+` dazu, dass zuerst die in den Konfigurationsdateien gefundenen Stufen `+network.before+`, dann `+network+` und schließlich `+network.after+` ausgeführt werden.
+
+Siehe die vollständige Referenz der anwendbaren Schlüssel in den Schritten, die imhttps://github.com/rancher/yip?tab=readme-ov-file#configuration-reference[Projekt] yip selbst dokumentiert sind.
+
+Nachfolgend finden Sie ein Beispiel für die obige Konfiguration, eingebettet in eine MachineRegistration-Ressource.
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+.MachineRegistration Beispiel
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      name: "A registration driven config"
+      stages:
+        after-install-chroot:
+        - name: "Set serial console"
+          commands:
+          - grub2-editenv /oem/grubenv set extra_cmdline="console=ttyS0"
+        initramfs:
+        - name: "Setup users"
+          ensure_entities:
+          - path: /etc/shadow
+            entity: |
+                kind: "shadow"
+                username: "root"
+                password: "root"
+        boot:
+        - files:
+          - path: /tmp/script.sh
+            content: |
+              #!/bin/sh
+              echo "test"
+            permissions: 0777
+            owner: 1000
+            group: 100
+        - commands:
+          - /tmp/script.sh
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineName: my-machine
+  machineInventoryLabels:
+    element: fire
+----
+====
+
+== Synchronisierung
+
+Während der Ausführung einer Etappe werden alle Dateien geladen, ein Graph berechnet und dann ausgeführt. Dies bedeutet, dass Schritte in derselben Phase in beliebiger Reihenfolge und unabhängig vom Dateinamen ausgeführt werden können.
+
+Um die Ausführung zu synchronisieren, kann der Benutzer die Post/Pre-Phasen verwenden oder sich auf das Schlüsselwort `+after+` in der https://github.com/rancher/yip/blob/ee4051d9ec2782989344f813bc6a0975bbd8f3fe/pkg/executor/default_test.go#L222[yip-Syntax] beziehen.
+
+== Kompatibilität mit dem Cloud Init-Format
+
+Eine Teilmenge der offiziellen http://cloudinit.readthedocs.org/en/latest/topics/format.html#cloud-config-data[cloud-config Spezifikation] wird von yip implementiert. Genauer gesagt, sind die unterstützten Cloud-Init-Schlüssel: `+users+`, `+ssh_authorized_keys+`, `+runcmd+`, `+hostname+` und `+write_files+` implementiert sind.
+
+Wenn eine yaml-Datei mit `+#cloud-config+` beginnt, wird sie wie eine Standard-Cloud-Init geparst und mit der yip `+boot+` -Stufe verbunden.
+
+Zum Beispiel:
+
+[,yaml]
+----
+#cloud-config
+# Note groups are delivered as list, not as comma separated values
+users:
+- name: "bar"
+  passwd: "foo"
+  groups:
+  - "users"
+  homedir: "/home/foo"
+  shell: "/bin/bash"
+  ssh_authorized_keys:
+  - faaapploo
+# Assigns these keys to the first user in users or root if there
+# is none
+ssh_authorized_keys:
+- asddadfafefa
+# Run these commands once the system has fully booted
+# Each command is expressed as a sinlge string, no nested lists
+runcmd:
+- echo hello world
+# Hostname
+hostname: myserver
+# Write arbitrary files
+write_files:
+- encoding: b64
+  content: CiMgVGhpcyBmaWxlIGNvbnRyb2xzIHRoZSBzdGF0ZSBvZiBTRUxpbnV4
+  path: /foo/bar
+  permissions: "0644"
+  owner: "bar"
+----
+
+Nachfolgend finden Sie ein Beispiel für die obige Konfiguration, eingebettet in eine MachineRegistration-Ressource.
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+.MachineRegistration Beispiel
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      users:
+      - name: "bar"
+        passwd: "foo"
+        groups: "users"
+        homedir: "/home/foo"
+        shell: "/bin/bash"
+        ssh_authorized_keys:
+        - faaapploo
+      ssh_authorized_keys:
+      - asdd
+      runcmd:
+      - foo
+      write_files:
+      - encoding: b64
+        content: CiMgVGhpcyBmaWxlIGNvbnRyb2xzIHRoZSBzdGF0ZSBvZiBTRUxpbnV4
+        path: /foo/bar
+        permissions: "0644"
+        owner: "bar"
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineName: my-machine
+  machineInventoryLabels:
+    element: fire
+----
+====
