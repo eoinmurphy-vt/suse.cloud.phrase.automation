@@ -1,0 +1,116 @@
+include::partial$variables.adoc[]
+= 建立并运行 OPA 策略 {short-project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 通过构建 Rego 策略包、将其编译到 WASM 目标中并与 kwctl 集成，为您的项目构建自定义 OPA 策略。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "build-and-run"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"构建和运行"、"开放政策代理"、"opa"、"rego"]
+:current-version: {page-origin-branch}
+
+在上一节中，您编写了您的 Rego 政策。
+结构看起来像
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
+
+== 建设
+
+要建设
+
+[subs="+attributes",console]
+----
+$ opa build -t wasm -e policy/main policy.rego request.rego
+----
+
+这就建立了雷戈政策，其中包括
+
+* `+target+`: `+wasm+`.
+您要为`+wasm+` 目标构建策略。
+* `+entrypoint+`: `+policy/main+`.
+入口点是`+policy+` 软件包内的`+main+` 规则。
+* `+policy.rego+`:
+构建并包含`+policy.rego+` 文件。
+* `+request.rego+`:
+构建并包含`+request.rego+` 文件。
+
+构建完成后，`+opa build+` 会生成一个`+bundle.tar.gz+` 文件。
+你可以提取出来：
+
+[subs="+attributes",console]
+----
+$ tar -xf bundle.tar.gz /policy.wasm
+----
+
+现在树的样子如下
+
+[subs="+attributes",console]
+----
+.
+├── bundle.tar.gz
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+├── policy.wasm
+└── request.rego
+
+1 directory, 6 file
+----
+
+您有`+policy.wasm+` 文件：
+
+[subs="+attributes",console]
+----
+$ file policy.wasm
+policy.wasm: WebAssembly (wasm) binary module version 0x1 (MVP)
+----
+
+现在你来运行它。
+
+== 运行
+
+使用`+kwctl+` 运行策略：
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/other-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": true
+}
+----
+
+策略接受该请求，因为该请求指向`+other+` 命名空间。
+
+* `+execution-mode+`: `+opa+`.
+Rego 策略的目标可以是开放式策略代理或网守。
+您必须告诉`+kwctl+` 您执行的是哪种政策。
+* `+request-path+`:
+`+kwctl+` 发送策略进行评估的记录请求位置。
+
+现在尝试评估在`+default+` 命名空间内创建 pod 的请求：
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/default-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "it is forbidden to use the default namespace"
+  }
+}
+----
+
+策略会拒绝请求，并将理由反馈给 API 服务器，再返回给用户或 API 消费者。
