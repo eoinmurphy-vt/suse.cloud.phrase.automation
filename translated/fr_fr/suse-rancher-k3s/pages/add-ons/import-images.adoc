@@ -1,0 +1,80 @@
+= Importer des images
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+:page-aliases: import-images.adoc
+
+Les images des conteneurs sont mises en cache localement sur chaque nœud par le magasin d'images containerd. Les images peuvent être extraites du registre selon les besoins des pods, préchargées via une image pull, ou importées à partir d'une image tarball.
+
+== Extraction d'images à la demande
+
+Par défaut, Kubernetes extrait automatiquement les images lorsqu'un Pod en a besoin si l'image n'est pas déjà présente sur le nœud. Ce comportement peut être modifié en utilisant le champ https://kubernetes.io/docs/concepts/containers/images/#image-pull-policy[image pull policy] du Pod. Lors de l'utilisation de la politique par défaut `+IfNotPresent+`, containerd récupère l'image en amont (par défaut) ou dans votre xref:installation/private-registry.adoc[registre privé] et la stocke dans son magasin d'images. Les utilisateurs n'ont pas besoin d'appliquer une configuration supplémentaire pour que le tirage d'images à la demande fonctionne.
+
+
+== Images pré-importées
+
+[IMPORTANT]
+.Version Gate
+====
+La fonction de pré-importation d'images pendant que K3s fonctionne est disponible à partir des versions de janvier 2025 : v1.32.0+k3s1, v1.31.5+k3s1, v1.30.9+k3s1, v1.29.13+k3s1. Auparavant, K3s ne préimportait les images qu'au démarrage.
+====
+
+L'importation préalable d'images sur le nœud est essentielle si vous configurez le site `+imagePullPolicy+` de Kubernetes comme `+Never+`. Vous pouvez le faire pour des raisons de sécurité ou pour réduire le temps nécessaire au démarrage de vos nœuds K3s.
+
+K3s comprend deux mécanismes de pré-importation d'images dans le magasin d'images containerd :
+
+[tabs,sync-group-id=import-images]
+======
+Importation d'images en ligne::
++
+--
+
+Les utilisateurs peuvent déclencher une extraction d'images dans le magasin d'images de containerd en plaçant un fichier texte contenant les noms des images, une par ligne, dans le répertoire `+/var/lib/rancher/k3s/agent/images+`. Le fichier texte peut être placé avant le démarrage de K3s et peut être créé ou modifié pendant le fonctionnement de K3s. K3s extrait séquentiellement les images via l'API CRI, en utilisant éventuellement la configuration xref:installation/private-registry.adoc[registries.yaml].
+
+Par exemple :
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+cp example.txt /var/lib/rancher/k3s/agent/images
+----
+
+Le site `+example.txt+` contient :
+
+----
+docker.io/library/redis:latest
+docker.io/library/mysql:latest
+----
+
+Après quelques secondes, les images `+redis+` et `+mysql+` sont disponibles dans le magasin d'images containerd du nœud. 
+
+Utilisez `+sudo k3s ctr images list+` pour interroger le magasin d'images containerd.
+--
+
+Importation d'images hors ligne::
++
+--
+Les utilisateurs peuvent importer des images directement dans le magasin d'images de containerd en plaçant les archives d'images dans le répertoire `+/var/lib/rancher/k3s/agent/images+`. L'archive peut être placée avant le démarrage de K3s, mais aussi créée ou modifiée lorsque K3s est en cours d'exécution. K3s décompresse l'archive d'images si nécessaire, extrait les images et les charge dans le magasin d'images de containerd.
+
+Par exemple :
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+curl  https://github.com/k3s-io/k3s/releases/download/v1.33.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst -O  /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+----
+
+Après quelques secondes, les images incluses dans l'archive d'images sont disponibles dans le magasin d'images containerd du nœud. 
+
+Utilisez `+sudo k3s ctr images list+` pour interroger le magasin d'images containerd.
+
+C'est la méthode utilisée dans les environnements à air comprimé. Pour plus d'informations, veuillez consulter la xref:installation/airgap.adoc[documentation relative à l'installation de l'entrefer].
+--
+======
+
+== Mise en place d'un registre d'images
+
+K3s propose deux alternatives pour les registres d'images :
+
+* xref:installation/private-registry.adoc[Private Registry Configuration] couvre l'utilisation de `+registries.yaml+` pour configurer l'authentification et la mise en miroir du registre des images de conteneurs.
+* xref:installation/registry-mirror.adoc[Embedded Registry Mirror (Miroir de] registre intégré) montre comment activer le miroir de registre d'images distribué intégré, pour le partage d'images d'égal à égal entre les nœuds.
