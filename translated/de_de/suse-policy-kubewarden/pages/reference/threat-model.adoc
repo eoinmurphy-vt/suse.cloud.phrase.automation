@@ -1,0 +1,249 @@
+include::partial$variables.adoc[]
+= Bedrohungsmodell
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Lesen und verstehen Sie das Bedrohungsmodell für die Zulassungskontrolle, um Ihr eigenes, auf die jeweiligen Umstände zugeschnittenes Bedrohungsmodell zu entwickeln und sichere Vorgaben in Kubernetes zu gewährleisten.
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["security", "threat-model"]
+:doc-type: ["reference"]
+:keywords: ["kubernetes", "admission control threat model", "kubewarden"]
+:sidebar_label: Bedrohungsmodell
+:sidebar_position: 80
+:current-version: {page-origin-branch}
+
+Die https://github.com/kubernetes/community/tree/master/sig-security[Kubernetes Security Special Interest Group (SIG)] hat ein Admission Control Threat Model für Kubernetes definiert. Das Team von {project-name} bewertet {short-project-name}kontinuierlich anhand dieses Bedrohungsmodells und arbeitet an der Bereitstellung sicherer Standardeinstellungen. Es wird empfohlen, dass die Administratoren von {short-project-name} das Bedrohungsmodell lesen und verstehen und bei Bedarf ihr eigenes, auf die jeweiligen Umstände zugeschnittenes Bedrohungsmodell erstellen.
+
+Einzelheiten zu den einzelnen Bedrohungen finden Sie unterhttps://github.com/kubernetes/sig-security/tree/main/sig-security-docs/papers/admission-control[von SIG Security veröffentlichtes Dokument].
+
+== Kubernetes-Bedrohungen
+
+=== Bedrohung 1 - Angreifer überflutet Webhook mit Datenverkehr und verhindert dessen Betrieb
+
+==== Szenario
+
+Ein Angreifer, der Zugriff auf den Webhook-Endpunkt auf Netzwerkebene hat, könnte große Mengen an Datenverkehr senden und so einen effektiven Denial-of-Service für den Admission Controller verursachen.
+
+==== Milderung
+
+Webhook scheitert geschlossen. Wenn der Webhook aus irgendeinem Grund nicht rechtzeitig antwortet, sollte der API-Server die Anfrage zurückweisen.
+Dies ist das Standardverhalten von {short-project-name}.
+
+Failing closed bedeutet, dass der API-Server die Anfrage standardmäßig zurückweist, wenn{short-project-name} aus irgendeinem Grund nicht mehr antwortet oder abstürzt.
+Dies gilt auch dann, wenn der Antrag normalerweise von {short-project-name} angenommen wird.
+
+=== Bedrohung 2 - Der Angreifer leitet Arbeitslasten weiter, die eine komplexe Verarbeitung erfordern und Zeitüberschreitungen verursachen
+
+==== Szenario
+
+Ein Angreifer, der auf Netzwerkebene auf den Admission Controller zugreifen kann, leitet Anfragen an den Admission Controller weiter, die eine komplexe Verarbeitung erfordern und zu Timeouts führen, da der Admission Controller Rechenleistung zur Verarbeitung der Arbeitslasten benötigt.
+
+==== Milderung
+
+Webhook scheitert beim Schließen und Authentifizieren von Anrufern.
+Dies ist das Standardverhalten von {short-project-name}.
+
+=== Bedrohung 3 - Angreifer nutzt Fehlkonfiguration des Webhooks zur Umgehung
+
+==== Szenario
+
+Ein Angreifer, der über Rechte zur Erstellung von Workloads im Cluster verfügt, kann eine Fehlkonfiguration ausnutzen, um die beabsichtigte Sicherheitskontrolle zu umgehen.
+
+==== Milderung
+
+Regelmäßige Überprüfungen der Webhook-Konfiguration können helfen, Probleme zu erkennen.
+
+=== Bedrohung 4 - Angreifer hat Rechte zum Löschen oder Ändern des Kubernetes-Webhook-Objekts
+
+==== Szenario
+
+Ein Angreifer, der Zugriff auf die Kubernetes-API hat, verfügt über ausreichende Privilegien, um das Webhook-Objekt im Cluster zu löschen.
+
+==== Milderung
+
+RBAC-Rechte sollten streng kontrolliert werden.
+
+==== To-do
+
+Der größte Teil von RBAC fällt nicht in den Rahmen der aktuellen Diskussion. Das Folgende wird jedoch zu gegebener Zeit folgen, um den Nutzern von {short-project-name} zu helfen:
+
+* Hinweise auf ein Minimum an zu implementierendem RBAC.
+* Bereitstellung und Dokumentation einer Richtlinie, die RBAC-Änderungen erkennt und blockieren kann.
+
+=== Bedrohung 5 - Angreifer erhält Zugriff auf gültige Anmeldeinformationen für den Webhook
+
+==== Szenario
+
+Ein Angreifer verschafft sich Zugang zu gültigen Client-Anmeldeinformationen für den Webhook des Admission Controllers.
+
+==== Milderung
+
+Webhook schlägt geschlossen fehl.
+Dies ist das Standardverhalten von {short-project-name}.
+
+=== Bedrohung 6 - Angreifer verschafft sich Zugang zu den Anmeldeinformationen eines Cluster-Administrators
+
+==== Szenario
+
+Ein Angreifer verschafft sich Zugang zu den Anmeldeinformationen eines Cluster-Administrators im Kubernetes-Cluster.
+
+==== Milderung
+
+K.A.
+
+=== Bedrohung 7 - Angreifer schnüffelt im Containernetz herum
+
+==== Szenario
+
+Ein Angreifer, der Zugriff auf das Containernetzwerk hat, kann den Datenverkehr zwischen dem API-Server und dem Webhook des Admission Controllers abhören.
+
+==== Milderung
+
+Da der Webhook TLS-Verschlüsselung für den gesamten Datenverkehr verwendet, ist {short-project-name} sicher.
+
+=== Bedrohung 8 - Der Angreifer führt einen MITM-Angriff auf den Webhook aus
+
+==== Szenario
+
+Ein Angreifer im Containernetzwerk, der Zugriff auf die NET_RAW-Fähigkeit hat, kann versuchen, mit MITM-Tools den Verkehr zwischen dem API-Server und dem Webhook des Admission Controllers abzufangen.
+
+==== Milderung
+
+Konfigurieren Sie den Cluster mit mTLS-Authentifizierung für die Webhooks und aktivieren Sie die mTLS-Funktion im {short-project-name} Stack. Alternativ dazu können Sie mTLS mit einer CNI einrichten, die Netzwerkrichtlinien unterstützt. Weitere Informationen finden Sie unterxref:/reference/security-hardening/webhooks-hardening.adoc["Sichere Webhooks mit gegenseitigem TLS"].
+
+Verwenden Sie die Richtliniehttps://artifacthub.io/packages/kubewarden/capabilities-psp/capabilities-psp[capabilities-psp]und konfigurieren Sie sie so, dass NET_RAW-Fähigkeiten wegfallen.
+
+=== Bedrohung 9 - Angreifer stiehlt Datenverkehr vom Webhook durch Spoofing
+
+==== Szenario
+
+Ein Angreifer ist in der Lage, den Datenverkehr vom vorgesehenen API-Server für den Webhook des Admission Controllers durch Spoofing umzuleiten.
+
+==== Milderung
+
+Konfigurieren Sie den Cluster mit mTLS-Authentifizierung für die Webhooks und aktivieren Sie die mTLS-Funktion im {short-project-name} Stack. Alternativ dazu können Sie mTLS mit einer CNI einrichten, die Netzwerkrichtlinien unterstützt. Weitere Informationen finden Sie unterxref:/reference/security-hardening/webhooks-hardening.adoc["Sichere Webhooks mit gegenseitigem TLS"].
+
+=== Bedrohung 10 - Missbrauch einer Mutationsregel zur Erstellung eines privilegierten Containers
+
+==== Szenario
+
+Ein Angreifer ist in der Lage, einen mutierenden Admission Controller dazu zu bringen, einen Workload so zu verändern, dass er die Erstellung von privilegierten Containern ermöglicht.
+
+==== Milderung
+
+Überprüfen und testen Sie alle Regeln.
+
+=== Bedrohung 11 - Der Angreifer stellt Arbeitslasten in Namensräumen bereit, die von der Zulassungskontrolle ausgenommen sind
+
+==== Szenario
+
+Ein Angreifer ist in der Lage, Arbeitslasten in Kubernetes-Namensräumen bereitzustellen, die von der Konfiguration des Admission Controllers ausgenommen sind.
+
+==== Milderung
+
+RBAC-Rechte werden streng kontrolliert
+
+==== To-do
+
+Der größte Teil des RBAC liegt außerhalb des Geltungsbereichs dieser Entscheidung. Das Team von{short-project-name} ist jedoch bestrebt:
+
+* Warnen Sie die Benutzer über unsere Dokumente und _schlagen Sie_ die minimal zu verwendende RBAC _vor_.
+* Stellen Sie eine Richtlinie bereit, die RBAC-Änderungen erkennt und sie *möglicherweise* blockiert.
+
+=== Bedrohung 12 - Die Blockierungsregel kann aufgrund einer fehlenden Übereinstimmung umgangen werden (z. B. fehlende initcontainers)
+
+==== Szenario
+
+Ein Angreifer hat ein Workload-Manifest erstellt, das eine Funktion der Kubernetes-API verwendet, die nicht vom Admission Controller abgedeckt wird.
+
+==== Milderung
+
+Überprüfen und testen Sie alle Regeln. Sie sollten die PRs überprüfen, die alle Regeln für die Bereitstellung von Richtlinien ändern.
+
+=== Bedrohung 13 - Angreifer nutzt fehlerhaften Zeichenfolgenabgleich in einer Blockliste aus, um Regeln zu umgehen
+
+==== Szenario
+
+Ein Angreifer, der über Rechte zum Erstellen von Workloads verfügt, umgeht eine Regel, indem er einen fehlerhaften String-Abgleich ausnutzt.
+
+==== Milderung
+
+Überprüfen und testen Sie alle Regeln.
+
+==== To-do
+
+Führen Sie Tests ein, um diese Regel abzudecken.
+Wie immer sollten Sie PRs überprüfen, die die Regeln für die Bereitstellung von Richtlinien ändern.
+
+=== Bedrohung 14 - Angreifer nutzt neue/alte Funktionen der Kubernetes-API, für die es keine Regeln gibt
+
+==== Szenario
+
+Ein Angreifer, der über Rechte zum Erstellen von Arbeitslasten verfügt, nutzt neue Funktionen der Kubernetes-API (z. B. eine geänderte API-Version), um eine Regel zu umgehen.
+
+==== Milderung
+
+Überprüfen und testen Sie alle Regeln. Es gibt eine Richtlinie, die auf die Verwendung veralteter Ressourcen prüft. Sie ist verfügbar unterhttps://github.com/kubewarden/deprecated-api-versions-policy[die deprecated-api-versions-policy].
+
+NOTE: `+deprecated-api-versions-policy+` befasst sich nur mit den ihm bekannten benutzerdefinierten Ressourcen. Die Bedrohung besteht sowohl in veralteten Ressourcenversionen als auch in neuen, unbekannten Versionen, die missbräuchlich verwendet werden, so dass die Richtlinie nur einen Teil des Problems abdeckt.
+
+=== Bedrohung 15 - Angreifer setzt privilegierten Container auf Knoten mit Webhook-Controller ein
+
+==== Szenario
+
+Ein Angreifer, der das Recht hat, privilegierte Container im Cluster einzusetzen, erstellt einen privilegierten Container auf dem Clusterknoten, auf dem der Webhook des Admission Controllers läuft.
+
+==== Milderung
+
+Admission Controller verwendet restriktive Richtlinien, um privilegierte Workloads zu verhindern.
+
+=== Bedrohung 16 - Der Angreifer aktiviert einen privilegierten Knoten-Hostpfad, der eine Änderung der Konfiguration des Webhook-Controllers ermöglicht
+
+==== Szenario
+
+Ein Angreifer, der über Rechte zur Bereitstellung von hostPath-Volumes mit Workloads verfügt, erstellt ein Volume, das den Zugriff auf die Dateien des Admission Controller Pods ermöglicht.
+
+Setzen Sie das `+kubewarden-default+` Helm-Diagramm ein und aktivieren Sie die darin empfohlenen Richtlinien, einschließlich der Richtlinie `+hostpaths-psp+`. Diese Richtlinie ist so konfiguriert, dass die gemeinsam genutzten hostPath-Volumes reduziert werden.
+
+=== Bedrohung 17 - Angreifer hat privilegierten SSH-Zugang zu einem Clusterknoten, auf dem ein Webhook für die Zulassung läuft
+
+==== Szenario
+
+Ein Angreifer ist in der Lage, sich über SSH als privilegierter Benutzer bei den Clusterknoten anzumelden.
+
+==== Milderung
+
+K.A.
+
+=== Bedrohung 18 - Angreifer nutzt Richtlinien, um vertrauliche Daten aus Zulassungsanfragen an externe Systeme zu senden
+
+==== Szenario
+
+Ein Angreifer ist in der Lage, eine Richtlinie zu konfigurieren, die auf Zulassungsanfragen hört und sensible Daten an ein externes System sendet.
+
+==== Milderung
+
+* Konfigurieren Sie den Cluster mit mTLS-Authentifizierung für die Webhooks und aktivieren Sie die mTLS-Funktion im {short-project-name} Stack. Alternativ dazu können Sie mTLS mit einer CNI einrichten, die Netzwerkrichtlinien unterstützt.
+
+* Standardmäßig haben die Richtlinien von {short-project-name} keinen Netzwerkzugang und werden in einer restriktiven Umgebung ausgeführt, die den externen Zugriff auf Webhooks streng kontrolliert.
+
+== {short-project-name} Bedrohungen
+
+=== {short-project-name} Bedrohung 1 - Bootstrapping des Vertrauens für den Zulassungsregler
+
+==== Szenario
+
+Unter der Annahme eines vertrauenswürdigen, aber neuen Kubernetes-Clusters ist ein Angreifer in der Lage, den {short-project-name} -Stack vor der Bereitstellung zu kompromittieren und eine der Richtlinien durchzusetzen.
+
+Zum Beispiel durch:
+
+* unsignierte und bösartige Bilder zu verwenden:
+ ** {short-project-name}-controller
+ ** richtlinien-server
+ ** eine der {short-project-name} Abhängigkeiten
+ ** alle optionalen Abhängigkeiten (Grafana, Prometheus, und andere)
+* durch Kompromittierung der Nutzlast der Helmkarten
+
+==== Milderung
+
+. {short-project-name} bietet eine Software-Stückliste, in der alle benötigten Bilder aufgeführt sind. Dies hilft bei Zero-Trust. Der Kubernetes-Administrator muss die {short-project-name} -Images, die Images der Abhängigkeiten und die Charts aus dem Kubernetes-Cluster in einer vertrauenswürdigen Umgebung verifizieren. Sie können dies zum Beispiel mit `+cosign+` tun. Dies ist übrigens ein Teil der Umsetzung, die für luftdurchlässige Installationen erforderlich ist.
+. Verwenden Sie signierte Helm-Diagramme und verifizierte Digests anstelle von Tags für {short-project-name}Bilder in diesen Helm-Diagrammen. Dies sichert jedoch keine Abhängigkeiten.
