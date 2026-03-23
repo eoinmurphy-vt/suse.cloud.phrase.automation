@@ -1,0 +1,64 @@
+= 管理服务器角色
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+使用`+--cluster-init+` 启动 K3s 服务器将运行所有控制平面组件，包括 apiserver、controller-manager、scheduler 和 etcd。可以禁用特定组件，以便将控制平面和 etcd 的角色分到不同的节点上。
+
+[IMPORTANT]
+====
+本文档仅与使用嵌入式 etcd 时相关。不使用嵌入式 etcd 时，所有服务器都将具有控制面角色并运行控制面组件。
+====
+
+
+== 专用`+etcd+` 节点
+
+要创建仅具有`+etcd+` 角色的服务器，请在禁用所有控制平面组件的情况下启动 K3：
+
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --cluster-init --disable-apiserver --disable-controller-manager --disable-scheduler
+----
+其中`+INSTALL_K3S_ARTIFACT_URL+` 是https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[首要文物 URL]
+
+第一个节点将启动 etcd，并等待其他`+etcd+` 和/或`+control-plane+` 节点加入。在您加入另一个已启用`+control-plane+` 组件的服务器之前，群集将无法使用。
+
+== 专用`+control-plane+` 节点
+
+[NOTE]
+====
+专用`+control-plane+` 节点不能是群集中的第一个服务器；在加入专用`+control-plane+` 节点之前，必须有一个具有`+etcd+` 角色的现有节点。
+====
+
+
+要创建只有`+control-plane+` 角色的服务器，请在禁用 etcd 的情况下启动 k3s：
+
+[,bash]
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --token <token> --disable-etcd --server https://<etcd-only-node>:6443
+----
+
+创建专用服务器节点后，所选角色将在`+kubectl get node+` 中可见：
+
+[,bash]
+----
+$ kubectl get nodes
+NAME           STATUS   ROLES                       AGE     VERSION
+k3s-server-1   Ready    etcd                        5h39m   v1.20.4+k3s1
+k3s-server-2   Ready    control-plane,master        5h39m   v1.20.4+k3s1
+----
+
+== 为现有服务器添加角色
+
+可以通过删除禁用标记重新启动 K3，将角色添加到现有的专用节点上。例如，如果要将`+control-plane+` 角色添加到专用的`+etcd+` 节点，可以从 systemd 单元或配置文件中删除`+--disable-apiserver --disable-controller-manager --disable-scheduler+` 标记，然后重新启动服务。
+
+== 配置文件语法
+
+与所有其他 CLI 标志一样，您可以使用xref:installation/configuration.adoc#_configuration_file[配置文件]禁用组件，而不是将选项作为 CLI 标志传递。例如，要创建一个专用的`+etcd+` 节点，可以在`+/etc/rancher/k3s/config.yaml+` 中输入以下值：
+
+[,yaml]
+----
+cluster-init: true
+disable-apiserver: true
+disable-controller-manager: true
+disable-scheduler: true
+----
