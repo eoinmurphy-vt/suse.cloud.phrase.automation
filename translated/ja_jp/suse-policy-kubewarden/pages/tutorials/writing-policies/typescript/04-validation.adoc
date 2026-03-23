@@ -1,0 +1,176 @@
+include::partial$variables.adoc[]
+= 検証ロジックを書く
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: src/index.tsファイルにKubernetesリソースの検証ロジックを記述し、受信したリクエストデータにアクセスしてレスポンスを返す。
+:keywords: "{project-name}", kubewarden, kubernetes, ポリシーの記述, タイプスクリプト
+:doc-type: チュートリアル
+:doc-topic: {project-name}kubewarden, ポリシーの記述, タイプスクリプト, バリデーション・ロジック
+:doc-persona: kubewarden-policy-developer
+:current-version: {page-origin-branch}
+
+[WARNING]
+====
+クリティカルだ：STDOUTにログ情報を書き込まない。
+
+STDOUTへの書き込みはポリシーに反する。代わりに、STDERRをロギングに使用するか、{project-name} SDKが提供するロギング機能を使用する。ポリシーのSTDOUTへの出力は、検証レスポンスのみを含まなければならない。
+====
+
+検証ロジックは`+src/index.ts+` 。
+
+バリデーション・ロジックが必要だ：
+
+* 受信した検証リクエストから関連情報を取得する。
+* 入力とポリシー設定に基づいた応答を返す。
+
+受信リクエストには、検証するKubernetesリソースを含むJSONオブジェクトが含まれる。
+このJSONオブジェクト・データには、{short-project-name} SDKのヘルパー関数を通じてアクセスできる。
+
+== `+validate+` 関数
+
+テンプレートによって提供されるポリシーは、すでに`+src/index.ts+` で`+validate+` 関数を持っています。
+ホスト名が拒否されたPodを拒否するロジックを追加して、それを使用することができます。
+
+これが、完成後の関数の姿である：
+
+[source,javascript]
+----
+/**
+ * Validates the incoming request against policy settings.
+ * Accepts or rejects the request based on denied hostnames.
+ */
+function validate(): void {
+  try {
+    // NOTE 1
+    // Read the validation request payload
+    const validationRequest = Validation.Validation.readValidationRequest();
+
+    // NOTE 2
+    // Extract policy settings from the validation request
+    const settings: PolicySettings = validationRequest.settings || {};
+
+    // NOTE 3
+    // Extract the Kubernetes object (Pod) from the validation request
+    const resource = getKubernetesResource(validationRequest);
+    if (!resource) {
+      writeOutput(Validation.Validation.rejectRequest('Failed to parse Kubernetes resource.'));
+      return;
+    }
+
+    // Only process Pod resources
+    if (resource.kind !== 'Pod') {
+      writeOutput(Validation.Validation.acceptRequest());
+      return;
+    }
+
+    // NOTE 4
+    // Extract hostname from the Pod spec
+    const hostname = getPodHostname(resource as Pod);
+    const deniedHostnames = settings.denied_hostnames || [];
+
+    // NOTE 5
+    // Validate the hostname against the deny list
+    if (!hostname) {
+      writeOutput(Validation.Validation.acceptRequest());
+      return;
+    }
+
+    if (deniedHostnames.includes(hostname)) {
+      writeOutput(
+        Validation.Validation.rejectRequest(
+          `+Pod hostname '${hostname}' is not allowed. Denied hostnames: [${deniedHostnames.join(', ')}]+`
+        ),
+      );
+    } else {
+      writeOutput(Validation.Validation.acceptRequest());
+    }
+  } catch (err) {
+    console.error('Validation error:', err);
+    writeOutput(Validation.Validation.rejectRequest(`+Validation failed: ${err}+`));
+  }
+}
+----
+
+=== 各NOTEの役割
+
+* 注1：`+readValidationRequest()+` を使って、受信した検証リクエストを読み込む。
+* 注2：検証リクエストからユーザー定義の設定を抽出する(例えば、拒否されたホスト名)。
+* 注3：リクエストのペイロードからKubernetesオブジェクト（Podであることが期待される）を解析する。
+* 注4：Podのspecセクションからhostnameフィールドを取り出す。
+* 注5：ホスト名を拒否されたリストと比較し、適切な応答を返す。
+
+== ヘルパー関数
+
+ポリシーは検証リクエストを処理するためにいくつかのヘルパー関数を使用する：
+
+=== getKubernetesResource
+
+この関数は検証リクエストからKubernetesリソースを抽出します：
+
+[source,javascript]
+----
+/**
+ * Safely parses and extracts the Kubernetes resource from the validation request.
+ *
+ * @param {ValidationRequest} validationRequest - The validation request object.
+ * @returns {KubernetesResource | undefined} The parsed Kubernetes resource if available.
+ */
+function getKubernetesResource(validationRequest: ValidationRequest): KubernetesResource | undefined {
+  try {
+    let requestObject: string | KubernetesResource | undefined = validationRequest.request?.object;
+    if (typeof requestObject === 'string') {
+      requestObject = JSON.parse(requestObject) as unknown as KubernetesResource;
+    } else if (requestObject === undefined) {
+      return undefined;
+    }
+    return requestObject as KubernetesResource;
+  } catch (error) {
+    console.error('Error parsing Kubernetes resource:', error);
+    return undefined;
+  }
+}
+----
+
+この関数は、KubernetesオブジェクトがJSON文字列またはすでにパースされたオブジェクトである場合を処理します。
+
+=== getPodHostname
+
+この関数は Pod リソースからホスト名を抽出します：
+
+[source,javascript]
+----
+/**
+ * Extracts the hostname from a Pod resource.
+ *
+ * @param {Pod} pod - The Pod resource.
+ * @returns {string | undefined} The hostname if set, otherwise undefined.
+ */
+import type { Pod } from 'kubernetes-types/core/v1';
+function getPodHostname(pod: Pod): string | undefined {
+  return pod.spec?.hostname;
+}
+----
+
+この関数はPodの仕様からホスト名を抽出する。
+
+== ポリシーのエントリー・ポイント
+
+このポリシーでは、switchステートメントを使って異なるアクションを処理する：
+
+[source,javascript]
+----
+const action = policyAction();
+switch (action) {
+  case 'validate':
+    validate();
+    break;
+  case 'validate-settings':
+    validateSettings();
+    break;
+  default:
+    console.error('Unknown action:', action);
+    writeOutput(new Validation.Validation.ValidationResponse(false, 'Unknown policy action'));
+}
+----
+
+{short-project-name} Javy プラグインは、ポリシーがリソースを検証すべきか、その設定を検証すべきかを示す`+policyAction()+` 関数を提供します。
