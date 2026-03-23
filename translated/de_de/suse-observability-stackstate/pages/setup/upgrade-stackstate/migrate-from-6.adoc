@@ -1,0 +1,426 @@
+= Migrieren von StackState 6.x auf SUSE Observability
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Selbstgehostet
+:page-toclevels: 3
+
+Aufgrund der Umbenennung des Produkts und aufgrund von Änderungen im Topologiedatenformat ist es nicht möglich, ein Upgrade von StackState auf SUSE Observability über einen Standard-Helm-Upgrade-Befehl durchzuführen. Diese Migrationsanleitung hilft Ihnen, SUSE Observability genauso einzurichten wie StackState.
+
+SUSE Observability wird neu installiert, ohne die bereits vorhandenen historischen Daten. *Optional* können die historischen Daten so lange zugänglich gehalten werden, bis SUSE Observability eine ausreichende Historie aufgebaut hat. Dieser Leitfaden behandelt beide Szenarien.
+
+Je nach dem gewählten Szenario sind die Migrationsschritte unterschiedlich. Die parallele Ausführung ist etwas komplizierter und erfordert mehr Ressourcen. Die allgemeinen Schritte, die für beide Szenarien gelten, sind:
+
+. Installieren Sie die neueste Version von StackState 6.x
+. Erstellen und Herunterladen einer Konfigurationssicherung
+. Installation und Konfiguration von SUSE Observability, szenariospezifische Schritte
+. Konfiguration der offenen Telemetriekollektoren aktualisieren
+. Migrieren Sie den Agenten
+
+[NOTE]
+====
+In diesem Handbuch gehen alle Beispiele von der folgenden Konfiguration aus, passen Sie die Befehle an Ihre eigene Konfiguration an:
+
+* Der Zugriff auf den Kubernetes-Cluster erfolgt über einen Kontext namens `+observability+`
+* StackState wird im Namespace `+stackstate+` installiert.
+* SUSE Observability wird im Namespace `+suse-observability+` installiert.
+====
+
+
+== Installieren Sie die neueste Version von StackState 6.x
+
+Nur die neueste Version von StackState 6.x verfügt über eine Konfigurationssicherung, die alle Konfigurationen in einem mit SUSE Observability kompatiblen Format enthält. Bitte vergewissern Sie sich, dass Sie die neueste Version installiert haben, indem Sie `+helm list --namespace stackstate+` ausführen (verwenden Sie den Namensraum, in dem StackState installiert ist):
+
+* Die Helmkartenversion sollte sein `+1.12.1+`
+* Die Anwendungsversion sollte sein `+6.0.0-snapshot.20241023094532-stackstate-6.x-7be52ad+`
+
+Wenn Sie diese Version nicht haben, führen Sie bitte zuerst ein Upgrade gemäß den https://docs.stackstate.com/6.0/self-hosted-setup/upgrade-stackstate/steps-to-upgrade#_minor_or_maintenance_stackstate_release[Standardschritten von] durch.
+
+== Erstellen Sie eine Sicherungskopie der Konfiguration und laden Sie die Sicherungskopie herunter
+
+Zunächst erstellen wir ein Konfigurations-Backup der StackState-Konfiguration. Danach sollten Sie keine Konfigurationsänderungen mehr in StackState vornehmen (sie werden nicht auf SUSE Observability übertragen). Machen Sie sich zunächst mit der Konfigurationssicherung vertraut und besorgen Sie sich die benötigten Skripte mit Hilfe der https://docs.stackstate.com/6.0/self-hosted-setup/data-management/backup_restore/configuration_backup#_working_with_configuration_backups[configuration backup docs for StackState 6.x].
+
+Führen Sie diese Befehle im Verzeichnis `+restore+` aus, das die Skripte enthält:
+
+. Legen Sie den aktiven Kontext und Namespace fest:
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=stackstate
+----
+
+. Erstellen Sie ein Backup (dies erfordert 1Gi Arbeitsspeicher und 1 Kern im Cluster), dies kann eine Weile dauern, um einen Kubernetes-Job zu erstellen und den Pod zu starten:
++
+[,bash]
+----
+ ./backup-configuration-now.sh
+----
+
+. In der Ausgabe des Befehls sehen Sie den Dateinamen für die Sicherung, etwa `+sts-backup-20241024-1423.sty+`. Kopieren Sie den Dateinamen und verwenden Sie ihn, um die Sicherung herunterzuladen:
++
+[,bash]
+----
+./download-configuration-backup.sh sts-backup-20241023-1423.sty
+----
+
+Sie sollten nun die Sicherungsdatei der Konfiguration auf Ihrem Computer haben.
+
+== Installation und Konfiguration von SUSE Observability
+
+In diesem Punkt unterscheiden sich die beiden Optionen. Folgen Sie den Anweisungen für Ihr bevorzugtes Szenario.
+Wählen Sie eine der folgenden Optionen:
+
+* xref:#_replace_stackstate[]
+* xref:#_run_side_by_side[].
+
+=== Ersetzen von StackState
+
+==== StackState deinstallieren
+
+Die Deinstallation von StackState vor der Installation von SUSE Observability hat zwei Vorteile: Erstens werden Ressourcen im Cluster freigesetzt, so dass keine temporären zusätzlichen Knoten benötigt werden. Zweitens wird die Ingress-Konfiguration für StackState entfernt, sodass die StackState-URL von SUSE Observability wiederverwendet werden kann. Der einzige Nachteil ist, dass Sie ab diesem Zeitpunkt bis zur Einrichtung der Konfiguration von SUSE Observability weder mit StackState noch mit SUSE Observability eine Überwachung durchführen können.
+
+Mit der Deinstallation von StackState werden auch Ihre historischen Daten (Topologie und alle anderen Telemetriedaten) gelöscht. Um StackState zu deinstallieren, folgen Sie der https://docs.stackstate.com/6.0/self-hosted-setup/uninstall[Deinstallationsanleitung].
+
+==== SUSE Observability installieren
+
+Installieren Sie SUSE Observability in einem anderen Namespace als StackState, um Konflikte zu vermeiden. Es wird empfohlen, den gleichen Namespace wie in der Dokumentation zu verwenden, `+suse-observability+`.
+
+Die größte Änderung bei der Installation ist, dass nun Profile unterstützt werden. Bitte wählen Sie das Profil aus, das zu Ihrem beobachteten Cluster passt, und verwenden Sie es, um die Werte wie in der Installationsanleitung beschrieben zu generieren. Benutzerdefinierte Helm-Werte für StackState sind mit SUSE Observability kompatibel. Die Werte zum Anpassen der Ressourcen müssen jedoch zugunsten der neuen Profile entfernt werden, wir behalten diese in einer Datei namens `+custom-values-no-resources.yaml+`. Sie können dieselben Ingress-Einstellungen verwenden, so dass SUSE Observability aus Sicht der Benutzer und Agenten StackState effektiv ersetzt.
+
+Um SUSE Observability zu installieren, folgen Sie der xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[Installationsanleitung] mit einigen kleinen Änderungen an der Wertegenerierung, um die Migration durchzuführen:
+
+* verwenden Sie das ausgewählte Profil, das Ihrer Umgebung und Ihren (aktualisierten) benutzerdefinierten Werten entspricht.
+* die `+global.receiverApiKey+` aus den StackState-Werten abrufen und als zusätzliches Argument für die Wertegenerierung bereitstellen
+* für die Basis-URL, die angegeben werden muss, verwenden wir dieselbe URL wie für die aktuelle StackState-Installation: `+https://stackstate.demo.stackstate.io+`
+
+Der Schritt der Werterzeugung sieht also folgendermaßen aus (wir verwenden wieder unser Beispiel mit dem kleinsten Profil):
+
+[,bash]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set receiverApiKey='our-old-api-key' \
+  --set baseUrl='https://stackstate.demo.stackstate.io' \
+  --set sizing.profile='10-nonha' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+Der Helm-Installationsbefehl ist derselbe wie in der Installationsdokumentation, mit der Option, die Datei `+custom-values-no-resources.yaml+` values einzuschließen, falls Sie eine haben. Vergewissern Sie sich auch, dass die Werte für die Eingangskonfiguration angegeben werden. Dies kann derselbe Wert sein, der für StackState verwendet wurde. In dem Beispiel, das wir verwenden werden:
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/ingress.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
+
+[NOTE]
+====
+Bei der Installation wird standardmäßig ein neues Administrator-Passwort erstellt. Wenn Sie mit der Standardauthentifizierung arbeiten und das gleiche Administratorkennwort wie bisher beibehalten möchten, müssen Sie es im Schritt der Wertegenerierung angeben (oder es nach der Generierung der Werte bearbeiten).
+====
+
+
+==== Wiederherstellung der Konfigurationssicherung
+
+Jetzt, wo SUSE Observability installiert ist, kann die Konfigurationssicherung wiederhergestellt werden. Das SUSE Observability Helm-Diagramm enthält einen ähnlichen Satz von Sicherungswerkzeugen xref:/setup/data-management/backup_restore/configuration_backup.adoc[, die hier dokumentiert sind]. *Diese sind nicht dieselben wie bei StackState 6.x*. Stellen Sie daher sicher, dass Sie die Skripte aus dem Verzeichnis `+restore+` des *SUSE Observability Helm-Diagramms* für die Wiederherstellung des Backups abrufen.
+
+Führen Sie im Verzeichnis `+restore+` des SUSE Observability Helm-Charts die folgenden Befehle aus, um die Sicherung wiederherzustellen:
+
+. Legen Sie den aktiven Kontext und Namespace fest:
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=suse-observability
+----
+
+. Laden Sie die zuvor erstellte Sicherungsdatei hoch, in diesem Fall `+sts-backup-20241024-1423.sty+` (achten Sie darauf, dass Sie bei Bedarf den vollständigen Pfad angeben):
++
+[,bash]
+----
+./upload-configuration-backup.sh sts-backup-20241024-1423.sty
+----
+
+. Stellen Sie das Backup wieder her (dies erfordert 1Gi Arbeitsspeicher und 1 Kern im Cluster), dies kann eine Weile dauern, um einen Kubernetes-Auftrag zu erstellen und den Pod zu starten:
++
+[,bash]
+----
+ ./restore-configuration-backup.sh sts-backup-20241024-1423.sty
+----
++
+Antworten Sie auf `+yes+`, um zu bestätigen, dass das Löschen aller Daten in Ordnung ist.
+
+. Skalieren Sie alle Einsätze wieder hoch:
++
+[,bash]
+----
+./scale-up.sh
+----
+
+Jetzt hat SUSE Observability genau dieselbe Einrichtung wie StackState, und wir sind bereit, es zu verwenden. Da dieselbe URL verwendet wird, kann beim ersten Mal eine Aktualisierung des Browsers erforderlich sein.
+
+=== Seite an Seite laufen
+
+In diesem Szenario nimmt SUSE Observability neue Daten auf und ist für die Ausführung von Überwachungen und das Versenden von Benachrichtigungen zuständig. StackState bietet nur Zugriff auf die historischen Daten.
+
+Zu einem bestimmten Zeitpunkt muss der Datenverkehr von StackState auf SUSE Observability umgestellt werden. Die Lösung, die die Auswirkungen auf Ihre Benutzer und die installierten Agenten begrenzt, ist die Konfiguration von SUSE Observability mit der ursprünglich von StackState verwendeten URL. In diesem Leitfaden wird die StackState-URL (`+stackstate.demo.stackstate.io+`) wiederverwendet, während der "alte" StackState unter einer neuen `+stackstate-old.demo.stackstate.io+` URL zugänglich sein wird. Wenn ein OIDC-Anbieter für die Authentifizierung verwendet wird, muss die URL `+stackstate-old+` in der OIDC-Anbieterkonfiguration und in der StackState-Konfiguration hinzugefügt/aktualisiert werden.
+
+Es ist auch möglich, SUSE Observability unter einer neuen URL zu installieren. In diesem Fall müssen Sie den Agenten und die Open Telemetry-Kollektoren aktualisieren, um die neue URL zu verwenden, oder eine andere Methode zur Umleitung des Datenverkehrs verwenden.
+
+Zusammenfassend lässt sich sagen, dass vor der Migration StackState im Namespace `+stackstate+` mit URL `+https://stackstate.demo.stackstate.io+` läuft. Dies wird nach migriert werden:
+
+* SUSE Observability im Namespace `+suse-observability+` mit der URL `+stackstate.demo.stackstate.io+`, dies wird die neue aktive Instanz sein
+* StackState im Namensraum `+stackstate+` mit der URL `+https://stackstate-old.demo.stackstate.io+`, die nur historische Daten enthält
+
+==== SUSE Observability installieren
+
+Installieren Sie SUSE Observability in einem anderen Namespace als StackState, um Konflikte zu vermeiden. Es wird empfohlen, den gleichen Namespace wie in der Dokumentation zu verwenden, `+suse-observability+`.
+
+Die größte Änderung bei der Installation ist, dass nun Profile unterstützt werden. Bitte wählen Sie das Profil aus, das zu Ihrem beobachteten Cluster passt, und verwenden Sie es, um die Werte wie in der Installationsanleitung beschrieben zu generieren. Benutzerdefinierte Helm-Werte für StackState sind mit SUSE Observability kompatibel. Die Werte zum Anpassen der Ressourcen müssen jedoch zugunsten der neuen Profile entfernt werden, wir behalten diese in einer Datei namens `+custom-values-no-resources.yaml+`. Schließen Sie außerdem das Ingress-Setup vorerst von der SUSE Observability-Installation aus.
+
+Um SUSE Observability zu installieren, folgen Sie der xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[Installationsanleitung] mit einigen kleinen Änderungen an der Wertegenerierung, um die Migration durchzuführen:
+
+* verwenden Sie das ausgewählte Profil, das Ihrer Umgebung und Ihren (aktualisierten) benutzerdefinierten Werten entspricht.
+* die `+global.receiverApiKey+` aus den StackState-Werten abrufen und als zusätzliches Argument für die Wertegenerierung bereitstellen
+* für die Basis-URL, die angegeben werden muss, verwenden wir dieselbe URL wie für die aktuelle StackState-Installation: `+https://stackstate.demo.stackstate.io+`
+
+Der Schritt der Werterzeugung sieht also folgendermaßen aus (wir verwenden wieder unser Beispiel mit dem kleinsten Profil):
+
+[,bash]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set receiverApiKey='our-old-api-key' \
+  --set baseUrl='https://stackstate.demo.stackstate.io' \
+  --set sizing.profile='10-nonha' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+Der Helm-Installationsbefehl ist derselbe wie in der Installationsdokumentation, mit der Option, die Datei `+custom-values-no-resources.yaml+` values einzuschließen, falls Sie eine haben.
+
+[NOTE]
+====
+Bei der Installation wird standardmäßig ein neues Administrator-Passwort erstellt. Wenn Sie mit der Standardauthentifizierung arbeiten und das gleiche Administratorkennwort wie bisher beibehalten möchten, müssen Sie es im Schritt der Wertegenerierung angeben (oder es nach der Generierung der Werte bearbeiten).
+====
+
+
+==== Wiederherstellung der Konfigurationssicherung
+
+Jetzt, wo SUSE Observability installiert ist, kann die Konfigurationssicherung wiederhergestellt werden. Das SUSE Observability Helm-Diagramm enthält einen ähnlichen Satz von Sicherungswerkzeugen xref:/setup/data-management/backup_restore/configuration_backup.adoc[, die hier dokumentiert sind]. *Diese sind nicht dieselben wie bei StackState 6.x*. Stellen Sie daher sicher, dass Sie die Skripte aus dem Verzeichnis `+restore+` des *SUSE Observability Helm-Diagramms* für die Wiederherstellung des Backups abrufen.
+
+Führen Sie im Verzeichnis `+restore+` des SUSE Observability Helm-Charts die folgenden Befehle aus, um die Sicherung wiederherzustellen:
+
+. Legen Sie den aktiven Kontext und Namespace fest:
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=suse-observability
+----
+
+. Laden Sie die zuvor erstellte Sicherungsdatei hoch, in diesem Fall `+sts-backup-20241024-1423.sty+` (achten Sie darauf, dass Sie bei Bedarf den vollständigen Pfad angeben):
++
+[,bash]
+----
+./upload-configuration-backup.sh sts-backup-20241024-1423.sty
+----
+
+. Stellen Sie das Backup wieder her (dies erfordert 1Gi Arbeitsspeicher und 1 Kern im Cluster), dies kann eine Weile dauern, um einen Kubernetes-Auftrag zu erstellen und den Pod zu starten:
++
+[,bash]
+----
+ ./restore-configuration-backup.sh sts-backup-20241024-1423.sty
+----
++
+Vergewissern Sie sich, dass Sie sich im Namespace suse-observability und nicht mehr im Namespace StackState befinden, und antworten Sie erst dann auf `+yes+`, um zu bestätigen, dass das Entfernen aller Daten in Ordnung ist.
+
+. Skalieren Sie alle Einsätze wieder hoch:
++
+[,bash]
+----
+./scale-up.sh
+----
+
+Jetzt hat SUSE Observability genau dieselbe Einrichtung wie StackState, und wir sind bereit, es zu verwenden.
+
+==== Vorbereiten der Verkleinerung von StackState
+
+Um sicherzustellen, dass sich in der alten "StackState"-Einrichtung nichts mehr ändert, und auch um den Ressourcenverbrauch zu verringern, muss eine Reihe von StackState-Bereitstellungen auf 0 Replikate reduziert werden. Am besten geschieht dies über die Helm-Werte, so dass bei einer anderen Konfigurationsänderung nicht versehentlich einige der Einsätze wieder hochskaliert werden.
+
+Erstellen Sie eine neue `+scaled-down.yaml+` Datei und speichern Sie sie neben Ihrer StackState `+values.yaml+` (oder bearbeiten Sie Ihre bestehende `+values.yaml+` für StackState, um diese Schlüssel aufzunehmen oder zu aktualisieren):
+
+[,yaml]
+----
+common:
+  deployment:
+    replicaCount: 0
+  statefulset:
+    replicaCount: 0
+anomaly-detection:
+  enabled: false
+backup:
+  enabled: false
+stackstate:
+  components:
+    correlate:
+      replicaCount: 0
+    checks:
+      replicaCount: 0
+    healthSync:
+      replicaCount: 0
+    e2es:
+      replicaCount: 0
+    notification:
+      replicaCount: 0
+    receiver:
+      replicaCount: 0
+    state:
+      replicaCount: 0
+    sync:
+      replicaCount: 0
+    slicing:
+      replicaCount: 0
+    vmagent:
+      replicaCount: 0
+  features:
+    server:
+      split: true
+opentelemetry:
+  enabled: false
+----
+
+Diese Datei wird verwendet, wenn der Eingang für StackState geändert wird. Wenn keine Agenten- oder offenen Telemetriedaten mehr empfangen werden, werden diese StackState-Dienste nicht benötigt.
+
+==== Den Verkehr umleiten
+
+Durch die Umleitung des Datenverkehrs werden sowohl der Agentenverkehr als auch die Benutzer von StackState auf SUSE Observability umgestellt. Dazu sind zwei Schritte erforderlich: Zunächst muss StackState auf eine neue URL umgestellt werden, dann muss der SUSE Observability-Ingress so konfiguriert werden, dass er die ursprüngliche StackState-URL verwendet. Zwischen diesen Schritten ist der Zugriff auf SUSE Observability/StackState vorübergehend nicht möglich, aber die Agenten zwischenspeichern die Daten und senden sie, sobald sie wieder eine Verbindung herstellen können.
+
+. Kopieren Sie die Ingress-Konfiguration aus StackState in die Werte, die Sie für SUSE Observability haben, oder erstellen Sie eine Kopie in einer separaten Datei `+ingress.yaml+` values, neben den generierten `+baseConfig_values.yaml+` und `+sizing_values.yaml+`.
+. Aktualisieren Sie die Ingress-Werte für StackState, um eine andere URL zu verwenden, hier ändern wir sie von `+stackstate+` in `+stackstate-old+`:
++
+[,yaml]
+----
+ ingress:
+   annotations:
+     nginx.ingress.kubernetes.io/proxy-body-size: 100m
+   enabled: true
+   hosts:
+     - host: "stackstate-old.demo.stackstate.io"
+   tls:
+     - hosts:
+         - "stackstate-old.demo.stackstate.io"
+       secretName: tls-secret-stackstate-old
+
+ opentelemetry-collector:
+   ingress:
+     enabled: true
+     annotations:
+       nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+       nginx.ingress.kubernetes.io/backend-protocol: GRPC
+     hosts:
+       - host: otlp-stackstate-old.demo.stackstate.io
+         paths:
+           - path: /
+             pathType: Prefix
+             port: 4317
+     tls:
+       - hosts:
+           - otlp-stackstate-old.demo.stackstate.io
+         secretName: tls-secret-stackstate-old-otlp
+----
+
+. Bearbeiten Sie die ursprüngliche `+values.yaml+` von StackState und aktualisieren Sie den Wert `+stackstate.baseUrl+`, um auch die neue URL zu verwenden (in diesem Fall `+https://stackstate-old.demo.stackstate.io+`).
+. Führen Sie das helm-Upgrade für StackState aus und fügen Sie die aktualisierte Ingress-Konfiguration ein, damit der `+stackstate-old.demo.stackstate.io+` Ingress verwendet wird. Fügen Sie auch die Werte von `+scaled-down.yaml+` aus dem vorherigen Schritt ein und stellen Sie sicher, dass alle während der Installation von StackState verwendeten Wertedateien einbezogen werden:
++
+----
+  helm upgrade \
+   --install \
+   --namespace stackstate \
+   --values stackstate-values/values.yaml \
+   --values stackstate-values/stackstate-ingress.yaml \
+   --values stackstate-values/scaled-down.yaml \
+ stackstate \
+ stackstate/stackstate-k8s
+----
+
+. Führen Sie das xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc#_deploy_suse_observability_with_helm[helm-Upgrade] für SUSE Observability aus, um die ursprüngliche URL `+stackstate.demo.stackstate.io+` zu verwenden (stellen Sie sicher, dass alle während der Installation von SUSE Observability verwendeten Wertedateien enthalten sind, aber jetzt auch die `+ingress.yaml+`):
++
+----
+ export VALUES_DIR=.
+ helm upgrade \
+   --install \
+   --namespace suse-observability \
+   --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+   --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+   --values ingress.yaml \
+ suse-observability \
+ suse-observability/suse-observability
+----
+
+Jetzt können Benutzer unter `+https://stackstate.demo.stackstate.io+` SUSE Observability mit allen bekannten StackState-Funktionen und Live-Daten abrufen. Beim ersten Mal müssen die Benutzer möglicherweise auf Aktualisieren klicken, um das Laden der neuen Anwendung zu erzwingen.
+
+Sie können unter `+https://stackstate-old.demo.stackstate.io+` historische Daten einsehen.
+
+==== StackState deinstallieren
+
+Wenn die StackState-Installation nicht mehr benötigt wird, kann sie mit dem https://docs.stackstate.com/6.0/self-hosted-setup/uninstall[Deinstallationsverfahren] deinstalliert werden.
+
+
+== Konfiguration der offenen Telemetriekollektoren aktualisieren
+
+Bei SUSE Observability gibt es eine Änderung bei der Authentifizierung. StackState verwendet ein Inhaber-Token mit dem Schema `+StackState+`, aber SUSE Observability verwendet das Schema `+SUSEObservability+`. Aktualisieren Sie die Werte für Ihre installierten Open Telemetry Collectors, um von dort zu wechseln:
+
+[,yaml]
+----
+config:
+  extensions:
+    bearertokenauth:
+      scheme: StackState
+      token: "${env:API_KEY}"
+----
+
+zu
+
+[,yaml]
+----
+config:
+  extensions:
+    bearertokenauth:
+      scheme: SUSEObservability
+      token: "${env:API_KEY}"
+----
+
+Verwenden Sie die aktualisierten Werte, um die installierten Collectors mit dem Befehl `+helm upgrade+` zu aktualisieren. Weitere Informationen finden Sie auch unter xref:/setup/otel/collector.adoc#_deploy_the_collector[Bereitstellung des Open Telemetry Collector].
+
+== Rucksäcke aufrüsten
+
+Navigieren Sie zu `+https://your-stackstate-instance/#/stackpacks/+` oder öffnen Sie die StackPacks-Übersicht über das Hauptmenü. Gehen Sie von dort aus durch alle installierten Stackpacks und klicken Sie auf die Schaltfläche "Upgrade", um die neue SUSE Observability-Version des Stackpacks zu erhalten.
+
+== Agenten migrieren
+
+Der letzte Schritt bei der Migration auf SUSE Observability ist die Aktualisierung aller installierten Agenten. Dies muss nicht sofort geschehen, sondern kann zu einem für den jeweiligen Cluster günstigen Zeitpunkt erfolgen, da SUSE Observability abwärtskompatibel mit dem StackState-Agenten ist.
+
+Die Migration ist ein einfacher Prozess in 2 Schritten:
+
+. Deinstallieren Sie den StackState-Agenten
+. Installieren Sie den SUSE Observability-Agenten
+
+Es ist wichtig, dass der alte Agent zuerst deinstalliert wird, da es nicht möglich ist, beide Agenten gleichzeitig laufen zu lassen. Die Deinstallation des Agenten auf einem Cluster wird wie folgt durchgeführt:
+
+[,bash]
+----
+helm uninstall -n stackstate stackstate-k8s-agent
+----
+
+Falls Sie einen anderen Namensraum oder Versionsnamen verwendet haben, aktualisieren Sie den Befehl entsprechend.
+
+Navigieren Sie zu `+https://your-stackstate-instance/#/stackpacks/kubernetes-v2+`. Suchen Sie den Cluster, auf dem Sie den Agenten aktualisieren möchten, in der Liste der StackPack-Instanzen, kopieren Sie den Befehl helm install für Ihre Kubernetes-Distribution und führen Sie ihn aus. Wenn Sie benutzerdefinierte Werte haben, können Sie diese ohne Änderung mit dem Argument `+--values+` einfügen. Die Werte des SUSE Observability-Agenten verwenden dieselbe Bezeichnung wie der StackState-Agent.
