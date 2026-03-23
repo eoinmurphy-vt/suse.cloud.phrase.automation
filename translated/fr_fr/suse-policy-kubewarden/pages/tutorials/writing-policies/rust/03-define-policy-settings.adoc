@@ -1,0 +1,110 @@
+include::partial$variables.adoc[]
+= Définition des paramètres de la politique
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Définissez les paramètres et la structure de la politique dans votre code afin d'établir une base pour valider l'intégrité de la politique grâce à une gestion efficace des paramètres. Veiller à ce que toutes les modifications fassent l'objet d'un suivi, notamment en ce qui concerne l'auteur de la modification, la date et l'objet de la modification.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "policy-settings"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "writing policies", "policy settings", "rust"]
+:sidebar_label: Définition des paramètres de la politique
+:current-version: {page-origin-branch}
+
+== La structure des paramètres de la politique
+
+Tout d'abord, définissez la structure qui contient les paramètres de la politique.
+
+Ouvrez le fichier `+demo/src/settings.rs+` et modifiez la définition de `+Settings+``+struct+` comme suit :
+
+[subs="+attributes",rust]
+----
+pub(crate) struct Settings {
+    pub invalid_names: HashSet<String>,
+}
+----
+
+Cette opération place automatiquement la liste des noms non valides dans une collection Set.
+
+== La fonction de validation des réglages
+
+Ensuite, écrivez une fonction de validation des paramètres pour vous assurer que la politique est toujours exécutée avec au moins un nom invalide.
+
+Pour ce faire, vous devez modifier l'implémentation du trait `+Validatable+`.
+
+Modifier l'implémentation de l'échafaudage définie dans `+src/settings.rs+` pour qu'elle ressemble à ce qui suit :
+
+[subs="+attributes",rust]
+----
+impl kubewarden::settings::Validatable for Settings {
+    fn validate(&self) -> Result<(), String> {
+        if self.invalid_names.is_empty() {
+            Err(String::from("No invalid name specified. Specify at least one invalid name to match"))
+        } else {
+            Ok(())
+        }
+    }
+}
+----
+
+== Ajouter des tests unitaires
+
+Vous pouvez maintenant écrire un test unitaire pour vous assurer que la validation des paramètres fonctionne.
+Vous pouvez le faire de la https://doc.rust-lang.org/stable/book/ch11-00-testing.html[manière habituelle de Rust (]
+
+Il existe déjà quelques tests par défaut au bas du fichier `+src/settings.rs+`. Remplacez le code généré automatiquement pour qu'il ressemble à ceci :
+
+[subs="+attributes",rust]
+----
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use kubewarden_policy_sdk::settings::Validatable;
+
+    #[test]
+    fn accept_settings_with_a_list_of_invalid_names() -> Result<(), ()> {
+        let mut invalid_names = HashSet::new();
+        invalid_names.insert(String::from("bad_name1"));
+        invalid_names.insert(String::from("bad_name2"));
+
+        let settings = Settings { invalid_names };
+
+        assert!(settings.validate().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn reject_settings_without_a_list_of_invalid_names() -> Result<(), ()> {
+        let invalid_names = HashSet::<String>::new();
+        let settings = Settings { invalid_names };
+
+        assert!(settings.validate().is_err());
+        Ok(())
+    }
+}
+----
+
+Vous pouvez maintenant exécuter les tests unitaires en faisant :
+
+[subs="+attributes",console]
+----
+cargo test
+----
+
+Cette opération produit un résultat similaire à celui qui suit :
+
+[subs="+attributes",console]
+----
+   Compiling demo v0.1.0 (/home/jhk/projects/suse/tmp/demo)
+    Finished test [unoptimized + debuginfo] target(s) in 0.59s
+     Running unittests src/lib.rs (target/debug/deps/demo-bea8e11b21717093)
+
+running 5 tests
+test settings::tests::accept_settings_with_a_list_of_invalid_names ... ok
+test settings::tests::reject_settings_without_a_list_of_invalid_names ... ok
+test tests::reject_pod_with_invalid_name ... ok
+test tests::accept_request_with_non_pod_resource ... ok
+test tests::accept_pod_with_valid_name ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+----
