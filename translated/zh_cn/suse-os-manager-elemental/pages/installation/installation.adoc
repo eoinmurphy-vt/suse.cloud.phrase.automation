@@ -1,0 +1,188 @@
+= 安装
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+== 概述
+
+{elemental-product-name} 堆栈使用 OCI 容器和 Kubernetes 提供操作系统管理。{elemental-product-name}堆栈安装包括将{elemental_operator_name} 安装到管理群集，以及创建和使用安装介质将操作系统提供到群集节点。请参阅 "xref:rancher-os-management/architecture/architecture.adoc[架构]"部分，了解各组件之间的互动。
+
+安装配置大多是在注册过程中应用和设置的。
+注册过程由`+elemental-register+` （{elemental_operator_name} 客户端部分）完成，它负责在 Rancher 管理集群中注册节点并获取安装配置。
+
+请参阅 "xref:quickstarts/quickstart-cli.adoc[快速入门]"指南，了解简单的部署步骤说明。
+
+== {elemental-product-name} 操作员安装
+
+{elemental_operator_name} 负责管理{elemental-product-name} 版本和维护机器清单，以协助边缘或裸机安装。{elemental_operator_name}需要一个包括 Rancher 管理器在内的集群，它可以用舵手图安装。
+
+有关安装、卸载、升级和配置的详细信息，请参见{elemental_operator_name} xref:references/operatorchart-reference.adoc[helm chart reference]。
+
+== 准备 Kubernetes 资源
+
+{elemental_operator_name} 在管理集群中启动并运行后，需要一些 kubernetes 资源，以便准备基于{elemental-product-name} 的集群部署。
+
+* xref:references/machineinventoryselectortemplate-reference.adoc[机器清单选择器模板]：
+该资源确定了将注册的盒子（作为 MachineInventory 的一部分列出）与可用的 Rancher 2.6 集群进行匹配的标准。一旦匹配成功，选定的 kubernetes 集群就会获得注册盒子的所有权。
+* xref:references/machineregistration-reference.adoc[机器注册]：
+此资源为任何试图注册的机器定义操作系统部署详细信息。机器注册是{elemental-product-name} 节点的入口，因为它会处理身份验证（基于 TPM）、操作系统部署和将节点纳入 MachineInventory，以便在根据 MachineInventorySelectorTemplate 匹配时将其添加到群集中。MachineRegistration 对象包含机器注册 URL，节点可使用该 URL 对其进行注册。
+
+部署{elemental-product-name} 还需要 Rancher 集群资源，可以按照xref:quickstarts/quickstart-cli.adoc[快速入门]指南中的示例手动创建，也可以从 Rancher 2.6 用户界面创建。
+
+== 准备安装介质
+
+安装介质是用于启动操作系统部署的介质。目前支持的媒体是实时 ISO。Live ISO 必须包含注册配置 yaml，因此一旦创建了 MachineRegistration，就必须重新制作。安装介质通过创建xref:references/seedimage-reference.adoc[种子映像]资源生成（请参阅xref:quickstarts/quickstart-cli.adoc#_preparing_the_installation_seed_image[快速启动]和xref:operator-operational-tasks/custom-images.adoc#_create_a_custom_bootable_installation_iso[自定义映像]）。
+
+实时 ISO 支持 PXE 启动，可与https://documentation.suse.com/suma/4.3/en/suse-manager/client-configuration/autoinst-distributions.html#based-on-iso-image[Manager] SUSE 直接集成。
+
+在机器注册（MachineRegistration）中只能配置操作系统安装参数的子集，所有可用参数均列于xref:references/machineregistration-reference.adoc[机器注册]参考页面。
+
+为了在本节提供的常用选项之外对安装进行配置，可在 ISO 中包含一个  配置文件（请参阅自定义映像）。xref:references/machineregistration-reference.adoc#_config_elemental_install[`+elemental.install+`]部分提供的常用选项之外，还可在 ISO 中包含`+config.yaml+`配置文件（请参阅xref:installation/customize-installation/custom-install.adoc#_custom_suse_rancher_prime_os_manager_client_configuration_file[自定义映像]）。
+请注意，作为`+elemental.install+` 部分应用的任何配置都将应用于任何自定义`+config.yaml+` 文件中的设置之上。
+
+大多数情况下，cloud-init 配置足以在启动时配置和设置部署的节点，但如果出于某种原因需要首次启动操作或脚本，也可以将 Rancher 系统代理计划包含到安装介质中。有关详细信息和一些xref:rancher-os-management/plans.adoc[计划]示例，请参阅计划部分。这些计划可以包含在`+/var/lib/elemental/agent/plans+`文件夹的压扁 rootfs 中，系统代理可以在首次启动时看到它们。
+
+== 开始安装过程
+
+安装开始时，先在节点上启动安装介质。安装介质启动后，它会尝试联系管理群集，并通过调用`+elemental-register+` 命令注册到管理群集。
+由于注册 yaml 配置已包含在 ISO`+elemental-register+` 中，因此可以知道注册 URL 和其他注册所需的数据。
+
+注册成功后，安装介质将根据介质中已包含的配置和机器注册参数启动主机安装。安装完成后，节点即可重新启动。部署的操作系统包括一个系统代理计划，用于启动常规的 rancher 配置流程以安装所选的 kubernetes 版本，启动后，几分钟后节点安装完成，节点被纳入集群并通过 Rancher UI 可见。
+
+== 已部署分区表
+
+安装操作系统后，根据默认值，操作系统分区表将如下所示
+
+|===
+| 标签 | 默认尺寸 | 包含
+
+| COS_GRUB
+| 64 MiB
+| UEFI 启动分区
+
+| COS_STATE
+| 8 GiB
+| 由 OCI 映像构建的 A/B 可启动文件系统映像
+
+| COS_OEM
+| 64 MiB
+| OEM 云配置文件和其他数据
+
+| COS_RECOVERY
+| 4 GiB
+| 如果 COS_STATE 销毁，恢复文件系统映像
+
+| COS_PERSISTENT
+| 剩余空间
+| 持久文件夹的所有内容
+|===
+
+请注意，这是由{elemental_toolkit_url}[{elemental_toolkit_name}] 构建的任何操作系统的基本结构。
+
+== {elemental-product-name} 不变的根
+
+{elemental-product-name} 操作系统的特点之一是设置一个不可变的根文件系统，在其上应用一些短暂或持久位置。默认文件夹结构如下表所示。
+
+[cols=",^,^,^"]
+|===
+| 路径 | 只读 | 昙花一现 | 持久性
+
+| /
+| x
+|
+|
+
+| /etc
+|
+| x
+|
+
+| /etc/cni
+|
+|
+| x
+
+| /etc/iscsi
+|
+|
+| x
+
+| /etc/rancher
+|
+|
+| x
+
+| /etc/ssh
+|
+|
+| x
+
+| /etc/systemd
+|
+|
+| x
+
+| /srv
+|
+| x
+|
+
+| /主页
+|
+|
+| x
+
+| /opt
+|
+|
+| x
+
+| /root
+|
+|
+| x
+
+| /var
+|
+| x
+|
+
+| /usr/libexec
+|
+|
+| x
+
+| /var/lib/cni
+|
+|
+| x
+
+| /var/lib/kubelet
+|
+|
+| x
+
+| /var/lib/rancher
+|
+|
+| x
+
+| /var/lib/elemental
+|
+|
+| x
+
+| /var/lib/NetworkManager
+|
+|
+| x
+
+| /var/lib/calico
+|
+|
+| x
+
+| /var/log
+|
+|
+| x
+|===
