@@ -1,0 +1,57 @@
+= リムーバブルデバイスからクラウド設定ファイルをインクルードする方法
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} ノードは、特定のブロックデバイスからのxref:references/cloud-config-reference.adoc[クラウド設定]ファイルのロードをサポートしています。
+特に、ボリュームIDとして`+CIDATA+` を持つISOや、`+CIDATA+` でラベル付けされたvFATフォーマットされたデバイスからのクラウド設定ファイルのロードをサポートしています。初期起動時にこの条件に一致するデバイスが見つかれば、{elemental-product-name} クライアントはそれを読み込み、そのルートにある`+user-data+` ファイルを探す。
+
+例として、クラウド設定ファイルを含むISOは、以下の手順でLinuxホスト上に作成することができる。
+
+`+user-data+` 、cloud-configファイルを作成する。以下の例では、プロキシを設定するだけである：
+
+.user-data
+[,yaml]
+----
+#cloud-config
+write_files:
+
+* path: /etc/sysconfig/proxy
+append: true
+content: |
+  PROXY_ENABLED="yes"
+  HTTP_PROXY=http://some.domain.org:8080
+  HTTPS_PROXY=https://some.domain.org:8080
+  NO_PROXY="localhost, 127.0.0.1"
+----
+
+`+user-data+` ファイルが存在したら、`+mkisofs+` Linux ユーティリティを使用して、このファイルのみを含む ISO を作成します：
+
+[,bash]
+----
+mkisof -o cidata.iso -V CIDATA -J -r user-data
+----
+
+その結果、`+user-data+` ファイルを含む、`+CIDATA+` でラベル付けされたISOが出来上がる。
+
+ブート時に`+user-data+` ファイルはそのまま`+/oem/user-data+` にコピーされ、クラウド設定データが含まれている場合は`+/oem/user-data.yaml+` としてコピーが追加されます。ファイル`+/oem/user-data.yaml+` は、後のクラウドイニットの段階で解析される。
+
+データは`+/oem+` にコピーされるため、永続的なものとなり、リムーバブルデバイスをリブートする必要はない。再起動の際にまだ存在する場合は、すでに存在するデータを上書きするだけだ。
+
+== クラウド設定以外のデータを含める
+
+`+user-data+` にクラウドコンフィグデータが含まれていない場合、{elemental-product-name} クライアントはそれをそのまま`+/oem/user-data+` にコピーします。cloud-initステージの実行時に解析されるのは`+*.yaml+` ファイルだけなので、この場合、ファイルはcloud-initサービスによって無視されます。
+
+`+user-data+` にスクリプトが含まれている場合、{elemental-product-name} クライアントはそのスクリプトを実行しようとする。`+user-data+` がスクリプトかどうかを{elemental-product-name} クライアントが判断する方法は、最初の行に_Shebang が_あるかどうかである。例えば、先ほどの`+user-data+` ：
+
+.user-data
+[,bash]
+----
+#!/bin/bash
+
+cat <<EOF >> /etc/sysconfig/proxy
+PROXY_ENABLED="yes"
+HTTP_PROXY=http://some.domain.org:8080
+HTTPS_PROXY=https://some.domain.org:8080
+NO_PROXY="localhost, 127.0.0.1"
+EOF
+----
