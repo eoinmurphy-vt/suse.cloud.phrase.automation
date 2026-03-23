@@ -1,0 +1,64 @@
+= Gestion des rôles de serveur
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Le démarrage du serveur K3s avec `+--cluster-init+` permet d'exécuter tous les composants du plan de contrôle, y compris apiserver, controller-manager, scheduler et etcd. Il est possible de désactiver des composants spécifiques afin de répartir les rôles du plan de contrôle et de etcd sur des nœuds distincts.
+
+[IMPORTANT]
+====
+Ce document ne concerne que l'utilisation de etcd embarqué. Si l'on n'utilise pas etcd intégré, tous les serveurs auront le rôle de plan de contrôle et exécuteront les composants du plan de contrôle.
+====
+
+
+== Nœuds dédiés `+etcd+` 
+
+Pour créer un serveur avec uniquement le rôle `+etcd+`, démarrez K3s avec tous les composants du plan de contrôle désactivés :
+
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --cluster-init --disable-apiserver --disable-controller-manager --disable-scheduler
+----
+Où `+INSTALL_K3S_ARTIFACT_URL+` est l' https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL de]
+
+Ce premier nœud démarrera etcd et attendra que d'autres nœuds `+etcd+` et/ou `+control-plane+` le rejoignent. Le cluster ne sera pas utilisable tant que vous n'aurez pas joint un serveur supplémentaire avec les composants `+control-plane+` activés.
+
+== Nœuds dédiés `+control-plane+` 
+
+[NOTE]
+====
+Un nœud dédié `+control-plane+` ne peut pas être le premier serveur du cluster ; il doit y avoir un nœud existant avec le rôle `+etcd+` avant de rejoindre les nœuds dédiés `+control-plane+`.
+====
+
+
+Pour créer un serveur avec uniquement le rôle `+control-plane+`, démarrez k3s avec etcd désactivé :
+
+[,bash]
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --token <token> --disable-etcd --server https://<etcd-only-node>:6443
+----
+
+Après avoir créé des nœuds de serveurs dédiés, les rôles sélectionnés seront visibles sur `+kubectl get node+`:
+
+[,bash]
+----
+$ kubectl get nodes
+NAME           STATUS   ROLES                       AGE     VERSION
+k3s-server-1   Ready    etcd                        5h39m   v1.20.4+k3s1
+k3s-server-2   Ready    control-plane,master        5h39m   v1.20.4+k3s1
+----
+
+== Ajout de rôles à des serveurs existants
+
+Des rôles peuvent être ajoutés aux nœuds dédiés existants en redémarrant les K3 avec les drapeaux de désactivation supprimés. Par exemple, si vous souhaitez ajouter le rôle `+control-plane+` à un nœud dédié `+etcd+`, vous pouvez supprimer les drapeaux `+--disable-apiserver --disable-controller-manager --disable-scheduler+` de l'unité systemd ou du fichier de configuration, et redémarrer le service.
+
+== Syntaxe du fichier de configuration
+
+Comme pour toutes les autres options de l'interface de programmation, vous pouvez utiliser le xref:installation/configuration.adoc#_configuration_file[fichier de configuration] pour désactiver des composants, au lieu de transmettre les options comme des options de l'interface de programmation. Par exemple, pour créer un nœud dédié à `+etcd+`, vous pouvez placer les valeurs suivantes dans `+/etc/rancher/k3s/config.yaml+`:
+
+[,yaml]
+----
+cluster-init: true
+disable-apiserver: true
+disable-controller-manager: true
+disable-scheduler: true
+----
