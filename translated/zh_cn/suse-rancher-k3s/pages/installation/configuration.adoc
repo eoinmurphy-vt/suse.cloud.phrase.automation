@@ -1,0 +1,230 @@
+= 配置选项
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+本页主要介绍首次设置 K3 时常用的选项。有关更深入的内容，请参阅xref:advanced.adoc[高级选项和配置]文档以及xref:cli/server.adoc[服务器]和xref:cli/agent.adoc[代理]命令文档。
+
+[#_configuration_with_install_script]
+== 使用安装脚本进行配置
+
+如《xref:quick-start.adoc[快速入门指南》]所述，您可以使用https://get.k3s.io 上提供的安装脚本，将 K3s 作为服务安装到基于 systemd 和 openrc 的系统上。
+
+您可以结合使用`+INSTALL_K3S_EXEC+` 、`+K3S_+` 环境变量和命令标志，将配置传递给服务配置。
+前缀环境变量、`+INSTALL_K3S_EXEC+` 值和尾部 shell 参数都会被持久保存到服务配置中。
+安装完成后，可以通过编辑环境文件、编辑服务配置或使用新选项重新运行安装程序来更改配置。
+对于{k3s-product-name} ，您必须使用`+INSTALL_K3S_ARTIFACT_URL+` ，它指向https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[主要人工制品 URL]
+
+为了说明这一点，下面的命令都会导致相同的行为，即在没有法兰绒和有令牌的情况下注册服务器：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_EXEC="server" sh -s - --flannel-backend none --token 12345
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_EXEC="server --flannel-backend none" K3S_TOKEN=12345 sh -s -
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=12345 sh -s - server --flannel-backend none
+# server is assumed below because there is no K3S_URL
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_EXEC="--flannel-backend none --token 12345" sh -s -
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - --flannel-backend none --token 12345
+----
+
+注册代理时，以下命令都会导致相同的行为：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_EXEC="agent --server https://k3s.example.com --token mypassword" sh -s -
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_EXEC="agent" K3S_TOKEN="mypassword" sh -s - --server https://k3s.example.com
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_URL=https://k3s.example.com sh -s - agent --token mypassword
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_URL=https://k3s.example.com K3S_TOKEN=mypassword sh -s - # agent is assumed because of K3S_URL
+----
+
+有关所有环境变量的详细信息，请参阅xref:reference/env-variables.adoc[环境变量。]
+
+[IMPORTANT]
+.备注
+====
+如果在运行安装脚本时设置了配置，但在重新运行安装脚本时没有再次设置，则原始值将丢失。
+
+安装脚本不会管理<<_configuration_file,配置文件>>的内容。
+如果希望配置独立于安装脚本，则应使用配置文件，而不是向安装脚本传递环境变量或参数。
+====
+
+
+== 二进制配置
+
+安装脚本主要是配置 K3s 作为系统服务运行。如果不使用安装脚本，只需从https://github.com/k3s-io/k3s/releases/latest[发布页面] GitHub下载二进制文件，将其放在路径上并执行，即可运行 K3s。这对永久性安装并不特别有用，但在进行不值得将 K3 作为系统服务来管理的快速测试时可能会有用。
+
+[,bash]
+----
+curl -Lo /usr/local/bin/k3s <PRIME-ARTIFACTS-URL>/k3s/v1.35.1%2Bk3s1/k3s; chmod a+x /usr/local/bin/k3s
+----
+
+您可以通过设置`+K3S_+` 环境变量来传递配置：
+
+[,bash]
+----
+K3S_KUBECONFIG_MODE="644" k3s server
+----
+
+或命令标志：
+
+[,bash]
+----
+k3s server --write-kubeconfig-mode=644
+----
+
+k3s 代理也可以这样配置：
+
+[,bash]
+----
+k3s agent --server https://k3s.example.com --token mypassword
+----
+
+有关配置 K3s 服务器的详细信息，请参阅xref:cli/server.adoc[`+k3s server+` 文档]。 +
+有关配置 K3s 代理的详细信息，请参阅xref:cli/agent.adoc[`+k3s agent+` 文档]。 +
+还可以使用`+--help+` 标志查看所有可用选项及其相应环境变量的列表。
+
+[IMPORTANT]
+.匹配旗帜
+====
+在服务器节点上匹配关键标志非常重要。例如，如果在主节点上使用标志`+--disable servicelb+` 或`+--cluster-cidr=10.200.0.0/16+` ，但没有在其他服务器节点上设置该标志，则这些节点将无法加入。它们会打印出错误，例如
+`+failed to validate server configuration: critical configuration value mismatch.+`
+有关必须在服务器节点上设置相同标志的详细信息，请参阅服务器配置文档（如上链接）。
+====
+
+== 使用容器映像进行配置
+
+K3s 容器镜像（https://hub.docker.com/r/rancher/k3s[\`+docker.io/rancher/k3s+`]）支持与 GitHub 发布页上的二进制版本相同的配置方法。
+
+[#_configuration_file]
+== 配置文件
+
+除了使用环境变量和 CLI 参数配置 K3s 外，K3s 还可以使用配置文件。无论 K3s 如何安装或执行，都会加载配置文件。
+
+默认情况下，配置从`+/etc/rancher/k3s/config.yaml+` 加载，插入文件按字母顺序从`+/etc/rancher/k3s/config.yaml.d/*.yaml+` 加载。
+该路径可通过`+--config+` CLI 标志或`+K3S_CONFIG_FILE+` env var 进行配置。
+覆盖默认配置文件名时，也会修改投放目录路径。
+
+下面是`+server+` 基本配置文件的示例：
+
+[,yaml]
+./etc/rancher/k3s/config.yaml
+----
+write-kubeconfig-mode: "0644"
+tls-san:
+  - "foo.local"
+node-label:
+  - "foo=bar"
+  - "something=amazing"
+cluster-init: true
+----
+
+这相当于以下 CLI 参数：
+
+[,bash]
+----
+k3s server \
+  --write-kubeconfig-mode "0644"    \
+  --tls-san "foo.local"             \
+  --node-label "foo=bar"            \
+  --node-label "something=amazing"  \
+  --cluster-init
+----
+
+一般来说，CLI 参数映射到各自的 YAML 关键字，可重复的 CLI 参数则表示为 YAML 列表。布尔标志在 YAML 文件中表示为`+true+` 或`+false+` 。
+
+也可以同时使用配置文件和 CLI 参数。在这种情况下，将从两个来源加载值，但 CLI 参数优先。对于`+--node-label+` 等可重复参数，CLI 参数将覆盖列表中的所有值。
+
+=== 价值合并行为
+
+如果存在于多个文件中，将使用为给定键找到的最后一个值。`+++` 可以附加到键上，以便将值附加到现有字符串或片段上，而不是替换它。该键在后续文件中的所有出现也需要`+++` ，以防止覆盖累积值。
+
+下面是一个从多个配置文件中合并值的示例：
+
+[,yaml]
+./etc/rancher/k3s/config.yaml
+----
+token: boop
+node-label:
+  - foo=bar
+  - bar=baz
+----
+
+[,yaml]
+./etc/rancher/k3s/config.yaml.d/test1.yaml
+----
+write-kubeconfig-mode: 600
+node-taint:
+  - alice=bob:NoExecute
+----
+
+[,yaml]
+./etc/rancher/k3s/config.yaml.d/test2.yaml
+----
+write-kubeconfig-mode: 777
+node-label:
+  - other=what
+  - foo=three
+node-taint+:
+  - charlie=delta:NoSchedule
+----
+
+因此，最终配置为
+
+[,yaml]
+----
+write-kubeconfig-mode: 777
+token: boop
+node-label:
+  - other=what
+  - foo=three
+node-taint:
+  - alice=bob:NoExecute
+  - charlie=delta:NoSchedule
+----
+
+== 将所有内容整合在一起
+
+上述所有选项可合并为一个示例。
+
+在`+/etc/rancher/k3s/config.yaml+` 创建了`+config.yaml+` 文件：
+
+[,yaml]
+----
+token: "secret"
+debug: true
+----
+
+然后使用环境变量和标志组合运行安装脚本：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_KUBECONFIG_MODE="644" INSTALL_K3S_EXEC="server" sh -s - --flannel-backend none
+----
+
+或者，如果您已经安装了 K3s 二进制程序：
+
+[,bash]
+----
+K3S_KUBECONFIG_MODE="644" k3s server --flannel-backend none
+----
+
+这将导致服务器
+
+* 带有权限的 kubeconfig 文件 `+644+`
+* 法兰绒后端设置为 `+none+`
+* 标记设置为 `+secret+`
+* 调试日志已启用
+
+== Kubelet 配置文件
+
+Kubernetes 支持通过 CLI 标志和配置文件配置 kubelet。通过 CLI 标志配置 kubelet 早已过时，但仍受支持，这也是设置基本选项的最简单方法。某些高级 kubelet 配置只能通过配置文件设置。欲了解更多信息，请参阅有关https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/[通过配置文件设置 kubelet 参数的] kubelet 和https://kubernetes.io/docs/tasks/administer-cluster/kubelet-config-file/[] Kubernetes 文档。
+
+只有在 v1.32 及以上版本中才支持 kubelet 插入式配置文件或配置文件（下面的选项 1 和 2）。对于旧版本，应直接使用 kubelet args（下面的第 3 个选项）。
+
+K3s 使用默认的 kubelet 配置，该配置存储在`+/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/00-k3s-defaults.conf+` 下。如果要更改默认配置参数，有三种方法：
+
+. 在`+/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/+` * （推荐）*中放置插入式配置文件。
+. 使用标志`+--kubelet-arg=config=$PATHTOFILE+` ，其中`+$PATHTOFILE+` 是包含 kubelet 配置参数的文件路径（如`+/etc/rancher/k3s/kubelet.conf+` ），或使用标志`+--kubelet-arg=config-dir=$PATHTODIR+` ，其中`+$PATHTODIR+` 是包含 kubelet 配置参数的文件目录路径（如`+/etc/rancher/k3s/kubelet.conf.d+` ）。
+. 使用标志`+--kubelet-arg=$FLAG+` ，其中`+$FLAG+` 是 kubelet 配置参数（如`+image-gc-high-threshold=100+` ）。
+
+在混合使用 kubelet CLI 标志和配置文件插件时，请注意https://kubernetes.io/docs/tasks/administer-cluster/kubelet-config-file/#kubelet-configuration-merging-order[的优先顺序]。
