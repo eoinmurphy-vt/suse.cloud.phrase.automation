@@ -1,0 +1,77 @@
+= Hochverfügbare eingebettete etcd
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+[CAUTION]
+====
+Eingebettetes etcd (HA) kann auf langsameren Festplatten wie Raspberry Pis, die mit SD-Karten betrieben werden, Leistungsprobleme haben.
+====
+
+.Warum eine ungerade Anzahl von Serverknoten?
+[%collapsible]
+======
+HA eingebettete etcd-Cluster müssen aus einer ungeraden Anzahl von Serverknoten bestehen, damit etcd das Quorum aufrechterhalten kann. Bei einem Cluster mit n Servern ist das Quorum (n/2)+1. Bei allen Clustern mit ungerader Größe erhöht das Hinzufügen eines Knotens immer die Anzahl der für das Quorum erforderlichen Knoten. Obwohl das Hinzufügen eines Knotens zu einem Cluster ungerader Größe besser erscheint, da es mehr Maschinen gibt, ist die Fehlertoleranz schlechter, da genau die gleiche Anzahl von Knoten ausfallen kann, ohne dass das Quorum verloren geht, aber es gibt mehr Knoten, die ausfallen können.
+======
+
+Ein HA K3s-Cluster mit eingebettetem etcd besteht aus:
+
+* Drei oder mehr *Serverknoten*, die die Kubernetes-API bedienen und andere Dienste der Steuerungsebene ausführen sowie den eingebetteten etcd-Datenspeicher hosten.
+* Optional: Null oder mehr *Agentenknoten*, die für die Ausführung Ihrer Anwendungen und Dienste vorgesehen sind
+* Optional: Eine *feste Registrierungsadresse* für Agenten-Knoten, um sich beim Cluster zu registrieren
+
+[NOTE]
+====
+Um große HA-Cluster schnell zu implementieren, siehe xref:related-projects.adoc[Verwandte Projekte]
+====
+
+
+Starten Sie zunächst einen Serverknoten mit dem Flag `+cluster-init+`, um das Clustering zu aktivieren, und einem Token, das als gemeinsames Geheimnis verwendet wird, um weitere Server in den Cluster aufzunehmen.
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --cluster-init \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+Nachdem Sie den ersten Server gestartet haben, fügen Sie den zweiten und dritten Server unter Verwendung des gemeinsamen Geheimnisses zum Cluster hinzu:
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - server \
+    --server https://<ip or hostname of server1>:6443 \
+    --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+Wobei `+INSTALL_K3S_ARTIFACT_URL+` die https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL von] ist.
+
+Überprüfen Sie, ob der zweite und der dritte Server jetzt Teil des Clusters sind:
+
+[,bash]
+----
+$ kubectl get nodes
+NAME        STATUS   ROLES                       AGE   VERSION
+server1     Ready    control-plane,etcd,master   28m   vX.Y.Z
+server2     Ready    control-plane,etcd,master   13m   vX.Y.Z
+server3     Ready    control-plane,etcd,master   10m   vX.Y.Z
+----
+
+Jetzt haben Sie eine hochverfügbare Steuerungsebene. Alle erfolgreich geclusterten Server können im Argument `+--server+` verwendet werden, um weiteren Server- und Agentenknoten beizutreten. Das Hinzufügen weiterer Agentenknoten zum Cluster erfolgt nach demselben Verfahren wie bei Servern:
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - agent --server https://<ip or hostname of server>:6443
+----
+
+Es gibt ein paar Konfigurationsflags, die auf allen Serverknoten gleich sein müssen:
+
+* Netzbezogene Flaggen: `+--cluster-dns+`, `+--cluster-domain+`, `+--cluster-cidr+`, `+--service-cidr+`
+* Flaggen, die die Bereitstellung bestimmter Komponenten steuern: `+--disable-helm-controller+`, `+--disable-kube-proxy+`, `+--disable-network-policy+` und jede Komponente, die an `+--disable+`
+* Merkmalsbezogene Flaggen: `+--secrets-encryption+`
+
+== Vorhandene Single-Node-Cluster
+
+Wenn Sie einen bestehenden Cluster haben, der die standardmäßig eingebettete SQLite-Datenbank verwendet, können Sie ihn zu etcd konvertieren, indem Sie Ihren K3s-Server einfach mit dem Flag `+--cluster-init+` neu starten. Wenn Sie das getan haben, können Sie weitere Instanzen wie oben beschrieben hinzufügen.
+
+Wenn ein etcd-Datenspeicher auf der Festplatte gefunden wird, weil dieser Knoten entweder bereits initialisiert wurde oder einem Cluster beigetreten ist, werden die Argumente für den Datenspeicher (`+--cluster-init+`, `+--server+`, `+--datastore-endpoint+`, etc) ignoriert.
