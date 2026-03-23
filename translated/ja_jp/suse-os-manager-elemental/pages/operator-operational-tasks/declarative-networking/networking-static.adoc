@@ -1,0 +1,136 @@
+= nm-configuratorによる静的ネットワーク
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+[CAUTION]
+.警告
+====
+宣言的ネットワーキングは*技術プレビュー*状態で、サポートは限られている。そのため、本番環境での使用は推奨されていない。
+====
+
+`+nm-configurator+` https://github.com/suse-edge/nm-configurator?tab=readme-ov-file#per-node-configurations[per nodeコンフィギュレーションを]使用すると、NICのMACアドレスに基づいて、個々のマシンに静的にIPアドレスを割り当てることができる。
+
+このソリューションでは、リモートのIPAMプロバイダーは必要ないが、ユーザーは既知のMACアドレスとIPアドレスの間のマッピングを維持する必要がある。
+
+この例では、Elemental イメージをカスタマイズし、起動時に静的ネットワーク設定を適用するxref:references/cloud-config-reference.adoc#_configuration_syntax[yip 設定を]含めます。
+
+以下のコンフィギュレーションは、非常に基本的なネットワーク設定の2ノードを対象としています。
+
+.99_static_network_config.yaml
+[,yaml]
+----
+include::example$network/yip-nmc-static-config.yaml[]
+----
+
+== カスタムOSイメージに静的ネットワーク設定を含める
+
+Elementalイメージを拡張して、`+/system/oem+` の静的ネットワーク構成を含めることができる。https://github.com/rancher/elemental-toolkit[]Elemental動作しているElemental搭載OSであれば、どのステージを実行するときでも、このディレクトリにあるコンフィグを評価します。 さらに、必要な`+nmc+` バイナリをインストールするようにイメージをカスタマイズする。
+
+[,shell]
+----
+# The version of Elemental to modify
+FROM registry.suse.com/suse/sl-micro/6.0/baremetal-os-container:latest
+
+# Install the static network config
+COPY 99_static_network_config.yaml /system/oem/99_static_network_config.yaml
+
+# Install nmc
+RUN curl -LO https://github.com/suse-edge/nm-configurator/releases/download/v0.3.1/nmc-linux-x86_64 && \
+    install -o root -g root -m 0755 nmc-linux-x86_64 /usr/sbin/nmc
+
+# IMPORTANT: /etc/os-release is used for versioning/upgrade.
+ARG IMAGE_REPO=norepo
+ARG IMAGE_TAG=latest
+RUN \
+    sed -i -e "s|^IMAGE_REPO=.*|IMAGE_REPO=\"${IMAGE_REPO}\"|g" /etc/os-release && \
+    sed -i -e "s|^IMAGE_TAG=.*|IMAGE_TAG=\"${IMAGE_TAG}\"|g" /etc/os-release && \
+    sed -i -e "s|^IMAGE=.*|IMAGE=\"${IMAGE_REPO}:${IMAGE_TAG}\"|g" /etc/os-release
+
+# IMPORTANT: it is good practice to recreate the initrd and re-apply `+elemental-init+`
+RUN elemental init --force elemental-rootfs,grub-config,dracut-config,cloud-config-essentials,elemental-setup
+----
+
+これでOSコンテナをビルドし、レジストリにプッシュできる：
+
+[,shell]
+----
+docker build --build-arg IMAGE_REPO=myrepo/static-network-os \
+             --build-arg IMAGE_TAG=v1.1.1 \
+             -t myrepo/static-network-os:v1.1.1 .
+docker push myrepo/static-network-os:v1.1.1
+----
+
+静的ネットワーク設定がイメージに含まれているため、異なる設定を持つ異なるイメージを構築し、管理する必要があることに注意してください。カスタムOSイメージは、（xref:references/seedimage-reference.adoc[SeedImageを使って]）最初のISOブータブルイメージを作成するときだけでなく、マシンをxref:node-operational-tasks/upgrade.adoc[アップグレードする]ときにも維持する必要がある。必要な静的ネットワーク設定は、xref:references/managedosimage-reference.adoc[ManagedOSImage] で使用される OS イメージ上に存在する**必要があります**。
+
+カスタムOSイメージは、ブート可能なRAWディスクイメージを構築するためにそのまま使用することもできる：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: my-raw-image
+  namespace: fleet-default
+spec:
+  type: raw
+  baseImage: myrepo/static-network-os:v1.1.1
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: my-registration
+    namespace: fleet-default
+----
+
+== ブート可能なISOを作成する
+
+これで、このOSコンテナ・イメージからxref:operator-operational-tasks/custom-images.adoc#_create_a_custom_bootable_installation_iso[ISOコンテナをビルド]できる。Elementalの画像をカスタマイズする方法については、xref:operator-operational-tasks/custom-images.adoc[ドキュメントを]参照してください。
+
+[,dockerfile]
+----
+FROM myrepo/static-network-os:v1.1.1 AS os
+FROM myrepo/static-network-os:v1.1.1 AS builder
+
+WORKDIR /iso
+COPY --from=os / rootfs
+
+# work around buildah issue: https://github.com/containers/buildah/issues/4242
+RUN rm -f rootfs/etc/resolv.conf
+
+RUN elemental build-iso \
+        dir:rootfs \
+        --bootloader-in-rootfs \
+        --squash-no-compression \
+        -o /output -n "elemental"
+
+FROM busybox
+COPY --from=builder /output /elemental-iso
+
+ENTRYPOINT ["busybox", "sh", "-c"]
+----
+
+[,shell]
+----
+docker build -t myrepo/static-network-iso:v1.1.1 .
+docker push myrepo/static-network-iso:v1.1.1
+----
+
+ISO コンテナがレジストリで公開されると、他の Elemental 配布 ISO イメージと同様にxref:references/seedimage-reference.adoc[SeedImage]で参照できるようになります。
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: my-iso
+  namespace: fleet-default
+spec:
+  type: iso
+  baseImage: myrepo/static-network-iso:v1.1.1
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: my-registration
+    namespace: fleet-default
+----
+
+静的ネットワーク設定は、インストールメディアの起動時に評価され、ベースイメージの一部としてシステムにインストールされることに注意してください。
