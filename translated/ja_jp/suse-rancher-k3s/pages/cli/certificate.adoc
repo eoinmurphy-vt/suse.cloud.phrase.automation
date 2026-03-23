@@ -1,0 +1,370 @@
+= K3S証明書
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+[#_client_and_server_certificates]
+== クライアント証明書とサーバ証明書
+
+K3sのクライアント証明書およびサーバ証明書は、発行日から365日間有効です。
+有効期限が切れた証明書、または有効期限から120日以内の証明書は、K3sが起動するたびに自動的に更新されます。
+この更新により、既存の鍵が再利用され、既存の証明書の有効期間が延長される。
+既存の証明書の有効期限を延長する代わりに、新しい証明書と鍵を生成したい場合は、以下で説明する xref:#_rotating_client_and_server_certificates[`+rotate+`]サブコマンドを使用する。
+
+証明書の有効期限が120日以内になると、証明書を使用しているNodeに関連する`+reason: CertificateExpirationWarning+` 、Kubernetes警告イベントが作成されます。
+
+2025年5月のリリース（v1.33.1+k3s1、v1.32.5+k3s1、v1.31.9+k3s1、v1.30.13+k3s1）以前は、アラートとローテーションは120日ではなく90日でトリガーされていました。
+
+=== 有効期限の確認
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+v1.32.0+k3s1、v1.31.5+k3s1、v1.30.9+k3s1、v1.30.13+k3s1。
+
+v1.33.1+k3s1、v1.32.5+k3s1、v1.31.9+k3s1、v1.29.13+k3s1。
+====
+
+ノード証明書とその有効期限を確認するには、`+k3s certificate check --output table+` を使用します：
+
+[,bash]
+----
+FILENAME                    SUBJECT                     USAGES       EXPIRES                  RESIDUAL TIME   STATUS
+--------                    -------                     ------       -------                  -------------   ------
+client-kube-proxy.crt       system:kube-proxy           ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-kube-proxy.crt       k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+client-kubelet.crt          system:node:ip-10-11-0-14   ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-kubelet.crt          k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+serving-kubelet.crt         ip-10-11-0-14               ServerAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+serving-kubelet.crt         k3s-server-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+client-k3s-controller.crt   system:k3s-controller       ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-k3s-controller.crt   k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+----
+
+[NOTE]
+.同じ証明書を2度発行
+====
+各証明書ファイル`（+FILENAME +`列）には、リーフ（またはエンド・エンティティ）クライアント/サーバ証明書、中間認証局証明書、ルート認証局証明書の少なくとも2つの証明書が含まれる。
+====
+
+予期せぬ出力が出た場合は、`+--data-dir+` フラグで正しいデータ・ディレクトリーを指定していることを確認するか（カスタム・データ・ディレクトリーを使用している場合）、`+--debug+` フラグを使用してチェック・プロセスから追加出力を得てください。
+
+[#_rotating_client_and_server_certificates]
+=== クライアント証明書とサーバ証明書のローテーション
+
+クライアントとサーバーの証明書を手動でローテーションするには、`+k3s certificate rotate+` サブコマンドを使用します：
+
+[,bash]
+----
+# Stop K3s
+systemctl stop k3s
+
+# Rotate certificates
+k3s certificate rotate
+
+# Start K3s
+systemctl start k3s
+----
+
+証明書名を指定することで、個別または証明書リストをローテーションできる：
+
+[,bash]
+----
+k3s certificate rotate --service <SERVICE>,<SERVICE>
+----
+
+以下の証明書をローテーションすることができる：`+admin+` `+api-server+`,`+controller-manager+`,`+scheduler+`,`+k3s-controller+`,`+k3s-server+`,`+cloud-controller+`,`+etcd+`,`+auth-proxy+`,`+kubelet+`,`+kube-proxy+`.
+
+[#_certificate_authority_ca_certificates]
+== 認証局（CA）証明書
+
+Kubernetesは、適切な運用のために多くのCA証明書を必要とする。KubernetesがCA証明書を使用する方法の詳細については、Kuberneteshttps://kubernetes.io/docs/setup/best-practices/certificates/#all-certificates[Certificates and Requirementsの] PKIドキュメントを参照してください。
+
+デフォルトでは、K3sは最初のサーバーノードの起動時に自己署名CA証明書を生成する。これらの CA 証明書は、発行日から 10 年間有効であり、自動的には更新されない。
+
+権威CA証明書と鍵は、データストアのブートストラップ鍵内に格納され、xref:cli/token.adoc#_server[サーバートークンを]PBKDF2パスフレーズとしてAES256-GCMとHMAC-SHA1で暗号化される。
+CA証明書と鍵のコピーは、K3sサーバ起動時にディスクに展開される。
+どのサーバーでも、クラスターに参加するノードのリーフ証明書を生成することができ、Kuberneteshttps://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/[Certificates API]コントローラーは、実行時に追加の証明書を発行することができる。
+
+CA証明書と鍵をローテーションするには、`+k3s certificate rotate-ca+` 。
+コマンドは完全性チェックを実行し、更新された証明書と鍵が使用可能であることを確認する。
+更新されたデータに問題がなければ、データストアの暗号化されたブートストラップ鍵が更新され、新しい証明書と鍵が次回K3sの起動時に使用される。
+証明書と鍵の検証中に問題が発生した場合、システム・ログにエラーが報告され、操作はそのままキャンセルされる。
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+2023-02リリース（v1.26.2+k3s1、v1.25.7+k3s1、v1.24.11+k3s1、v1.23.17+k3s1）から、`+k3s certificate rotate-ca+` コマンドのサポートと、外部CAによって署名されたCA証明書を使用できるようになりました。
+====
+
+
+=== カスタム CA 証明書の使用
+
+==== CA再利用の注意点
+
+[WARNING]
+====
+ルート認証局や中間認証局を複数のクラスタで共有することや、既存のプライベート認証局をクラスタ認証局として使用することは推奨されません。
+====
+
+複数のクラスタが共通のルート・オブ・トラストを共有している場合、あるクラスタが発行したクライアント証明書やサーバ証明書は他のすべてのクラスタからも信頼されます。
+つまり、あるクラスタに対して有効なクライアント証明書（またはkubeconfig）を持つユーザーは、他のクラスタでも認証が可能であり、クライアントのユーザーまたはグループに一致するRBACは他のクラスタでも適用される。
+同様に、あるクラスタが発行したサーバ証明書は、他のすべてのクラスタ、およびそのルート CA を信頼する他のすべてのインフラストラクチャまたはクライアントからも信頼される。
+
+Kubernetesは証明書失効リストの使用をサポートしていない。
+何らかの理由で証明書を失効させる必要が生じた場合(たとえば、管理者のkubeconfigが侵害された場合など)、証明書の信頼を無効にするためにクラスタ認証局の完全な交換を実行する必要があります。
+
+==== カスタム CA 証明書の使用
+
+クラスタ内の最初のサーバの初期起動時にCA証明書と鍵が正しい場所にある場合、CA証明書の自動生成はバイパスされる。
+
+適切な証明書と鍵を事前に作成するスクリプトの例は、 https://github.com/k3s-io/k3s/blob/main/contrib/util/generate-custom-ca-certs.sh[K3sのレポ（`+contrib/util/generate-custom-ca-certs.sh+` ）で] 。
+このスクリプトはK3sを初めて起動する前に実行する必要があり、共通のルートCA証明書と中間CA証明書によって署名されたリーフCA証明書の完全なセットを作成する。
+既存のルート認証局または中間認証局がある場合、このスクリプトを使用し（または出発点として使用し）、既存の認証局に根ざしたPKIでK3sクラスタをプロビジョニングするために、正しい認証局証明書を作成することができる。
+
+カスタム認証局ファイルは、`+/var/lib/rancher/k3s/server/tls+` に置く必要があります。以下のファイルが必要です：
+
+* `+server-ca.crt+`
+* `+server-ca.key+`
+* `+client-ca.crt+`
+* `+client-ca.key+`
+* `+request-header-ca.crt+`
+* `+request-header-ca.key+` +
+_// 注記：etcdファイルは、組み込みetcdが使用されていなくても必要である。_
+* `+etcd/peer-ca.crt+`
+* `+etcd/peer-ca.key+`
+* `+etcd/server-ca.crt+`
+* `+etcd/server-ca.key+` +
+_// 注：これは、サービス・アカウント・トークンに署名するために使われる秘密鍵である。対応する証明書はない。_
+* `+service.key+`
+
+==== カスタムCAトポロジー
+
+スクリプト例によって生成されたカスタムCA証明書のトポロジーは以下のとおりである：
+
+[mermaid]
+....
+グラフ TD root("Root CA") intermediate("Intermediate CA") server-ca("Server CA") client-ca("Client CA") request-header-ca("API Aggregation CA") etcd-peer-ca("etcd Peer CA") etcd-server-ca("etcd Server CA")
+
+  root-hash>"Join token CA hash"]
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  root -.-|SHA256| root-hash
+  root ---> intermediate
+  intermediate --> server-ca ==> kube-server-certs
+  intermediate --> client-ca ==> kube-client-certs
+  intermediate --> request-header-ca ==> request-header-certs
+  intermediate --> etcd-peer-ca ==> etcd-peer-certs
+  intermediate --> etcd-server-ca ==> etcd-server-certs
+....
+
+==== スクリプト例の使用
+
+[IMPORTANT]
+.重要
+====
+サンプル・スクリプトを使用して既存のルートCAでクラスタCA証明書に署名する場合は、スクリプトを実行する前に、ルートファイルと中間ファイルをターゲット・ディレクトリに配置する必要があります。
+ファイルが存在しない場合、スクリプトは新しいルートCA証明書と中間CA証明書を作成する。
+====
+
+
+既存のルートCA証明書だけを使いたい場合は、以下のファイルを用意する：
+
+* `+root-ca.pem+`
+* `+root-ca.key+`
+
+既存のルートCA証明書と中間CA証明書を使用したい場合は、以下のファイルを提供する：
+
+* `+root-ca.pem+`
+* `+intermediate-ca.pem+`
+* `+intermediate-ca.key+`
+
+このスクリプトの例では、提供された CA をすべてのクラスタ CA バンドル（サーバ、クライアント、API アグリゲーション、etcd ピア/サーバ）のルートとして使用する。
+提供されたCAを特定のバンドルにのみ使用する、あるいは異なるバンドルに異なるCAを使用するなど、高度な使用例については、組織の特定のニーズに合わせて、例のスクリプトを修正する必要がある。
+
+K3sを起動する前に、サンプル・スクリプトを使用してカスタム証明書とカスタム鍵を生成するには、以下のコマンドを実行する：
+
+[,bash]
+----
+# Create the target directory for cert generation.
+mkdir -p /var/lib/rancher/k3s/server/tls
+
+# Copy your root CA cert and intermediate CA cert+key into the correct location for the script.
+# For the purposes of this example, we assume you have existing root and intermediate CA files in /etc/ssl.
+# If you do not have an existing root and/or intermediate CA, the script will generate them for you.
+cp /etc/ssl/certs/root-ca.pem /etc/ssl/certs/intermediate-ca.pem /etc/ssl/private/intermediate-ca.key /var/lib/rancher/k3s/server/tls
+
+# Generate custom CA certs and keys.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/generate-custom-ca-certs.sh | bash -
+----
+
+コマンドが正常に完了したら、K3sを初めてインストールまたは起動することができます。
+スクリプトがルートCAファイルおよび/または中間CAファイルを生成した場合、後日CA証明書をローテートする必要が生じたときに再利用できるように、これらのファイルをバックアップしておく必要がある。
+
+=== カスタム CA 証明書のローテーション
+
+カスタムCA証明書をローテーションするには、`+k3s certificate rotate-ca+` サブコマンドを使用する。
+更新されたファイルは、一時ディレクトリにステージングされ、データストアにロードされ、更新された証明書を使用するために、すべてのノードでk3sを再起動する必要があります。
+
+[CAUTION]
+====
+現在使用中のデータを`+/var/lib/rancher/k3s/server/tls+` に上書きしてはならない。 +
+更新した証明書と鍵を別のディレクトリに格納する。
+====
+
+
+カスタムCA証明書を使用して開始されたクラスタは、同じルートCAが使用されている限り、CA証明書と鍵を無停止で更新またはローテーションできます。
+
+新しいルート CA が必要な場合、ローテーションは混乱を招く。`+k3s certificate rotate-ca --force+` オプションを使用する必要があります。xref:cli/token.adoc#_secure[セキュアトークンで]参加したすべてのノード（サーバーを含む）は、新しいトークン値を使用するように再設定する必要があります。また、ポッドは新しいルートCAを信頼するように再起動する必要があります。
+
+==== スクリプト例の使用
+
+上にリンクした`+generate-custom-ca-certs.sh+` スクリプトの例は、正しい場所にファイルをコピーし、`+DATA_DIR+` 環境変数を設定することで、新しい一時ディレクトリに更新された証明書を生成するために使用することもできる。
+サンプル・スクリプトを使用して更新された証明書と鍵を生成するには、以下のコマンドを実行する：
+
+[,bash]
+----
+# Create a temporary directory for cert generation.
+mkdir -p /opt/k3s/server/tls
+
+# Copy your root CA cert and intermediate CA cert+key into the correct location for the script.
+# Non-disruptive rotation requires the same root CA that was used to generate the original certificates.
+# If the original files are still in the data directory, you can just run:
+cp /var/lib/rancher/k3s/server/tls/root-ca.* /var/lib/rancher/k3s/server/tls/intermediate-ca.* /opt/k3s/server/tls
+
+# Copy the current service-account signing key, so that existing service-account tokens are not invalidated.
+cp /var/lib/rancher/k3s/server/tls/service.key /opt/k3s/server/tls
+
+# Generate updated custom CA certs and keys.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/generate-custom-ca-certs.sh | DATA_DIR=/opt/k3s bash -
+
+# Load the updated CA certs and keys into the datastore.
+k3s certificate rotate-ca --path=/opt/k3s/server
+----
+
+`+rotate-ca+` コマンドがエラーを返した場合は、サービスログにエラーがないか確認してください。
+コマンドが正常に完了したら、クラスタ内のすべてのノードでK3を再起動します。
+
+`+--force+` オプションを使用した場合、またはルート CA を変更した場合は、xref:cli/token.adoc#_secure[セキュア・トークンを]使用して参加したノードを再起動する前に、新しいトークン値を使用するように再設定してください。
+トークンは、ノードの初期インストール時にどのように設定されたかによって、`+.env+` ファイル、systemd ユニット、config.yaml に保存されます。
+
+=== 自己署名 CA 証明書のローテーション
+
+K3sが生成した自己署名CA証明書をローテーションするには、`+k3s certificate rotate-ca+` サブコマンドを使用する。
+更新されたファイルは、一時ディレクトリにステージングされ、データストアにロードされ、更新された証明書を使用するために、すべてのノードでk3sを再起動する必要があります。
+
+[CAUTION]
+====
+現在使用中のデータを`+/var/lib/rancher/k3s/server/tls+` に上書きしてはならない。 +
+更新した証明書と鍵を別のディレクトリに格納する。
+====
+
+
+クラスタがデフォルトの自己署名CA証明書で開始されている場合、ローテーションは混乱を招く。xref:cli/token.adoc#_secure[セキュア・トークンで]参加したすべてのノードは、新しいCAハッシュを信頼するように再設定する必要がある。
+新しいCA証明書が古いCA証明書と相互署名されていない場合、`+--force+` オプションを使用して整合性チェックをバイパスする必要があります。また、新しいルートCAを信頼するためにポッドを再起動する必要があります。
+
+==== デフォルトのCAトポロジー
+
+デフォルトの自己署名CA証明書は、以下のようなトポロジーを持つ：
+
+[mermaid]
+....
+グラフ TD server-ca("Server CA") client-ca("Client CA") request-header-ca("API Aggregation CA") etcd-peer-ca("etcd Peer CA") etcd-server-ca("etcd Server CA")
+
+  root-hash>"Join token CA hash"]
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  server-ca -.-|SHA256| root-hash
+  server-ca ===> kube-server-certs
+  client-ca ===> kube-client-certs
+  request-header-ca ===> request-header-certs
+  etcd-peer-ca ===> etcd-peer-certs
+  etcd-server-ca ===> etcd-server-certs
+....
+
+デフォルトの自己署名認証局を交代させる場合、中間認証局と、旧認証局によって相互署名された新ルート認証局を含む、修正された証明書トポロジーを使用することで、新旧認証局間の信頼の連鎖を継続させることができる：
+
+[mermaid]
+....
+graph TD server-ca-old("Server CA<br/>(old)") client-ca-old("Client CA<br/>(old)") request-header-ca-old("API Aggregation CA<br/>(old)") etcd-peer-ca-old("etcd Peer CA<br/>(old)") etcd-server-ca-old("etcd Server CA<br/>(old)")
+
+  root-hash>"Join token CA hash"]
+
+  server-ca-xsigned("Server CA<br/>(相互署名)") client-ca-xsigned("Client CA<br/>(相互署名)") request-header-ca-xsigned(")API 集約 CA<br/>(クロス署名)") etcd-peer-ca-xsigned("etcd ピア CA<br/>(クロス署名)") etcd-server-ca-xsigned("etcd サーバ CA<br/>(クロス署名)")
+
+  server-ca-ssigned("Server CA<br/>(self-signed)")
+  client-ca-ssigned("Client CA<br/>(self-signed)")
+  request-header-ca-ssigned("API Aggregation CA<br/>(self-signed)")
+  etcd-peer-ca-ssigned("etcd Peer CA<br/>(self-signed)")
+  etcd-server-ca-ssigned("etcd Server CA<br/>(self-signed)")
+
+  server-ca("Intermediate<br/>Server CA") client-ca("Intermediate<br/>Client CA") request-header-ca("Intermediate<br/>API Aggregation CA") etcd-peer-ca("Intermediate<br/>etcd Peer CA") etcd-server-ca("Intermediate<br>etcd Server CA")
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]
+  kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]
+  request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]
+  etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]
+  etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  server-ca-ssigned -.-|SHA256| root-hash server-ca-ssigned--> server-ca ==> kube-server-certs server-ca-old--> server-ca-xsigned--> server-ca client-ca-ssigned--> client-ca = kube-client-certs client-ca-old > client-ca-xsigned > client-ca request-header-ca-signed。client-ca ==> kube-client-certs client-ca-old--> client-ca-xsigned--> client-ca request-header-ca-ssigned--> request-header-ca ==> request-header-certs request-header-ca-old--> request-header-ca-xsigned request-header-ca-xsigned--> request-header-ca etcd-peer-ca-ssigned--> etcd-peer-ca ==> etcd-peer-certs etcd-peer-ca-old--> etcd-peer-ca-xsigned--> etcd-peer-ca-xsigned etcd-peer-ca etcd-server-ca-ssigned--> etcd-server-ca ==> etcd-server-certs etcd-server-ca-old--> etcd-server-ca-xsigned--> etcd-server-ca
+....
+
+==== スクリプト例の使用
+
+https://github.com/k3s-io/k3s/blob/main/contrib/util/rotate-default-ca-certs.sh[K3sのレポ`+contrib/util/rotate-default-ca-certs.sh+` に]更新されたCA証明書と、既存のCAによって相互署名された鍵を作成するスクリプトの例は、あります。
+
+サンプル・スクリプトを使用して、既存のCAによって相互署名された更新自己署名証明書を生成するには、以下のコマンドを実行します：
+
+[,bash]
+----
+# Create updated CA certs and keys, cross-signed by the current CAs.
+# This script will create a new temporary directory containing the updated certs, and output the new token values.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/rotate-default-ca-certs.sh | bash -
+
+# Load the updated certs into the datastore; see the script output for the updated token values.
+k3s certificate rotate-ca --path=/var/lib/rancher/k3s/server/rotate-ca
+----
+
+`+rotate-ca+` コマンドがエラーを返した場合は、サービスログにエラーがないか確認してください。
+コマンドが正常に完了したら、クラスタ内のすべてのノードでK3を再起動します。
+
+他のサーバー・ノードを含め、xref:cli/token.adoc#_secure[セキュア・トークンで]参加したノードを再起動する前に、新しいトークン値を使用するように再設定してください。
+トークンは、ノードの初期インストール時にどのように設定されたかによって、`+.env+` ファイル、systemd ユニット、config.yaml に保存されます。
+
+== サービス・アカウント発行者の鍵ローテーション
+
+サービスアカウント発行者鍵は、サービスアカウントトークンに署名するために使用されるRSA秘密鍵である。
+サービスアカウント発行者鍵をローテーションする場合、既存のサービスアカウント・トークンが無効にならないよう、少なくとも1つの古い鍵をファイルに残すべきである。
+`+k3s certificate rotate-ca+` 、新旧両方の鍵を含む更新された`+service.key+` ファイルのみをインストー ルすることで、クラスタCAから独立してローテーションすることができる。
+
+[CAUTION]
+====
+現在使用中のデータを`+/var/lib/rancher/k3s/server/tls+` に上書きしてはならない。 +
+更新したキーを別のディレクトリにステージする。
+====
+
+
+例えば、サービス・アカウントの発行者キーだけをローテーションするには、以下のコマンドを実行する：
+
+[,bash]
+----
+# Create a temporary directory for cert generation
+mkdir -p /opt/k3s/server/tls
+
+# Check OpenSSL version
+openssl version | grep -qF 'OpenSSL 3' && OPENSSL_GENRSA_FLAGS=-traditional
+
+# Generate a new key
+openssl genrsa ${OPENSSL_GENRSA_FLAGS:-} -out /opt/k3s/server/tls/service.key 2048
+
+# Append the existing key to avoid invalidating current tokens
+cat /var/lib/rancher/k3s/server/tls/service.key >> /opt/k3s/server/tls/service.key
+
+# Load the updated key into the datastore
+k3s certificate rotate-ca --path=/opt/k3s/server
+----
+
+更新されていないファイルに対する警告が表示されるのは普通のことだ。`+rotate-ca+` コマンドがエラーを返した場合は、サービスログにエラーがないか確認してください。
+コマンドが正常に完了したら、クラスタ内のすべてのサーバーでK3を再起動します。エージェントを再起動したり、ポッドを再起動したりする必要はありません。
