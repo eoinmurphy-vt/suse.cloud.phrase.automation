@@ -1,30 +1,30 @@
-= CIS安全强化指南
-:page-languages: [en, ja, ko, zh]
+= CIS 加固指南
+:page-languages: [EN, JA, KO, ZH]
 :revdate: 2025-12-31
 :page-revdate: {revdate}
 
-本文件提供了对K3s生产环境安装的安全强化指导。它概述了为满足互联网安全中心（CIS）的Kubernetes基准控制所需的配置和控制措施。
+本文件为加固 K3 的生产安装提供规范性指导。它概述了应对互联网安全中心（CIS）提供的 Kubernetes 基准控制所需的配置和控制。
 
-K3s默认应用并启用了一些安全缓解措施，并且在不修改的情况下将通过多个Kubernetes CIS控制。有一些显著的例外情况需要手动干预以完全符合CIS基准：
+K3s 在默认情况下已应用并开启了许多安全缓解措施，无需修改即可通过许多 Kubernetes CIS 控制。但也有一些明显的例外情况，需要人工干预才能完全符合 CIS 基准：
 
-. K3s不会修改主机操作系统。任何主机级别的修改都需要手动完成。
-. 某些CIS策略控制针对`+NetworkPolicies+`和`+PodSecurityStandards+`（在v1.24及更早版本中为`+PodSecurityPolicies+`）将限制集群的功能。您必须选择让K3s通过将适当的选项（启用准入插件）添加到命令行标志或配置文件中来配置这些，并手动应用适当的策略。进一步的细节将在下面的章节中呈现。
+. K3 不会修改主机操作系统。任何主机级的修改都需要手动完成。
+. `+NetworkPolicies+` 和`+PodSecurityStandards+` 的某些 CIS 政策控制（在 v1.24 及更早版本上为`+PodSecurityPolicies+` ）将限制群集的功能。您必须选择让 K3s 通过在命令行标志或配置文件中添加适当的选项（启用接纳插件）以及手动应用适当的策略来配置这些选项。更多详情见下文各节。
 
-CIS基准的第一部分（1.1）主要关注pod清单的权限和所有权。K3s不为核心组件使用这些，因为所有内容都打包成一个单一的二进制文件。
+CIS 基准的第一部分（1.1）主要涉及 pod 清单的权限和所有权。K3s 不使用这些核心组件，因为所有组件都打包成一个二进制文件。
 
-== 主机级别要求
+== 主机级要求
 
-主机级别要求有两个方面：内核参数和etcd进程/目录配置。这些在本节中进行了概述。
+主机级需求有两个方面：内核参数和 etcd 进程/目录配置。本节对此进行了概述。
 
-=== 确保`+protect-kernel-defaults+`已设置
+=== 确保`+protect-kernel-defaults+` 已设置
 
-这是一个kubelet标志，如果所需的内核参数未设置或设置为与kubelet的默认值不同的值，kubelet将退出。
+这是一个 kubelet 标志，如果所需的内核参数未设置或设置为与 kubelet 默认值不同的值，则会导致 kubelet 退出。
 
-NOTE: `+protect-kernel-defaults+`作为K3s的顶级标志暴露。
+NOTE: `+protect-kernel-defaults+` 作为 K3 的顶层标志。
 
 ==== 设置内核参数
 
-创建一个名为`+/etc/sysctl.d/90-kubelet.conf+`的文件，并添加下面的代码片段。然后运行 `+sysctl -p /etc/sysctl.d/90-kubelet.conf+`.
+创建名为`+/etc/sysctl.d/90-kubelet.conf+` 的文件，并添加以下代码段。然后运行`+sysctl -p /etc/sysctl.d/90-kubelet.conf+` 。
 
 [,bash]
 ----
@@ -36,7 +36,7 @@ kernel.panic_on_oops=1
 
 == Kubernetes 组件的配置
 
-下面的配置应放置在 xref:installation/configuration.adoc#_configuration_file[配置文件] 中，并包含所有必要的补救措施，以增强 Kubernetes 组件的安全性。
+下面的配置应放在xref:installation/configuration.adoc#_configuration_file[配置文件]中，其中包含加固 Kubernetes 组件所需的所有补救措施。
 
 [tabs,sync-group-id=pod-sec]
 ======
@@ -83,7 +83,7 @@ kubelet-arg:
   - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
 ----
 
-v1.24 及旧版本::
+V1.24 及更高版本::
 +
 [,yaml]
 ----
@@ -107,26 +107,26 @@ kubelet-arg:
 
 == Kubernetes 运行时要求
 
-符合 CIS 基准的运行时要求主要集中在 Pod 安全性（通过 PSP 或 PSA）、网络策略和 API 服务器审计日志。这些在本节中进行了概述。
+符合 CIS 基准的运行时要求主要围绕 pod 安全（通过 PSP 或 PSA）、网络策略和 API 服务器审计日志。本节对此进行了概述。
 
-默认情况下，K3s 不包括任何 Pod 安全性或网络策略。然而，K3s 附带一个控制器，如果创建了网络策略，它将强制执行这些策略。K3s 默认不启用审计，因此审计日志配置和审计策略必须手动创建。默认情况下，K3s 启用 `+PodSecurity+` 和 `+NodeRestriction+` 两个准入控制器，以及其他控制器。
+默认情况下，K3s 不包含任何 pod 安全或网络策略。不过，如果创建了网络策略，K3s 会随附一个控制器来执行网络策略。K3s 默认不启用审计功能，因此必须手动创建审计日志配置和审计策略。默认情况下，K3s 运行时会启用`+PodSecurity+` 和`+NodeRestriction+` 准入控制器等。
 
-=== Pod 安全性
+=== 舱体安全
 
 [tabs,sync-group-id=pod-sec]
 ======
 v1.25 及更新版本::
 +
 --
-K3s v1.25 及更新版本支持 https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod 安全准入 (PSAs)] 来控制 Pod 安全性。通过将以下标志传递给 K3s 服务器来启用 PSAs：
+K3s v1.25 及更新版本支持https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod Security Admissions (PSA)]，用于控制 pod 安全。通过向 K3s 服务器传递以下标志可启用 PSA：
 
 ----
 --kube-apiserver-arg="admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml"
 ----
 
-该策略应写入名为 `+psa.yaml+` 的文件，位于 `+/var/lib/rancher/k3s/server+` 目录。
+策略应写入`+/var/lib/rancher/k3s/server+` 目录中名为`+psa.yaml+` 的文件。
 
-以下是一个合规的 PSA 示例：
+下面是一个符合要求的公益广告范例：
 
 [,yaml]
 ----
@@ -151,20 +151,20 @@ plugins:
 ----
 --
 
-v1.24 及旧版本::
+V1.24 及更高版本::
 +
 --
-K3s v1.24 及旧版本支持 https://kubernetes.io/docs/concepts/security/pod-security-policy/[Pod 安全策略 (PSPs)] 来控制 Pod 安全性。通过将以下标志传递给 K3s 服务器来启用 PSPs：
+K3s v1.24 及更早版本支持https://kubernetes.io/docs/concepts/security/pod-security-policy/[Pod 安全策略 (PSP)]，用于控制 pod 安全。通过向 K3s 服务器传递以下标志可启用 PSP：
 
 ----
 --kube-apiserver-arg="enable-admission-plugins=NodeRestriction,PodSecurityPolicy"
 ----
 
-这将保持 `+NodeRestriction+` 插件的有效性，并启用 `+PodSecurityPolicy+`。
+这将起到维护`+NodeRestriction+` 插件和启用`+PodSecurityPolicy+` 的作用。
 
-当启用PSP时，可以应用策略以满足CIS基准第5.2节中描述的必要控制。
+启用 PSP 后，可应用政策来满足 CIS 基准第 5.2 节所述的必要控制。
 
-以下是一个合规的PSP示例：
+下面是一个符合要求的 PSP 的示例：
 
 [,yaml]
 ----
@@ -206,9 +206,9 @@ spec:
   readOnlyRootFilesystem: false
 ----
 
-为了使上述PSP有效，我们需要创建一个ClusterRole和一个ClusterRoleBinding。我们还需要包含一个"系统无限制策略"，该策略对于需要额外权限的系统级Pod是必需的，以及一个允许sysctls正常工作的额外策略。
+为使上述 PSP 有效，我们需要创建一个 ClusterRole 和一个 ClusterRoleBinding。我们还需要为需要额外权限的系统级 pod 添加 "系统不受限策略"，以及允许 servicelb 正常运行所需的 sysctls 的额外策略。
 
-将上述配置与下一节中描述的<<_networkpolicies,网络策略>>结合，可以将单个文件放置在`+/var/lib/rancher/k3s/server/manifests+`目录。以下是一个`+policy.yaml+`文件的示例：
+将上述配置与下一节描述的<<_networkpolicies,网络策略>>相结合，就可以在`+/var/lib/rancher/k3s/server/manifests+` 目录中放置一个文件。下面是`+policy.yaml+` 文件的示例：
 
 [,yaml]
 ----
@@ -439,15 +439,15 @@ spec:
 --
 ======
 
-NOTE: Kubernetes的关键组件，如CNI、DNS和Ingress，作为Pod在`+kube-system+`名称空间中运行。因此，该名称空间将具有一个不那么严格的策略，以便这些组件能够正常运行。
+NOTE: Kubernetes的关键新增功能（如CNI、DNS和Ingress）作为pod运行在`+kube-system+` 命名空间中。因此，该命名空间将采用限制较少的策略，以便这些组件能够正常运行。
 
 === NetworkPolicies
 
-CIS要求所有名称空间都应用网络策略，以合理限制流量进入名称空间和Pod。
+CIS 要求所有命名空间都应用网络策略，合理限制进入命名空间和 pod 的流量。
 
-网络策略应放置在`+/var/lib/rancher/k3s/server/manifests+`目录，启动时将自动部署。
+网络策略应放在`+/var/lib/rancher/k3s/server/manifests+` 目录中，启动时会自动部署到该目录。
 
-以下是一个合规的网络策略示例。
+下面是一个符合要求的网络政策示例。
 
 [,yaml]
 ----
@@ -465,7 +465,7 @@ spec:
             kubernetes.io/metadata.name: kube-system
 ----
 
-在应用限制的情况下，DNS将被阻止，除非特别允许。以下是一个网络策略，将允许DNS的流量存在。
+在应用限制后，除非特意允许，否则 DNS 将被阻止。以下是允许 DNS 流量存在的网络策略。
 
 [,yaml]
 ----
@@ -488,7 +488,7 @@ spec:
   - Ingress
 ----
 
-如果没有创建允许访问的网络策略，metrics-server和Traefik ingress控制器将默认被阻止。确保您使用下面的示例yaml：
+如果没有创建允许访问的网络策略，则默认情况下会阻止度量服务器和特莱飞克入口控制器。确保使用下面的 yaml 示例：
 
 [,yaml]
 ----
@@ -538,22 +538,22 @@ spec:
 
 [IMPORTANT]
 ====
-操作员必须像正常一样管理为创建的其他名称空间的网络策略。
+对于创建的其他命名空间，操作员必须正常管理网络策略。
 ====
 
 
-=== API服务器审计配置
+=== API 服务器审计配置
 
-CIS要求1.2.22到1.2.25与API服务器的审计日志配置相关。K3s默认不创建日志目录和审计策略，因为审计要求特定于每个用户的策略和环境。
+CIS 要求 1.2.22 至 1.2.25 与为 API 服务器配置审计日志有关。K3s 默认情况下不会创建日志目录和审计策略，因为审计要求取决于每个用户的策略和环境。
 
-理想情况下，日志目录必须在启动K3s之前创建。建议使用限制性访问权限，以避免泄露潜在的敏感信息。
+理想情况下，日志目录必须在启动 K3s 之前创建。建议使用限制性访问权限，以避免泄漏潜在的敏感信息。
 
 [,bash]
 ----
 sudo mkdir -p -m 700 /var/lib/rancher/k3s/server/logs
 ----
 
-下面提供了一个初始审计策略，用于记录请求元数据。该策略应写入名为 `+audit.yaml+` 的文件，位于 `+/var/lib/rancher/k3s/server+` 目录。有关API服务器的策略配置的详细信息，请参阅Kubernetes https://kubernetes.io/docs/tasks/debug-application-cluster/audit/[文档]。
+下面提供了一个记录请求元数据的启动审计策略。策略应写入`+/var/lib/rancher/k3s/server+` 目录中名为`+audit.yaml+` 的文件。有关 API 服务器策略配置的详细信息，请参阅 Kuberneteshttps://kubernetes.io/docs/tasks/debug-application-cluster/audit/[文档]。
 
 [,yaml]
 ----
@@ -563,11 +563,11 @@ rules:
 - level: Metadata
 ----
 
-这两个配置必须作为参数传递给API服务器，如下所示：
+这两种配置都必须作为参数传递给 API 服务器：
 
 [tabs]
 ======
-config::
+配置::
 +
 [,yaml]
 ----
@@ -589,7 +589,7 @@ cmdline::
 ----
 ======
 
-必须重新启动K3s以加载新配置。
+必须重新启动 K3 才能加载新配置。
 
 [,bash]
 ----
@@ -598,17 +598,17 @@ sudo systemctl restart k3s.service
 ----
 
 == 手动操作
-以下是K3s在应用上述配置时当前未通过的控制项。这些控制项需要手动干预才能完全符合CIS基准。
+以下是 K3s 目前在应用上述配置时无法通过的控制。这些控制措施需要人工干预，才能完全符合 CIS 基准。
 
 === 控制 1.1.20
 
-确保Kubernetes PKI证书文件权限设置为600或更严格（手动）
+确保 Kubernetes PKI 证书文件权限设置为 600 或更严格（手动）
 
-.修正
+.补救措施
 [%collapsible]
 ======
-K3s PKI证书文件存储在`+/var/lib/rancher/k3s/server/tls/+`，权限为644。
-要修复，请运行以下命令：
+K3 的 PKI 证书文件存储在`+/var/lib/rancher/k3s/server/tls/+` 中，权限为 644。
+要进行补救，请运行以下命令：
 
 [,bash]
 ----
@@ -618,14 +618,14 @@ chmod -R 600 /var/lib/rancher/k3s/server/tls/*.crt
 
 === 控制 1.2.9
 
-确保已设置准入控制插件EventRateLimit。
+确保已设置准入控制插件 EventRateLimit
 
-.修正
+.补救措施
 [%collapsible]
 ======
-请遵循https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#eventratelimit[Kubernetes文档]并在配置文件中设置所需的限制。
-对于此及其他psa配置，本文档使用/var/lib/rancher/k3s/server/psa.yaml。
-然后，编辑K3s配置文件/etc/rancher/k3s/config.yaml并设置以下参数。
+按照https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#eventratelimit[Kubernetes 文档]，在配置文件中设置所需的限制。
+本文档使用 /var/lib/rancher/k3s/server/psa.yaml 进行此配置和其他 psa 配置。
+然后，编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并设置以下参数。
 
 [,yaml]
 ----
@@ -637,12 +637,12 @@ kube-apiserver-arg:
 
 === 控制 1.2.11
 
-确保已设置准入控制插件AlwaysPullImages。
+确保已设置接纳控制插件 AlwaysPullImages
 
-.修正
+.补救措施
 [%collapsible]
 ======
-根据CIS指南，宽松的设置，"此设置可能会影响离线或隔离的集群，这些集群已预加载镜像，并且没有访问注册表以拉取正在使用的镜像。此设置不适用于使用此配置的集群。
+根据 CIS 指导原则，"允许"，"此设置可能会影响离线或孤立的群集，因为这些群集已预装映像，但无法访问注册表以提取使用中的映像。此设置不适合使用此配置的群集"。
 编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并设置以下参数。
 
 [,yaml]
@@ -654,13 +654,13 @@ kube-apiserver-arg:
 
 === 控制 1.2.21
 
-确保 -- request-timeout 参数设置得当。
+确保--请求超时参数设置适当
 
-.修正
+.补救措施
 [%collapsible]
 ======
-根据 CIS 指南，建议将此限制设置为适当值，仅在必要时更改默认限制 60 秒。
-如果需要，编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并设置以下参数。例如，
+允许，根据 CIS 指导原则，"建议酌情设置此限制，仅在需要时更改 60 秒的默认限制"。
+编辑 K3s 配置文件 /etc/rancher/k3s/config.yaml 并根据需要设置以下参数。例如
 
 [,yaml]
 ----
@@ -671,12 +671,12 @@ kube-apiserver-arg:
 
 === 控制 4.2.13 
 
-确保对 pod PIDs 设置了限制。
+确保对 pod PID 设置限制
 
-.修正
+.补救措施
 [%collapsible]
 ======
-决定此参数的适当级别并进行设置，如果使用 K3s 配置文件 /etc/rancher/k3s/config.yaml，请编辑该文件将 `+podPidsLimit+` 设置为。
+如果使用 K3s 配置文件 /etc/rancher/k3s/config.yaml，则编辑该文件，将`+podPidsLimit+` 设置为
 
 [,yaml]
 ----
@@ -687,22 +687,22 @@ kubelet-arg:
 
 === 控制 5.X
 
-所有 5.X 控制与 Kubernetes 策略配置相关。这些控制在 K3s 中默认未强制执行。
+所有 5.X 控制都与 Kubernetes 策略配置有关。K3 默认不执行这些控制。
 
-有关如何创建和应用这些策略的更多信息，请参阅 xref:security/self-assessment-1.8.adoc#_5_1_rbac_and_service_accounts[CIS 1.8 第 5 节]。
+有关如何创建和应用这些策略的更多信息，请参阅xref:security/self-assessment-1.8.adoc#_5_1_rbac_and_service_accounts[CIS 1.8 第 5 节]。
 
 ==== 控制 5.1.5
 
 [NOTE]
 ====
-为了获得通过评分，只有在 cis-1.9 中需要进行补救。
+只有顺式-1.9 才需要补习以达到及格分数。
 ====
 
-.修正
+.补救措施
 [%collapsible]
 ======
-在 Kubernetes 工作负载需要特定访问 Kubernetes API 服务器的地方创建显式服务帐户。
-至少，补丁以下内容：
+在 Kubernetes 工作负载需要对 Kubernetes API 服务器进行特定访问时，创建显式服务账户。
+至少要修补以下内容：
 
 [,bash]
 ----
@@ -714,4 +714,4 @@ kubectl patch serviceaccount --namespace kube-public default --patch '{"automoun
 
 == 结论
 
-如果您遵循了本指南，您的 K3s 集群将配置为符合 CIS Kubernetes 基准。您可以查看 xref:security/self-assessment-1.11.adoc[CIS 1.11 自我评估指南] 以了解基准检查的期望以及如何在您的集群上做到这一点。
+如果您按照本指南进行了配置，您的 K3s 集群将符合 CIS Kubernetes Benchmark 的要求。您可以查看《xref:security/self-assessment-1.11.adoc[CIS 1.11 自我评估指南》]，了解每个基准检查的预期，以及如何在您的群集上进行同样的检查。
