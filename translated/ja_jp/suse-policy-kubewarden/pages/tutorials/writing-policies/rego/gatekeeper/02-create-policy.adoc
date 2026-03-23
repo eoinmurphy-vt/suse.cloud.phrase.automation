@@ -1,0 +1,108 @@
+include::partial$variables.adoc[]
+= 新しいゲートキーパー Rego ポリシーの作成
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 新しいポリシーを作成してテストすることで、デフォルトの名前空間をターゲットとするリソースを拒否するゲートキーパーのレゴポリシーを実装する。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "gatekeeper", "create-policy"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"gatekeeper rego policy"]。
+:sidebar_label: 新しいポリシーを作成する
+:current-version: {page-origin-branch}
+
+このチュートリアルでは、xref:tutorials/writing-policies/rego/open-policy-agent/02-create-policy.adoc[Open Policy Agent] で作成したのと同じポリシーを実装します。
+つまり、`+default+` 名前空間をターゲットにしているリソースを拒否するポリシーです。
+
+[NOTE]
+====
+https://github.com/kubewarden/gatekeeper-policy-template[]、既存のポリシーを移植するためのベースとして使用できるあります。
+====
+
+
+== 必要条件
+
+以下の道具が必要だ：
+
+* `+opa+`
+* `+kwctl+`
+
+== 方針
+
+ゲートキーパーのポリシーは、違反オブジェクトを1つ以上返してはならない。
+違反が報告されなければ、リクエストは受理される。
+一つ以上の違反が報告された場合、リクエストは拒否される。
+
+`+rego-policy+` という名前の新しいフォルダを作成する。
+その中に、`+policy.rego+` ：
+
+[,rego]
+----
+package policy
+
+violation[{"msg": msg}] {
+        input.review.object.metadata.namespace == "default"
+        msg := "it is forbidden to use the default namespace"
+}
+----
+
+この場合、エントリーポイントは`+policy/violation+` である。レゴがどのように機能するかによって、ポリシーは次のような結果になる可能性がある：
+
+* 違反 1 を返す： レビューされたオブジェクトはデフォルトのネームスペースをターゲットにしている。
+* 0違反を返す：レビューされたオブジェクトはポリシーに準拠している。
+
+このポリシーと、オープン・ポリシー・エージェントのセクションに書かれているポリシーを比較してみてください。
+あれは、`+AdmissionReview+` レスポンス全体を構築しなければならなかったし、入力も少し違っていた。
+ゲートキーパー・モードでは、`+AdmissionRequest+` オブジェクトは、`+input.review+` 属性で提供される。
+`+AdmissionRequest+` のすべての属性は、`+object+` とともに読むことができる。
+
+これで、次のセクションで評価するリクエストを作成できる。
+
+まず、`+data+` ディレクトリ内に、以下の内容の`+default-ns.json+` ファイルを作成する：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "default",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+今度は、`+default+` とは別の名前空間をターゲットにした、別の`+AdmissionReview+` オブジェクトを作成する。
+このファイルの名前は`+other-ns.json+` 。
+内容は以下の通り：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "other",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+これは、`+other+` という名前空間の下で、別のポッド作成リクエストをシミュレートしています。
