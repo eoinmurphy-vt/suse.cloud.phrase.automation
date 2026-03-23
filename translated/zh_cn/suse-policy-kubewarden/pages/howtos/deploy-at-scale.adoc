@@ -1,0 +1,69 @@
+include::partial$variables.adoc[]
+= {project-name} 在大规模环境中
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 通过{project-name} 配置{project-name}s，确保在要求苛刻的大规模环境中实现高可用性和高性能。
+:keywords: [kubewarden、"{project-name}"、kubernetes、policyservers、生产]
+:doc-persona: kubewarden-operator, kubewarden-integrator
+:doc-type: 如何
+:doc-topic: 操作员手册、策略服务器、生产
+:sidebar_label: 大规模部署
+:sidebar_position: 21
+
+本节将详细介绍{project-name} 在要求苛刻的大规模环境中的实际部署情况。它说明了如何配置{short-project-name} 以实现高可用性和高性能，以及在大负载情况下需要注意的事项。
+
+[IMPORTANT]
+====
+如果您想了解有关如何在生产环境中运行{short-project-name} 的更多提示，请查看xref:/howtos/production-deployments.adoc[生产部署]文档。
+====
+
+== 环境概述
+
+基础设施由大约 20 个 Kubernetes 集群组成。其中最大的集群具有规模大、资源多的特点：
+
+* 节点： ~400
+* 命名空间： ~4,000
+* 管理资源：
+** 花苞10,000
+** 角色绑定：13,000
+** 入侵：12,000
+** 部署：8,000
+** 服务13,000
+
+== {short-project-name} 配置
+
+为了满足这种环境的需求，{short-project-name} 的配置侧重于工作负载隔离和高可用性。
+
+* 政策执行：22`+ClusterAdmissionPolicies+` 在整个集群中执行，没有针对特定命名空间的`+AdmissionPolicies+` 。
+* 策略服务器架构使用两个独立的`+PolicyServer+` 部署来隔离工作负载：
+** 其中一个`+PolicyServer+` 专门用于上下文感知政策。
+** 第二个`+PolicyServer+` 处理所有其他非上下文感知策略。
+* 可扩展性和资源：
+** 复制品：每个`+PolicyServer+` 部署运行 15 个副本，以处理大量请求。
+** 资源分配：每个副本分配 300 MB 内存和 4 个 CPU 内核。
+
+== 性能指标
+
+这种配置在保持可预测性能的同时，成功地管理了大量的接入请求。
+
+* 接纳请求吞吐量集群每秒最多可处理 300 个接入请求（包括网络钩子验证和审计扫描）。
+* 政策延迟：
+** 典型延迟：情境感知策略的执行时间一般在 500 毫秒左右。
+** 暂停：在这种高吞吐量环境中，网络钩子超时配置为 2.5 秒，而`+PolicyServer+` 超时设置为 10 秒。虽然大多数请求的速度都很快，但基础架构的建立是为了在不影响 API 服务器稳定性的情况下处理偶尔出现的慢速操作。
+
+== 审计扫描仪性能
+
+审计扫描仪可用于确保大量资源的持续合规性。
+
+* 频率每 4 小时进行一次全集群审计。
+* 配置：对审计工作进行了调整，以实现最大的并行性，从而缩短运行时间：
+
+[source,shell]
+----
+--parallel-namespaces: "10"
+--parallel-resources: "20"
+--parallel-policies: "20"
+--page-size: "1000"
+----
+
+* 审计期限：即使在拥有数万个资源的最大集群上，一个完整的审计工作也能在
