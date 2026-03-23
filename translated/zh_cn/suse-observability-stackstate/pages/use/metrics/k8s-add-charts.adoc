@@ -1,34 +1,34 @@
-= 将自定义图表添加到组件
+= 为组件添加自定义图表
 :revdate: 2025-07-10
 :page-revdate: {revdate}
-:description: SUSE Observability
+:description: SUSE 可观察性
 
 == 概述
 
-SUSE Observability 默认在大多数类型的组件上提供许多指标图表，这些组件代表 Kubernetes 资源。可以在需要时向任何组件集添加额外的指标图表。在向组件添加指标时，有两种选择：
+SUSE Observability 在代表 Kubernetes 资源的大多数组件类型上默认提供了许多指标图表。如有需要，可在任何组件集中添加额外的度量图表。为组件添加度量指标时，有两个选项：
 
-. 这些指标已经被 SUSE Observability 收集，但默认情况下未在组件上可视化。
-. 这些指标尚未被 SUSE Observability 收集，因此尚不可用。
+. SUSE Observability 已经收集了这些指标，但默认情况下不会在组件上可视化这些指标
+. SUSE Observability 尚未收集这些指标，因此还无法提供
 
-对于选项 1，以下步骤将指导您如何创建指标绑定，以配置 SUSE Observability 将特定指标添加到特定组件集。
+对于选项 1，以下步骤将指导您如何创建度量绑定，从而配置 SUSE Observability，将特定度量添加到特定组件集。
 
-对于选项 2，首先确保这些指标在 SUSE Observability 中可用，通过使用 xref:/use/metrics/k8s-prometheus-remote-write.adoc[Prometheus 远程写入协议] 将它们发送到 SUSE Observability。只有在此之后，才能继续为组件添加指标图表。
+如果使用选项 2，首先确保 SUSE Observability 中的度量指标可用，方法是使用xref:/use/metrics/k8s-prometheus-remote-write.adoc[Prometheus 远程写协议]将它们发送到 SUSE Observability。然后再继续为组件添加指标图表。
 
 == 步骤
 
-创建指标绑定的步骤：
+创建度量绑定的步骤：
 
-. <<_write_the_outline_of_the_metric_binding,编写指标绑定的概要>>
+. <<_write_the_outline_of_the_metric_binding,编写公制装订大纲>>
 . <<_write_the_topology_query,编写拓扑查询 (STQL) 以选择组件>>
-. <<_write_the_promql_query,编写所需指标的 PromQL 查询>>
+. <<_write_the_promql_query,为所需指标编写 PromQL 查询>>
 . <<_bind_the_correct_time_series_to_each_component,将正确的时间序列绑定到每个组件>>
-. <<_create_or_update_the_metric_binding_in_suse_observability,在 SUSE Observability 中创建或更新指标绑定>>
+. <<_create_or_update_the_metric_binding_in_suse_observability,在 SUSE Observability 中创建或更新度量绑定>>
 
-作为示例，这些步骤将为 Kubernetes 部署的 `+Replica counts+` 添加指标绑定。这只是一个示例，这个指标绑定在 SUSE Observability 中默认已经存在。
+例如，该步骤将为 Kubernetes 部署的`+Replica counts+` 添加一个度量绑定。这只是一个例子，SUSE Observability 默认情况下已经存在这种度量绑定。
 
-== 编写指标绑定的概要
+== 编写公制装订大纲
 
-创建一个名为 `+metric-bindings.yaml+` 的新 YAML 文件，并将此 YAML 模板添加到其中以创建您自己的指标绑定。在您最喜欢的代码编辑器中打开它，以便在本指南中进行更改。最后将使用 SUSE Observability CLI 来创建和更新 SUSE Observability 中的指标绑定。
+创建一个名为`+metric-bindings.yaml+` 的新 YAML 文件，并将此 YAML 模板添加到其中，以创建自己的度量绑定。在您最喜欢的代码编辑器中打开它，在本指南中进行更改。最后，将使用 SUSE Observability CLI 在 SUSE Observability 中创建和更新度量绑定。
 
 ----
 nodes:
@@ -54,22 +54,22 @@ nodes:
       weight:
 ----
 
-此模板中的字段包括：
+该模板中的字段有
 
-* `+_type+`：SUSE Observability需要知道这是一个指标绑定，因此值始终需要为`+MetricBinding+`。
-* `+chartType+`：SUSE Observability将支持不同的图表类型（`+line+`、`+bar+`等），目前仅支持`+line+`。
-* `+enabled+`：设置为`+false+`以保留指标绑定，但不向用户显示。
-* `+tags+`：将用于在用户界面中组织指标，可以使用`+{}+`留空。
-* `+unit+`：查询或查询返回的时间序列中值的单位，用于渲染图表的Y轴。请参阅xref:/develop/reference/k8sTs-chart-units.adoc[支持的单元]参考以获取所有单元。
-* `+name+`：指标绑定的名称。
-* `+description+`：可选描述，在名称上悬停时显示。
-* `+priority+`：[已弃用] `+HIGH+`、`+MEDIUM+`或`+LOW+`之一。组件上指标的主要排序顺序（按此处提到的顺序），次要排序顺序为`+name+`。
-* `+identifier+`：一个URN（通用资源标识符），用作指标绑定的唯一标识符。它必须以`+urn:custom:metric-binding:+`开头，其余部分为自由格式，只要在所有指标绑定中是唯一的。
-* `+queries+`：要在图表中显示的指标绑定的查询列表（另请参见以下部分）。
-* `+scope+`：指标绑定的拓扑范围，一个选择将显示此指标绑定的组件的拓扑查询。
-* `+layout+`：如何在不同的视角视图中分组图表，例如在xref:/use/views/k8s-metrics-perspective.adoc[指标视角]上。
+* `+_type+`:SUSE Observability 需要知道这是一个度量绑定，因此值必须始终为 `+MetricBinding+`
+* `+chartType+`:SUSE Observability 将支持不同的图表类型（`+line+`,`+bar+` 等），目前仅支持`+line+` 
+* `+enabled+`:设置为`+false+` 以保持度量绑定，但不向用户显示
+* `+tags+`:将用于在用户界面中组织度量指标，可以使用 `+{}+`
+* `+unit+`:查询返回的时间序列中数值的单位，用于渲染图表的 Y 轴。有关所有单位，请参阅xref:/develop/reference/k8sTs-chart-units.adoc[支持的单位]参考。
+* `+name+`:度量绑定的名称
+* `+description+`:可选描述，显示在名称的上方
+* `+priority+`:[已废弃]`+HIGH+`,`+MEDIUM+`, 或`+LOW+` 中的一个。组件指标的主要排序顺序（按此处提及的顺序），次要排序顺序是`+name+` 。
+* `+identifier+`:URN（通用资源标识符），用作度量绑定的唯一标识符。必须以`+urn:custom:metric-binding:+` 开头，其余部分可自由格式化，只要在所有公制绑定中是唯一的即可。
+* `+queries+`:图表中要显示的度量绑定查询列表（另见以下章节）
+* `+scope+`:度量绑定的拓扑范围，即拓扑查询，用于选择显示该度量绑定的组件。
+* `+layout+`:如何在不同视角（如 "xref:/use/views/k8s-metrics-perspective.adoc[度量衡 "视角]）下分组图表
 
-首先填写所有已知的部分（以部署副本计数为例）。
+先填写所有已知部分（以部署副本为例）
 
 ----
 _type: MetricBinding
@@ -86,49 +86,49 @@ queries:
 scope:
 ----
 
-查询和范围部分将在接下来的步骤中填写。请注意，使用的单位是`+short+`，这将简单地呈现一个数值。如果您还不确定度量的单位，可以保持开放状态，并在编写PromQL查询时决定正确的单位。
+查询和范围部分将在接下来的步骤中填写。请注意，使用的单位是`+short+` ，它只会显示一个数值。如果您还不确定度量单位，可以先不确定，在编写 PromQL 查询时再决定正确的单位。
 
 == 编写拓扑查询
 
-使用xref:/use/views/k8s-topology-perspective.adoc[拓扑视图]，http://your-instance/#/views/explore,并选择需要显示新度量的组件。基本视图和高级视图都可以用于进行选择。用于度量绑定的拓扑选择中最常见的字段是`+type+`（组件类型）和`+label+`（选择所有标签）。例如，对于部署：
+使用xref:/use/views/k8s-topology-perspective.adoc[拓扑视角]的 "探索 "视图，http://your-instance/#/views/explore, 并选择需要显示新度量的组件。基本视图和高级视图都可以用来进行选择。为度量绑定选择拓扑的最常用字段是`+type+` （组件类型）和`+label+` （选择所有标签）。例如，在部署方面：
 
 ----
 type = "deployment" and label = "stackpack:kubernetes"
 ----
 
-类型过滤器选择所有部署，而标签过滤器仅选择由Kubernetes堆栈包创建的组件（标签名称为`+stackpack+`，标签值为`+kubernetes+`）。后者也可以省略，以获得相同的结果。
+类型过滤器选择所有部署，而标签过滤器只选择 Kubernetes 堆栈包创建的组件（标签名称为`+stackpack+` ，标签值为`+kubernetes+` ）。后者也可以省略，得到同样的结果。
 
-切换到高级模式以复制结果拓扑查询，并将其放入度量绑定的`+scope+`字段中。
+切换到高级模式，复制生成的拓扑查询，并将其放入度量绑定的`+scope+` 字段。
 
 [NOTE]
 ====
-度量绑定仅支持查询过滤器，不支持查询函数，如`+withNeighborsOf+`，并且无法使用。
+度量绑定只支持查询过滤器，不支持查询函数，如`+withNeighborsOf+` ，也无法使用。
 ====
 
 
-== 编写PromQL查询
+== 编写 PromQL 查询
 
-转到您的 SUSE Observability 实例的xref:/use/metrics/k8sTs-explore-metrics.adoc[度量探索器]，http://your-instance/#/metrics,并使用它查询感兴趣的度量。探索器具有度量、标签、标签值的自动补全功能，还包括PromQL函数和运算符，以帮助您。从短时间范围开始，例如一小时，以获得最佳结果。
+访问 SUSE Observability 实例的xref:/use/metrics/k8sTs-explore-metrics.adoc[度量资源管理器] http://your-instance/#/metrics, ，使用它查询感兴趣的度量。资源管理器不仅能自动完成度量、标签、标签值，还能自动完成 PromQL 函数和运算符。从较短的时间范围开始，例如一小时，以获得最佳效果。
 
-对于副本的总数，请使用`+kubernetes_state_deployment_replicas+`度量。为了使此度量的图表对时间序列数据具有代表性，请扩展查询以使用`+${__interval}+`参数进行聚合：
+对于副本总数，请使用`+kubernetes_state_deployment_replicas+` 指标。为了使该指标显示的图表能代表时间序列数据，请扩展查询，使用`+${__interval}+` 参数进行聚合：
 
 ----
 max_over_time(kubernetes_state_deployment_replicas[${__interval}])
 ----
 
-在这种特定情况下，使用`+max_over_time+`以确保图表始终显示任何给定时间的最高副本数。对于较长的时间范围，这意味着短暂的副本下降不会被显示，为了强调最低副本数，请使用`+min_over_time+`。
+在这种特殊情况下，使用`+max_over_time+` 来确保图表在任何给定时间都显示最高的副本数量。对于较长的时间范围，这意味着不会显示复制数量的短暂下降，要强调最低的复制数量，请使用`+min_over_time+` 。
 
-将查询复制到度量绑定的`+queries+`字段中第一个条目的`+expression+`属性。将 `+Total replicas+` 用作别名。这是将在图表图例中显示的名称。
+将查询复制到度量绑定`+queries+` 字段第一个条目的`+expression+` 属性中。使用`+Total replicas+` 作为别名。这是图表图例中显示的名称。
 
 [NOTE]
 ====
-在 SUSE Observability 中，指标图表的大小会自动决定图表中显示的指标的粒度。可以调整 PromQL 查询，以最佳利用此行为，从而获得指标的代表性图表。xref:/use/metrics/k8s-writing-promql-for-charts.adoc[撰写 PromQL 以用于图表] 详细解释了这一点。
+在 SUSE Observability 中，度量图表的大小自动决定图表中显示的度量的粒度。可以对 PromQL 查询进行调整，以充分利用这种行为，从而获得具有代表性的指标图表。xref:/use/metrics/k8s-writing-promql-for-charts.adoc[为图表编写 PromQL]将对此进行详细说明。
 ====
 
 
-== 将正确的时间序列绑定到每个组件。
+== 将正确的时间序列绑定到每个组件
 
-所有字段填写完整的指标绑定：
+已填写所有字段的度量绑定：
 
 ----
 _type: MetricBinding
@@ -145,36 +145,36 @@ queries:
 scope: type = "deployment" and label = "stackpack:kubernetes"
 ----
 
-在 SUSE Observability 中创建它并查看部署组件上的 "副本计数" 图表会得到意外的结果。图表显示所有部署的副本计数。从逻辑上讲，人们会期望只有 1 个时间序列：该特定部署的副本计数。
+在 SUSE Observability 中创建并查看部署组件上的 "副本数量 "图表，结果出乎意料。图表显示了所有部署的副本数量。从逻辑上讲，我们只需要一个时间序列：该特定部署的副本数量。
 
-image::k8s/k8s-replica-counts-without-binding.png[单个部署的错误图表, it shows the replica count for all deployments]
+image::k8s/k8s-replica-counts-without-binding.png[单一部署的不正确图表, it shows the replica count for all deployments]
 
-要修复此问题，请使用组件的信息使 PromQL 查询针对特定组件。根据足够的指标标签进行过滤，以仅选择该组件的特定时间序列。这就是将正确的时间序列绑定到组件的 "绑定"。对于任何有经验制作 Grafana 仪表板的人来说，这类似于在仪表板上用于查询的带参数的仪表板。让我们将指标绑定中的查询更改为：
+要解决这个问题，就必须使用来自组件的信息，针对组件进行特定的 PromQL 查询。对足够多的度量标签进行筛选，以便只选择组件的特定时间序列。这就是将正确的时间序列与组件 "绑定"。对于有制作 Grafana 仪表盘经验的人来说，这类似于在仪表盘上查询参数的仪表盘。让我们把度量绑定中的查询改成这样：
 
 ----
 max_over_time(kubernetes_state_deployment_replicas{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", deployment="${name}"}[${__interval}])
 ----
 
-image::k8s/k8s-replica-counts-with-binding.png[添加参数化过滤器后，结果图表看起来符合预期, only 1 time series for this component]
+image::k8s/k8s-replica-counts-with-binding.png[添加参数化筛选器后，图表效果与预期相符, only 1 time series for this component]
 
-现在 PromQL 查询根据 3 个标签进行过滤，`+cluster_name+`、`+namespace+` 和 `+deployment+`。而不是为这些标签指定实际值，而是使用对组件字段的变量引用。在这种情况下，使用标签 `+cluster-name+` 和 `+namespace+`，通过 `+${tags.cluster-name}+` 和 `+${tags.namespace}+` 引用。此外，组件名称通过`+${name}+`引用。
+现在，PromQL 查询可筛选 3 个标签：`+cluster_name+` 、`+namespace+` 和`+deployment+` 。使用组件字段的变量引用来代替为这些标签指定实际值。在这种情况下，使用`+cluster-name+` 和`+namespace+` 标签，并使用`+${tags.cluster-name}+` 和`+${tags.namespace}+` 引用。此外，组件名称还可以用`+${name}+` 引用。
 
-支持的变量引用包括：
+支持的变量引用有
 
-* 任何组件标签，使用`+${tags.<label-name>}+`
-* 组件名称，使用`+${name}+`
+* 任何组件标签，使用 `+${tags.<label-name>}+`
+* 组件名称，使用 `+${name}+`
 
-image::k8s/k8s-carts-highlights.png[组件亮点页面，显示标签和组件名称（均以红色突出显示）]
+image::k8s/k8s-carts-highlights.png[显示标签和组件名称（均以红色突出显示）的组件亮点页面]
 
 [NOTE]
 ====
-集群名称、名称空间以及组件类型和名称的组合通常足以从Kubernetes中选择特定组件的指标。这些标签或类似标签通常在大多数指标和组件上可用。
+通常，集群名称、命名空间以及组件类型和名称的组合就足以从 Kubernetes 中为特定组件选择指标。这些标签或类似标签通常可以在大多数度量衡和组件上找到。
 ====
 
 
-== 在 SUSE Observability 中创建或更新指标绑定
+== 在 SUSE Observability 中创建或更新度量绑定
 
-使用 SUSE Observability CLI 在 SUSE Observability 中创建指标绑定。确保`+metric-bindings.yaml+`已保存并且看起来像这样：
+使用 SUSE Observability CLI 在 SUSE Observability 中创建度量绑定。确保`+metric-bindings.yaml+` 已保存，并看起来像这样：
 
 ----
 nodes:
@@ -192,64 +192,64 @@ nodes:
   scope: type = "deployment" and label = "stackpack:kubernetes"
 ----
 
-使用xref:/setup/cli/cli-sts.adoc[SUSE Observability CLI]创建指标绑定：
+使用xref:/setup/cli/cli-sts.adoc[SUSE Observability CLI]创建度量绑定：
 
 [,bash]
 ----
 sts settings apply -f metric-bindings.yaml
 ----
 
-通过在 SUSE Observability 中打开部署的指标视角验证结果。如果您对结果不满意，只需在YAML文件中更改指标绑定，然后再次运行命令以更新它。节点列表支持添加多个指标绑定。只需按照之前的步骤向YAML数组中添加另一个指标绑定条目。
+打开部署的度量视角，在 SUSE Observability 中验证结果。如果对结果不满意，只需更改 YAML 文件中的度量绑定，然后再次运行命令更新即可。节点列表支持添加多个度量绑定。只需使用与之前相同的步骤，在 YAML 数组中添加另一个度量绑定条目即可。
 
 [CAUTION]
 ====
-标识符用作指标绑定的唯一键。更改标识符将创建一个新的指标绑定，而不是更新现有的指标绑定。
+标识符用作度量绑定的唯一密钥。更改标识符将创建一个新的度量绑定，而不是更新现有的度量绑定。
 ====
 
 
-`+sts settings+`命令有更多选项，例如它可以列出所有指标绑定：
+`+sts settings+` 命令有更多选项，例如可以列出所有度量绑定：
 
 [,bash]
 ----
 sts settings list --type MetricBinding
 ----
 
-最后，要删除指标绑定，请使用
+最后，要删除度量绑定，请使用
 
 [,bash]
 ----
 sts settings delete --ids <id>
 ----
 
-此命令中的 `+<id>+` 不是标识符，而是 `+Id+` 输出中 `+sts settings list+` 列的数字。
+该命令中的`+<id>+` 不是标识符，而是`+sts settings list+` 输出的`+Id+` 列中的数字。
 
 [NOTE]
 ====
-推荐的工作方式是将指标绑定（以及在 SUSE Observability 中创建的任何其他自定义资源）存储为 YAML 文件，并放在 Git 储存库中。从那里，可以手动应用更改，或者通过在 CI/CD 系统中使用 SUSE Observability CLI 完全自动化，例如 GitHub Actions 或 GitLab Pipelines。
+推荐的工作方式是将度量绑定（以及在 SUSE Observability 中创建的任何其他自定义资源）作为 YAML 文件存储在 Git 仓库中。在此基础上，可以手动应用更改，也可以在 GitHub 行动或 GitLab 管道等 CI/CD 系统中使用 SUSE Observability CLI 实现完全自动化。
 ====
 
 
-== 其他选项
+== 其他选择
 
-=== 图表中有超过 1 个时间序列。
+=== 在图表中显示多个时间序列
 
 [NOTE]
 ====
-指标绑定只有 1 个单元（它绘制在图表的 y 轴上）。因此，您应该仅将产生相同单元的时间序列的查询组合在 1 个指标绑定中。有时可能可以转换单元。例如，处理器使用率可能以毫核或核的形式报告，毫核可以通过乘以 1000 转换为核，如此 `+(<original-query>) * 1000+`。
+公制绑定只有一个单位（在图表的 Y 轴上绘制）。因此，您只能将在 1 个公制绑定中产生具有相同单位的时间序列的查询结合起来。有时可以转换单位。例如，CPU 使用情况可能以毫核或内核为单位报告，毫核可通过乘以 1000 转换为内核，如`+(<original-query>) * 1000+` 。
 ====
 
 
-有 2 种方法可以在单个指标绑定中获取超过 1 个时间序列，并因此显示在一个图表中：
+有两种方法可以在单个度量绑定中获得多个时间序列，从而在单个图表中获得多个时间序列：
 
-. 编写一个返回单个组件多个时间序列的PromQL查询
-. 向指标绑定添加更多PromQL查询
+. 编写 PromQL 查询，返回单个组件的多个时间序列
+. 为度量绑定添加更多 PromQL 查询
 
-对于第一个选项，xref:/use/metrics/k8s-add-charts.adoc#_using_metric_labels_in_aliases[下一节]中给出了一个示例。第二个选项对于比较相关指标可能很有用。一些典型的用例：
+xref:/use/metrics/k8s-add-charts.adoc#_using_metric_labels_in_aliases[下一节]将举例说明第一种方案。第二个选项可用于比较相关指标。一些典型的使用案例
 
-* 比较总副本数与期望和可用副本数
-* 资源使用情况：限制、请求和在单个图表中的使用情况
+* 总复制数与期望复制数和可用复制数的比较
+* 资源使用情况：单一图表中的限制、请求和使用情况
 
-要向指标绑定添加更多查询，只需重复 xref:/use/metrics/k8s-add-charts.adoc#_steps[步骤] 3. 和 4.，并将查询作为查询列表中的额外条目添加。对于部署副本计数，有几个相关指标可以包含在同一图表中：
+要在度量绑定中添加更多查询，只需重复xref:/use/metrics/k8s-add-charts.adoc#_steps[步骤]3 和 4，并将查询作为额外条目添加到查询列表中。对于部署副本计数，有几个相关指标可以包含在同一个图表中：
 
 ----
 nodes:
@@ -273,11 +273,11 @@ nodes:
   scope: type = "deployment" and label = "stackpack:kubernetes"
 ----
 
-image::k8s/k8s-replica-counts-multiple-timeseries.png[具有多个指标的指标绑定]
+image::k8s/k8s-replica-counts-multiple-timeseries.png[多指标绑定]
 
-=== 在别名中使用指标标签。
+=== 在别名中使用度量标签
 
-当单个查询返回每个组件多个时间序列时，这将在图表中显示为多条线。但在图例中，它们将使用相同的别名。为了能够区分不同的时间序列，别名可以使用 `+${label}+` 语法包含对指标标签的引用。例如，这里是一个关于 pod 上 "容器重启" 指标的指标绑定，请注意一个 pod 可以有多个容器：
+当单个查询返回每个组件的多个时间序列时，图表中将显示为多条线。但在图例中，它们都将使用相同的别名。为了能够看到不同时间序列之间的差异，别名中可以使用`+${label}+` 语法引用度量标签。例如，下面是一个 pod 上的 "容器重新启动 "指标绑定，请注意，一个 pod 可以有多个容器：
 
 ----
 type: MetricBinding
@@ -294,16 +294,16 @@ scope: (label = "stackpack:kubernetes" and type = "pod")
 unit: short
 ----
 
-请注意，`+alias+` 引用了该指标的 `+container+` 标签。确保查询结果中存在该标签，当标签缺失时，`+${container}+` 将作为原样文本呈现，以帮助故障排除。
+请注意，`+alias+` 引用的是`+container+` 公制标签。确保标签出现在查询结果中，如果缺少标签，`+${container}+` 将显示为字面文本，以帮助排除故障。
 
 === 布局
 
-每个组件可以与各种技术或协议相关联，例如 k8s、网络、运行时（例如 JVM）、协议（HTTP、AMQP）等。
-因此，每个组件可以显示多种不同的指标。为了更易于阅读，SUSE Observability 可以将这些图表组织成选项卡和部分。
-要在特定的选项卡或部分中显示图表 (`+MetricBinding+`)，您需要配置布局属性。
-任何没有指定布局的 MetricsBinding 将显示在名为 `+Other+` 的选项卡和部分中。
+每个组件都可以与各种技术或协议相关联，如 k8s、网络、运行时环境（如 JVM）、协议（HTTP、AMQP）等。
+因此，每个组件都可以显示多种不同的指标。为便于阅读，SUSE Observability 可将这些图表组织成标签和部分。
+要在特定选项卡或部分中显示图表 (`+MetricBinding+`)，需要配置布局属性。
+任何未指定布局的 MetricsBinding 都将显示在名为`+Other+` 的选项卡和部分中。
 
-以下是一个示例配置：
+下面是一个配置示例：
 
 ----
 layout:
@@ -315,11 +315,11 @@ layout:
     weight: 2
 ----
 
-字段：
+领域
 
-* `+layout.metricPerspective+` - 定义在 `+Metrics Perspective+` 上显示的指标。指标被分组到选项卡中，然后是部分。
-* `+layout.metricPerspective.tab+` - 选项卡名称。选项卡按字母顺序排序。
-* `+layout.metricPerspective.section+` - 部分名称。部分按字母顺序排序。
-* `+layout.metricPerspective.weight+` - 部分中的指标主要按权重（升序）排序，其次按名称（字母顺序）排序。
-* `+layout.componentSummary+` - 指定在选择组件时在 `+Components details+` 侧边栏中显示的指标。仅当定义了此属性时，图表才会出现。
-* `+layout.componentSummary.weight+` - 这代表了图表的权重。图表按权重升序排序，然后显示前三个图表。
+* `+layout.metricPerspective+` - 定义要在`+Metrics Perspective+` 上显示的指标。指标按选项卡和章节分组。
+* `+layout.metricPerspective.tab+` - 选项卡名称。标签按字母顺序排序。
+* `+layout.metricPerspective.section+` - 科室名称。各部分按字母顺序排序。
+* `+layout.metricPerspective.weight+` - 章节内的指标主要按权重（升序）排序，其次按名称（字母顺序）排序。
+* `+layout.componentSummary+` - 指定在选择组件时在`+Components details+` 侧边栏中显示的指标。只有定义了该属性，图表才会出现。
+* `+layout.componentSummary.weight+` - 这表示图表的重量。图表按权重升序排序，然后显示前 3 个图表。
