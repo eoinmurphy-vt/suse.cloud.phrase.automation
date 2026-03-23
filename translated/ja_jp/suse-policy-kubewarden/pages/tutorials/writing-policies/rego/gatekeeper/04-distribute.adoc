@@ -1,0 +1,98 @@
+include::partial$variables.adoc[]
+= ゲートキーパー ポリシーを {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ポリシーファイルにメタデータを付与し、ClusterAdmissionPolicyを介してデプロイすることで、Kubernetesクラスタ全体でGatekeeperポリシーを配布する。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "gatekeeper", "distribute"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "gatekeeper", "rego"]
+:current-version: {page-origin-branch}
+
+ポリシーがプッシュされ、最終的にKubernetesクラスタの{project-name} `+policy-server+` によって実行されるためには、アノテーションが必要だ。
+
+ゲートキーパーのポリシーに注釈を付けて配布することは、オープン・ポリシー・エージェントのポリシーを配布することに似ています。
+
+== ポリシーの注釈
+
+ポリシー・ディレクトリに`+metadata.yaml+` ：
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: [""]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["CREATE"]
+mutating: false
+contextAware: false
+executionMode: gatekeeper
+annotations:
+  io.kubewarden.policy.title: no-default-namespace
+  io.kubewarden.policy.version: 0.1.0 # should match the OCI tag
+  io.kubewarden.policy.description: This policy will reject any resource created inside the default namespace
+  io.kubewarden.policy.author: The {short-project-name} Authors
+  io.kubewarden.policy.url: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.source: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+      This policy is just an example.
+
+      You can write interesting descriptions about the policy here.
+----
+
+を見ると、`+executionMode: gatekeeper+` ビットを除いて、すべてが Open Policy Agent のバージョン・メタデータと同じであることがわかります。
+
+先に進み、ポリシーに注釈をつけてください：
+
+[subs="+attributes",console]
+----
+$ kwctl annotate policy.wasm --metadata-path metadata.yaml --output-path annotated-policy.wasm
+----
+
+== 政策の推進
+
+OCIレジストリにあなたのポリシーを押し込む：
+
+[subs="+attributes",console]
+----
+$ kwctl push annotated-policy.wasm registry.my-company.com/kubewarden/no-default-namespace-gatekeeper:v0.0.1
+Policy successfully pushed
+----
+
+== Kubernetesへのデプロイ
+
+`+kwctl+` 、まずはお近くの店舗に保険証券を持参する必要がある：
+
+[subs="+attributes",console]
+----
+$ kwctl pull registry://registry.my-company.com/kubewarden/no-default-namespace-gatekeeper:v0.0.1
+pulling policy...
+----
+
+これでscaffold`+ClusterAdmissionPolicy+` リソースを作成できます：
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold manifest registry://registry.my-company.com/kubewarden/no-default-namespace-gatekeeper:v0.0.1 --type ClusterAdmissionPolicy
+---
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: generated-policy
+spec:
+  module: "registry://registry.my-company.com/kubewarden/no-default-namespace-gatekeeper:v0.0.1"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - "*"
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+この`+ClusterAdmissionPolicy+` リソースを使用して、Kubernetes クラスターにポリシーをデプロイする。
