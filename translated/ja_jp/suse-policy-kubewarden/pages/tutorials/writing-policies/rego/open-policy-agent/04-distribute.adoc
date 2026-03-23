@@ -1,0 +1,119 @@
+include::partial$variables.adoc[]
+= OPAポリシーの配布 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 関連するメタデータでRegoポリシーに注釈を付け、OCIレジストリにプッシュして配備の準備をする。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "distribute"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"distributing"、"open policy agent"、"opa"、"rego"]]。
+:sidebar_label: 分配
+:current-version: {page-origin-branch}
+
+あなたはレゴ・ポリシーを書き、構築し、実行した。
+さて、次は政策を配布する番だ。
+
+ポリシーには注釈をつけなければならないので、`+policy-server+` 。
+`+policy-server+` 、Kubernetesクラスターで実行する場合、ポリシーを実行する部分である。
+
+== ポリシーの注釈
+
+ポリシーの注釈付けは、ポリシーのメタデータを関連情報でエンリッチするプロセスである。
+このポリシーがどのようなリソースを理解し、評価するかを記述する、作者、ライセンス、ソースコードの場所、ルールなどの情報。
+
+ポリシーに注釈を付けるには、`+metadata.yaml+` ファイルを書く必要があります：
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: [""]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["CREATE"]
+mutating: false
+contextAware: false
+executionMode: opa
+annotations:
+  io.kubewarden.policy.title: no-default-namespace
+  io.kubewarden.policy.version: 0.1.0 # should match the OCI tag
+  io.kubewarden.policy.description: This policy will reject any resource created inside the default namespace
+  io.kubewarden.policy.author: The {project-name} Authors
+  io.kubewarden.policy.url: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.source: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+      This policy is just an example.
+
+      You can write interesting descriptions about the policy here.
+----
+
+いくつかの詳細を見ることができる：
+
+* ルール
+この政策が対象としている資源は何か。
+* 突然変異：
+この政策が変異しているかどうか。
+この場合は、ただ検証しているだけだ。
+* コンテキストを意識する：
+このポリシーがリクエストを評価するためにクラスタからのコンテキストを必要とするかどうか。
+* 実行モード：
+これはレゴ・ポリシーなので、`+opa+` または`+gatekeeper+` という実行モードを指定する必要がある。
+このポリシーは`+opa+` スタイルで書かれており、`+AdmissionReview+` オブジェクト全体を返す。
+* 注釈ポリシー自体に保存されているメタデータ。
+
+あなたのポリシーに注釈をつけてください：
+
+[subs="+attributes",console]
+----
+$ kwctl annotate policy.wasm --metadata-path metadata.yaml --output-path annotated-policy.wasm
+----
+
+これで、`+kwctl inspect annotated-policy.wasm+` を実行して、ポリシーを検査することができます。
+
+== 政策の推進
+
+これでポリシーに注釈が付いたので、それをOCIレジストリにプッシュすることができる。
+
+[subs="+attributes",console]
+----
+$ kwctl push annotated-policy.wasm registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+Policy successfully pushed
+----
+
+OPAフレームワークをターゲットとするレゴ・ポリシーは、`+ClusterAdmissionPolicy+` を作成することで、本番配備に必要なすべてを備えています。
+それも用意できる。
+まず、保険証券を`+kwctl+` ：
+
+[subs="+attributes",console]
+----
+$ kwctl pull registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+pulling policy...
+----
+
+そこから`+ClusterAdmissionPolicy+` 。
+この操作は、ポリシーに関するメタデータを考慮する：
+
+[subs="+attributes",console]
+----
+$ kwctl manifest registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1 --type ClusterAdmissionPolicy
+---
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: generated-policy
+spec:
+  module: "registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - "*"
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+この`+ClusterAdmissionPolicy+` をベースとして、必要なリソースをターゲットにすることも、そのままKubernetesにデプロイすることもできる。
