@@ -1,24 +1,24 @@
 include::partial$variables.adoc[]
-= Fähigkeiten des Sigstore-Hosts
+= Sigstore-Host-Fähigkeiten
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Erfahren Sie, wie Sie die Fähigkeiten des Sigstore-Hosts mithilfe von CEL-Richtlinien in Kubewarden implementieren, um Containerbilder zu überprüfen und eine sichere Zulassungskontrolle durchzusetzen.
+:description: Erfahren Sie, wie Sie Sigstore-Host-Funktionen mit CEL-Richtlinien in Kubewarden implementieren, um Container-Images zu verifizieren und eine sichere Zugangskontrolle durchzusetzen.
 :doc-persona: ["kubewarden-policy-developer", "kubewarden-operator"]
-:doc-topic: ["kubewarden", "richtlinien schreiben", "cel", "sigstore", "signatur", "überprüfung"]
+:doc-topic: ["kubewarden", "writing-policies", "cel", "sigstore", "signature", "verification"]
 :doc-type: ["tutorial"]
-:keywords: ["kubewarden", "kubernetes", "richtlinien schreiben", "sigstore", "signatur", "überprüfung"]
-:sidebar_label: Fähigkeiten des Sigstore-Hosts
+:keywords: ["kubewarden", "kubernetes", "writing policies", "sigstore", "signature", "verification"]
+:sidebar_label: Sigstore-Host-Fähigkeiten
 :current-version: {page-origin-branch}
 
-Als Beispiel für eine andere Verwendung der Hostfähigkeiten auf von Kubewarden`+cel-policy+`, lassen Sie uns eine Richtlinie erstellen, die alle Containerbilder in einem Pod überprüft, indem sie deren Sigstore-schlüssellosen Signaturen prüft.
+Als Beispiel für eine andere Nutzung der Host-Fähigkeiten auf`+cel-policy+` von kubewarden wollen wir eine Richtlinie erstellen, die alle Container-Images in einem Pod durch Überprüfung ihrer Sigstore-Keyless-Signaturen verifiziert.
 
-== Beispiel: Sigstore-Überprüfungsrichtlinie
+== Beispiel: Sigstore-Verifizierungspolitik
 
-Diese Richtlinie wird alle Containerbilder im Pod Sigstore überprüfen und sicherstellen, dass die Bilder signiert und vertrauenswürdig sind.
+Diese Richtlinie überprüft alle Container-Images im Pod Sigstore und stellt sicher, dass die Images signiert und vertrauenswürdig sind.
 
-In diesem Fall werden wir nach einer Sigstore-schlüssellosen Signatur suchen, die in GitHub Actions durchgeführt wurde. Diese Art von Sigstore-schlüssellosen Signaturen ist an den OIDC-Issuer von GitHub gebunden, wenn die kryptografischen Zertifikate erstellt werden, sodass wir nur die GitHub-Organisation kennen müssen, unter der das Containerbild veröffentlicht wird. Sie können mehr über die Hostfähigkeiten für Sigstore xref:reference/spec/host-capabilities/02-signature-verifier-policies.adoc[hier] lesen.
+In diesem Fall wird in GitHub Actions nach einer Sigstore Keyless Signatur gesucht. Diese Art von schlüssellosen Signaturen sind bei der Erstellung der kryptografischen Zertifikate an den OIDC-Aussteller von GitHub gebunden, sodass wir nur die GitHub-Organisation kennen müssen, unter der das Container-Image veröffentlicht wird. Mehr über die Host-Fähigkeiten von Sigstore können Siexref:reference/spec/host-capabilities/02-signature-verifier-policies.adoc[hier] lesen.
 
-Um dies in CEL zu erreichen, verwenden wir die https://github.com/kubewarden/cel-policy?tab=readme-ov-file#host-capabilities[{project-name} CEL-Erweiterungsbibliotheken für Hostfähigkeiten] in der Richtlinie, insbesondere die https://pkg.go.dev/github.com/kubewarden/cel-policy/internal/cel/library#Sigstore[`+githubAction+` Funktion].
+Um dies in CEL zu erreichen, verwenden wir die https://github.com/kubewarden/cel-policy?tab=readme-ov-file#host-capabilities[{project-name}'s CEL-Erweiterungsbibliotheken für Host-Fähigkeiten] in der Politik, insbesondere die https://pkg.go.dev/github.com/kubewarden/cel-policy/internal/cel/library#Sigstore[`+githubAction+`Funktion].
 
 Wie immer können wir mit `+kwctl+` beginnen:
 
@@ -28,7 +28,7 @@ $ kwctl scaffold manifest -t ClusterAdmissionPolicy \
   registry://ghcr.io/kubewarden/policies/cel-policy:v1.0.0`
 ----
 
-Das können wir dann bearbeiten, um es für unsere Containerüberprüfungsrichtlinie relevant zu machen:
+Diese können wir dann so bearbeiten, dass sie für unsere Containerprüfungsrichtlinie relevant sind:
 
 [subs="+attributes",yaml]
 ----
@@ -48,7 +48,7 @@ spec:
       operations: ["CREATE", "UPDATE"]
 ----
 
-Jetzt kommen wir zum CEL-Teil. Wir werden eine Liste von Containerbildern im aktuellen Pod-Objekt abrufen und dann überprüfen, ob sie von einer Signatur verifiziert sind, die zu unserer gewählten Organisation passt (in diesem Fall github.com/opencontainers):
+Kommen wir nun zum CEL-Teil. Wir erhalten eine Liste der Container-Images im aktuellen Pod-Objekt und überprüfen dann, ob sie durch eine Signatur verifiziert sind, die mit der von uns gewählten Organisation (in diesem Fall github.com/opencontainers) übereinstimmt:
 
 [subs="+attributes",yaml]
 ----
@@ -80,44 +80,11 @@ spec:
         messageExpression: "'These container images are not signed by the kubewarden GitHub organization: ' + variables.containerImagesNotVerified.join(', ')"
 ----
 
-Aber warten Sie, wir dürfen nicht vergessen, dass InitContainers auch Teil von Pods sein können. Lassen Sie uns also eine weitere Variable und Validierung hinzufügen:
+Aber halt, wir dürfen nicht vergessen, dass InitContainer auch Teil von Pods sein können. Fügen wir also eine weitere Variable und eine Validierung hinzu:
 
 ```yaml title="./cel-policy-sigstore.yaml"
 apiVersion: policies.kubewarden.io/v1
-kind: ClusterAdmissionPolicy +
-metadata: +
-  name: "cel-sigstore-keyless-verification" +
-spec: +
-  module: ghcr.io/kubewarden/policies/cel-policy:v1.0.0 +
-  namespaceSelector: +
-    matchLabels: +
-      kubernetes.io/metadata.name: default +
-  rules: +
-    - apiGroups: [""] +
-      apiVersions: ["v1"] +
-      resources: ["pods"] +
-      operations: ["CREATE", "UPDATE"] +
-  settings: +
-    variables: +
-      - name: containerImages +
-        expression: | +
-          object.spec.containers.map(c, c.image) +
-      - name: initContainerImages +
-        expression: | +
-          has(object.spec.initContainerImages) ? object.spec.initContainers.map(c, c.image) : [] +
-      - name: containerImagesNotVerified +
-        expression: | +
-          variables.containerImages.filter(image, !kw.sigstore.image(image).githubAction("opencontainers").verify().isTrusted()) +
-      - name: initContainerImagesNotVerified +
-        expression: | +
-          variables.initContainerImages.filter(image, !kw.sigstore.image(image).githubAction("opencontainers").verify().isTrusted()) +
-    validations: +
-      - expression: | +
-          size(variables.containerImagesNotVerified) == 0 +
-        messageExpression: "'Diese Containerbilder sind nicht von der Kubewarden GitHub-Organisation signiert: ' + variables.containerImagesNotVerified.join(', ')" +
-      - expression: | +
-          size(variables.initContainerImagesNotVerified) == 0 +
-        messageExpression: "'Diese Init-Containerbilder sind nicht von der Kubewarden GitHub-Organisation signiert: ' + variables.initContainerImagesNotVerified.join(', ')"
+kind: ClusterAdmissionPolicy metadata: name: "cel-sigstore-keyless-verification" spec: module: ghcr.io/kubewarden/policies/cel-policy:v1.0.0 namespaceSelector: matchLabels: kubernetes.io/metadata.name: default rules:- apiGroups: [""] apiVersions: ["v1"] resources: ["pods"] operations: ["CREATE", "UPDATE"] settings: variables: - name: containerImages expression: | object.spec.containers.map(c, c.image) - name: initContainerImages Ausdruck: | has(object.spec.initContainerImages) ? object.spec.initContainers.map(c, c.image) : [] - name: containerImagesNotVerified Ausdruck: | variables.containerImages.filter(image, !kw.sigstore.image(image).githubAction("opencontainers").verify().isTrusted()) - name: initContainerImagesNotVerified Ausdruck: | variables.initContainerImages.filter(image, !kw.sigstore.image(image).githubAction("opencontainers").verify().isTrusted()) validations:- expression: | size(variables.containerImagesNotVerified) == 0 messageExpression: "'Diese Container-Images sind nicht von der kubewarden GitHub Organisation signiert: ' + variables.containerImagesNotVerified.join(', ')" - expression: | size(variables.initContainerImagesNotVerified) == 0 messageExpression: "'Diese init-Container-Images sind nicht von der kubewarden-GitHub-Organisation signiert: ' + variables.initContainerImagesNotVerified.join(', ')"
 ```
 
 As usual with CEL, we can add several `+validations+` under
