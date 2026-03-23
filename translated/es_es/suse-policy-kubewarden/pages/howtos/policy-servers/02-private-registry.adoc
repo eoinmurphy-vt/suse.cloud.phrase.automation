@@ -1,0 +1,75 @@
+include::partial$variables.adoc[]
+
+= Configuración de PolicyServers para utilizar registros privados
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure PolicyServers para utilizar registros privados creando un secreto de configuración Docker y configurando el campo spec.imagePullSecret en la configuración.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "policy-servers", "private-registry"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "policyservers", "private registries"]
+:current-version: {page-origin-branch}
+
+Es posible configurar PolicyServers para que utilicen credenciales de registros OCI privados. Esto permite a esos PolicyServers descargar políticas de registros públicos y privados.
+
+Una vez configurado PolicyServer para acceder a registros privados, las políticas que se ejecuten en él también podrán acceder a dichos registros. Esto funciona cuando las políticas utilizan los SDK proporcionados o las API de capacidad del host. Esto se debe a que los PolicyServers exponen esa funcionalidad a través de los SDK de políticas definidos y la API de capacidades de host de nivel inferior. Este es el caso, por ejemplo, de las políticas que verifican las firmas de las imágenes de los contenedores.
+
+Para ello, debe crear un Secreto que contenga las credenciales del registro privado. Luego configure los recursos de sus PolicyServers, y luego su gráfico Helm para usarlo.
+
+== Crear el secreto
+
+Los PolicyServers soportan los habitualeshttps://kubernetes.io/docs/concepts/configuration/secret/#docker-config-secrets[Docker configuration Secrets] , ya sean del tipo `+kubernetes.io/dockercfg+` o del tipo`+kubernetes.io/dockerconfigjson+`. Puede crear estos secretos con `kubectl create secret docker-registry`.
+
+Usted crea el secreto **en el espacio de nombres donde ejecuta su PolicyServer**.
+Esto sigue el principio de mínimo privilegio, y permite a diferentes PolicyServers validar artefactos OCI, de diferentes registros, independientemente.
+
+Usted crea este Secreto para el PolicyServer con el siguiente comando:
+
+[subs="+attributes",shell]
+----
+kubectl --namespace kubewarden create secret docker-registry secret-ghcr-docker \
+  --docker-username=myuser \
+  --docker-password=mypass123 \
+  --docker-server=myregistry.io
+----
+
+[TIP]
+====
+
+Etiquete el Secreto como se especifica enxref:/howtos/rancher-backup-operator.adoc#_user_secrets[Secretos de usuario] para que forme parte de las copias de seguridad realizadas por el Operador de Rancher Backup.
+
+====
+
+Para obtener más información sobre cómo crear los secretos de Docker, consultehttps://kubernetes.io/docs/concepts/configuration/secret/#docker-config-secrets[documentación de Kubernetes].
+
+== Consumir el secreto en PolicyServers
+
+Una vez creado el Secreto, es necesario configurar la instancia PolicyServer. Establezca el campo `+spec.imagePullSecret+` con el nombre del Secreto que contiene las credenciales:
+
+[subs="+attributes",yaml]
+----
+# Example of a PolicyServer using a private registry
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: default
+spec:
+  image: ghcr.io/kubewarden/policy-server:v1.1.1
+  serviceAccountName: policy-server
+  replicas: 1
+  annotations:
+  imagePullSecret: "secret-ghcr-docker"
+----
+
+== Consumir el secreto en las cartas del timón
+
+Cuando se despliega desde el gráfico `+kubewarden-defaults+` Helm, puede establecer el valor`+policyServer.imagePullSecret+` en el nombre Secreto. A continuación, el servidor de directivas por defecto creado también podrá descargar directivas de su registro privado:
+
+[subs="+attributes",yaml]
+----
+# values file example
+policyServer:
+  telemetry:
+    enabled: False
+  imagePullSecret: secret-ghcr-docker
+----
