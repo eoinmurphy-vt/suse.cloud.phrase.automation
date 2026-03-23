@@ -1,24 +1,24 @@
 include::partial$variables.adoc[]
 
-= Permitir evaluaciones en el espacio de nombres del Controlador de Admisión
-:description: Cómo configurar el Controlador de Admisión para permitir la evaluación de políticas en su propio espacio de nombres
-:keywords: ["políticas", "ClusterAdmissionPolicies", "ClusterAdmissionPoliciesGroup", "configuración", "espacios de nombres"]
+= Permitir evaluaciones en el espacio de nombres del controlador de admisión
+:description: Cómo configurar Admission Controller para permitir la evaluación de políticas en su propio espacio de nombres
+:keywords: ["policies", "ClusterAdmissionPolicies", "ClusterAdmissionPoliciesGroup", "configuration", "namespaces"].
 :doc-persona: ["kubewarden-operator"]
 :doc-type: ["howto"]
 :doc-topic: ["operator-manual", "policies"]
 
-Por defecto, el Controlador de Admisión no permite que las políticas evalúen recursos en su propio espacio de nombres. Esto previene configuraciones incorrectas que podrían romper la instalación de {short-project-name}.
+Por defecto, el controlador de admisión no permite que las políticas evalúen recursos en su propio espacio de nombres. De este modo se evitan errores de configuración que podrían romper la instalación de {short-project-name}.
 
-Esta medida de seguridad se implementa en dos capas. La primera capa está controlada por la bandera `--always-accept-admission-reviews-on-deployments-namespace` de la CLI.
-Esta bandera, que está habilitada por defecto en los gráficos de Helm, hace que el controlador configure la `KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE` variable de entorno en las ampliaciones de PolicyServer. Esta variable indica al servidor de políticas que siempre acepte revisiones de admisión del espacio de nombres definido en la variable. La segunda capa es el propio controlador de admisión, que por defecto añade un selector de espacio de nombres a las políticas de clúster para omitir el espacio de nombres donde se ejecuta el controlador.
+Esta medida de seguridad se aplica en dos niveles. La primera capa está controlada por el indicador CLI `--always-accept-admission-reviews-on-deployments-namespace`.
+Esta bandera, que está activada por defecto en las tablas de Helm, hace que el controlador configure la variable de entorno `KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE`en los despliegues de PolicyServer. Esta variable indica al servidor de políticas que acepte siempre revisiones de admisión del espacio de nombres definido en la variable. La segunda capa es el propio controlador de admisión, que por defecto añade un selector de espacio de nombres a las políticas de todo el clúster para omitir el espacio de nombres donde se ejecuta el controlador.
 
-Sin embargo, en algunos escenarios, los administradores de clúster pueden querer que las políticas evalúen recursos en este espacio de nombres. Esta página explica cómo hacerlo deshabilitando ambas capas de protección.
+Sin embargo, en algunos escenarios los administradores de cluster pueden querer que las políticas evalúen los recursos en este espacio de nombres. Esta página explica cómo hacerlo desactivando ambas capas de protección.
 
-== Eliminar la variable de entorno de protección de PolicyServer
+== Eliminar la variable de entorno de protección PolicyServer
 
-El primer paso es configurar el controlador para no establecer la `KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE` variable de entorno en las ampliaciones de PolicyServer.
+El primer paso es configurar el controlador para que no establezca la variable de entorno`KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE` en los despliegues de PolicyServer.
 
-Para hacer esto, actualiza la versión de tu instalación de {short-project-name} y establece el valor `alwaysAcceptAdmissionReviewsOnDeploymentsNamespace` del `kubewarden-controller` gráfico de Helm a `false`:
+Para ello, actualice su instalación de {short-project-name} y establezca el valor`alwaysAcceptAdmissionReviewsOnDeploymentsNamespace` del gráfico de Helm`kubewarden-controller` en `false`:
 
 [source,console]
 ----
@@ -28,18 +28,18 @@ helm upgrade -n kubewarden
 ----
 
 Este cambio permite a los servidores de políticas evaluar recursos de cualquier espacio de nombres.
-Una vez hecho esto, se pueden configurar políticas para evaluar revisiones de admisión del {short-project-name} espacio de nombres.
+Una vez hecho esto, se pueden configurar las políticas para evaluar las revisiones de admisión desde el espacio de nombres {short-project-name}.
 
-== Configura políticas para evaluar recursos en el espacio de nombres del Controlador de Admisión
+== Configurar políticas para evaluar recursos en el espacio de nombres de Admission Controller
 
-Para permitir que una política evalúe recursos creados en el espacio de nombres del Controlador de Admisión, despliega políticas a nivel de clúster con el campo `allowInsideAdmissionControllerNamespace` en la especificación establecido en `true`:
+Para permitir que una política evalúe recursos creados en el espacio de nombres de Admission Controller, implemente políticas para todo el clúster con el campo `allowInsideAdmissionControllerNamespace`de la especificación establecido en `true`:
 
 [NOTE]
-.¿Y las políticas con espacio de nombres?
+.¿Y las políticas namespaced?
 ====
-Este campo de especificación está disponible solo en políticas a nivel de clúster.
-Debido a que las políticas con espacio de nombres evalúan recursos en el mismo espacio de nombres donde se despliegan, no tiene sentido añadir este campo a sus CRDs.
-Además, el espacio de nombres del controlador de admisión debe ser gestionado por los operadores del clúster, quienes pueden decidir si desplegar una política allí.
+Este campo de especificación sólo está disponible en las políticas para todo el clúster.
+Dado que las políticas de espacio de nombres evalúan los recursos en el mismo espacio de nombres en el que se despliegan, no tiene sentido añadir este campo a sus CRD.
+Además, el espacio de nombres del controlador de admisión debe ser gestionado por los operadores del clúster, que pueden decidir si despliegan una política allí.
 ====
 
 [source,yaml]
@@ -67,10 +67,10 @@ spec:
   allowInsideAdmissionControllerNamespace: true
 ----
 
-Esta opción de configuración, que es `false` por defecto, hace que el controlador omita añadir el selector de espacio de nombres que excluye el espacio de nombres del Controlador de Admisión, permitiendo que la política evalúe recursos de todos los espacios de nombres, incluyendo ese espacio de nombres.
+Esta opción de configuración, que por defecto es `false`, hace que el controlador omita añadir el selector de espacio de nombres que excluye el espacio de nombres Admission Controller, permitiendo que la política evalúe recursos de todos los espacios de nombres, incluido ese espacio de nombres.
 
 [NOTE]
 .¿Qué pasa con mis selectores de espacio de nombres personalizados?
 ====
-Los CRDs de políticas también permiten a los usuarios definir sus propios selectores de espacio de nombres. Estos selectores no se modifican. Esto significa que si un usuario define un selector que omite el {short-project-name} espacio de nombres, la directiva seguirá ignorando ese espacio de nombres como se esperaba.
+Las políticas CRD también permiten a los usuarios definir sus propios selectores de espacios de nombres. Estos selectores no se modifican. Esto significa que si un usuario define un selector que se salta el espacio de nombres {short-project-name}, la política seguirá ignorando ese espacio de nombres como era de esperar.
 ====
