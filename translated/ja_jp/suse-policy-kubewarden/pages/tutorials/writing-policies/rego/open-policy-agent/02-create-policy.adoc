@@ -1,0 +1,165 @@
+include::partial$variables.adoc[]
+= 新しいポリシーの作成
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 体験学習のために、すべての名前空間付きリソースを評価し、デフォルトの名前空間での作成を禁止するポリシーを作成する。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "create-policy"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"ポリシーの作成"、"オープン・ポリシー・エージェント"、"opa"、"rego"]]。
+:sidebar_label: 新しいポリシーの作成
+:current-version: {page-origin-branch}
+
+重要な概念を理解するのに役立つサンプル・ポリシーを作成することができます。
+
+[NOTE]
+====
+https://github.com/kubewarden/opa-policy-template[]kubewarden/opa-policy-templateがあり、既存のポリシーを移植するのに利用できる。
+====
+
+
+== 必要条件
+
+このセクションでは、ポリシーを書き、コンパイルし、実行します。
+このチュートリアルを完了するには、これらのツールが必要です：
+
+* https://github.com/open-policy-agent/opa/releases[`+opa+`]:`+opa+` CLI を使って、`+wasm+` ターゲットとしてポリシーを構築します。
+* https://github.com/kubewarden/kwctl/releases[`+kwctl+`]`+kwctl+` 、構築したポリシーを実行する。
+
+== 方針
+
+あらゆる種類の名前空間付きリソースを評価するポリシーを作成することになる。
+その目的は、対象となる名前空間が`+default+` である場合、リソースの作成を禁止することです。そうでなければ、リクエストは受理される。
+まず、`+opa-policy+` というフォルダを作成します。
+
+`+opa-policy+` フォルダー内に`+data+` というフォルダーを作成する。
+このフォルダには、Kubernetes APIサーバーから記録された`+AdmissionReview+` オブジェクトがあります。
+練習をシンプルにするため、重要な部分に集中できるように減らしてある。
+
+`+data+` ディレクトリ内に、以下の内容の`+default-ns.json+` ファイルを作成する：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "default",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+これは、`+default+` ネームスペース内でのポッド操作の作成をシミュレートする。
+次に、`+data+` ディレクトリ内の`+other-ns.json+` に別のリクエスト例を作成する：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "other",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+これは、別のポッド作成リクエストをシミュレートしていることがわかります。今回は、`+other+` という名前空間の下です。
+
+`+opa-policy+` フォルダーに戻り、レゴ・ポリシーを書き始める。
+
+このフォルダ内の`+opa-policy+` フォルダに、`+request.rego+` という名前のファイルを作成する。
+名前は何でもいいが、この練習ではそれを使う。
+これは、リクエスト/レスポンスそのものに関するユーティリティコードを持つレゴファイルである。
+特に、ポリシー・コードを簡素化し、異なるポリシー間でこの共通部分を再利用することができる。
+
+内容は以下の通り：
+
+[,rego]
+----
+package policy
+
+import data.kubernetes.admission
+
+main = {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": response,
+}
+
+response = {
+    "uid": input.request.uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", admission.deny)
+    reason != ""
+} else = {
+    "uid": input.request.uid,
+    "allowed": true,
+} {
+    true
+}
+----
+
+この時点で、レゴコードについて詳しく説明する必要はない。
+https://www.openpolicyagent.org/docs/latest/policy-language/[] 。
+
+この場合、`+allowed: true+` または`+allowed: false+` のどちらかを返す。
+これは、もう一方のパッケージである`+data.kubernetes.admission+` に、`+true+` と評価される`+deny+` ステートメントがあるかどうかに依存する。
+
+`+data.kubernetes.admission.deny+` のいずれかが`+true+` と評価されれば、ここでの`+response+` は最初のブロックと評価される。
+そうでなければ、2番目のブロックと評価され、合格となる。
+どの`+deny+` ブロックも`+true+` に評価されないので、これはポリシーがリクエストを受け入れていることを意味する。
+
+これは政策の殻に過ぎない。
+ここで、`+opa-policy+` フォルダーの中に、例えば、`+policy.rego+` という別のファイルを作成する：
+
+[,rego]
+----
+package kubernetes.admission
+
+deny[msg] {
+    input.request.object.metadata.namespace == "default"
+    msg := "it is forbidden to use the default namespace"
+}
+----
+
+これはあなたの保険契約の重要な部分である。
+`+deny+` ステートメントは、その中のすべてのステートメントが`+true+` と評価される場合、`+true+` と評価される。
+この場合、名前空間が`+default+` かどうかをチェックする文が1つだけある。
+
+オープン・ポリシー・エージェントの設計により、`+input+` は`+AdmissionReview+` オブジェクトと一緒にクエリ可能なオブジェクトを持っているので、便利に検査することができる。
+
+すべてがうまくいけば、ツリーは次のようになるはずだ：
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
