@@ -1,0 +1,157 @@
+include::partial$variables.adoc[]
+= ポリシーの配布
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: kwctlのようなツールを使用してOCI準拠のレジストリを介してポリシーを安全に配布し、{project-name} ポリシー管理によってクラスタのセキュリティを確保する。
+:doc-persona: ["kubewarden-operator"、"kubewarden-policy-developer"、"kubewarden-distributor"、"kubewarden-integrator"]]。
+:doc-topic: ["distributing-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "oci", "kubewarden", "policy", "wasm", "webassembly"]
+:current-version: {page-origin-branch}
+
+{project-name} ポリシーは、{short-project-name} ポリシーサーバーによって評価される WebAssembly (Wasm) バイナリです。
+
+{short-project-name} ポリシーサーバーは、これらのソースからポリシーをロードする：
+
+* ローカルファイルシステム
+* HTTPサーバー
+* OCIに準拠したレジストリ：
+ ** https://github.com/distribution/distribution[流通]
+ ** https://ghcr.io[GitHubコンテナ・レジストリ]
+ ** https://azure.microsoft.com/en-us/products/container-registry/[Azureコンテナレジストリ]
+ ** https://aws.amazon.com/ecr/[Amazon ECR]
+ ** https://cloud.google.com/artifact-registry/[グーグル コンテナ レジストリ]
+
+{short-project-name} は、{short-project-name} ポリシーを通常の OCI 準拠のレジストリで配布することを推奨している。コンテナ・レジストリは、どのKubernetesクラスタにとっても必須の要件だ。クラスターが必要とするすべての成果物を安全に保管する場所を一カ所にすることは有益である。
+
+== OCI準拠のレジストリにポリシーをプッシュする
+
+https://github.com/opencontainers/image-spec[]OCI仕様では、通常のOCI準拠のコンテナ・レジストリ内に任意のバイナリ・ブロブを格納することができる。
+
+{short-project-name} ポリシーのプッシュを成功させるには、ターゲットとなる OCI 準拠のレジストリが*アーティファクトをサポートしている必要がある*。
+
+CLIを使用してhttps://github.com/kubewarden/kwctl[`+kwctl+`]CLI を使用して、{short-project-name} ポリシーを OCI 準拠のレジストリにプッシュできます。
+
+== ポリシーの注釈
+
+また、`+kwctl+` でポリシーに注釈を付ける。{short-project-name}ポリシーに注釈を付けるには、ポリシーバイナリに Wasm カスタムセクションを追加します。これは、ポリシーがそれ自身のメタデータをパッケージ化することを意味する。
+
+`+kwctl annotate+` コマンドは2つの入力を必要とする：
+
+* {short-project-name} 、ファイルシステム内のローカルファイルに注釈を付けるポリシー。
+* 注釈ファイル、ポリシーのメタデータのYAML記述を含むファイル。
+このファイルは通常、ポリシーのルート・プロジェクト・フォルダーにあります。
+
+例えば、このファイルをカレント・ディレクトリに`+metadata.yml+` ：
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: ["*"]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["*"]
+mutating: false
+annotations:
+  io.kubewarden.policy.title: palindromify
+  io.kubewarden.policy.version: 0.1.0
+  io.kubewarden.policy.description: Allows you to reject palindrome names in resources and namespace names, or to only accept palindrome names
+  io.kubewarden.policy.author: Name Surname <name.surname@example.com>
+  io.kubewarden.policy.url: https://github.com/<org>/palindromify
+  io.kubewarden.policy.source: https://github.com/<org>/palindromify
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+    This is markdown text and as such allows you to define a free form usage text.
+
+    This policy allows you to reject requests if:
+    - The name of the resource is a palindrome name.
+    - The namespace name where this resource is created has a palindrome name.
+
+    This policy accepts the following settings:
+
+    - `+invert_behavior+`: bool that inverts the policy behavior. If enabled, only palindrome names will be accepted.
+----
+
+では、ポリシーに注釈をつけてみよう：
+
+[subs="+attributes",shell]
+----
+$ kwctl annotate policy.wasm \
+    --metadata-path metadata.yml \
+    --output-path annotated-policy.wasm
+----
+
+アノテーション・プロセスはポリシーに対して特定の最適化を行うため、アノテーションされたポリシーはオリジナルよりも小さくなることが多い。これは、オリジナルのWasmオブジェクトを生成するために使用されたツールチェーンに大きく依存します。
+
+[IMPORTANT]
+====
+
+.kwctl inspect を使ってポリシーをチェックしてください。
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+$ kwctl inspect annotated-policy.wasm
+2023-08-24T12:06:27.986401Z  INFO sigstore::cosign::client_builder: Rekor public key not provided. Rekor integration disabled
+2023-08-24T12:06:27.986449Z  INFO sigstore::cosign::client_builder: No Fulcio cert has been provided. Fulcio integration disabled
+Details
+title:                    palindromify
+description:              Allows you to reject palindrome names in resources and namespace names, or to only accept palindrome names
+author:                   Name Surname <name.surname@example.com>
+url:                      https://github.com/<org>/palindromify
+source:                   https://github.com/<org>/palindromify
+license:                  Apache-2.0
+mutating:                 false
+background audit support: true
+context aware:            false
+execution mode:           kubewarden-wapc
+protocol version:         1
+
+Annotations
+io.kubewarden.kwctl       1.7.0-rc2
+
+Rules
+────────────────────
+- apiGroups:
+  - '*'
+  apiVersions:
+  - '*'
+  resources:
+  - '*'
+  operations:
+  - '*'
+────────────────────
+
+Usage
+This is markdown text and as such allows you to define a free form usage text.
+
+This policy allows you to reject requests if:
+
+• The name of the resource is a palindrome name.
+• The namespace name where this resource is created has a palindrome name.
+
+This policy accepts the following settings:
+
+• invert_behavior: bool that inverts the policy behavior. If enabled, only palindrome names will be accepted.
+
+Cannot determine if the policy has been signed. There was an error while attempting to fetch its signatures from the remote registry: invalid uri
+----
+
+======
+====
+
+
+== 政策の推進
+
+このように注釈付きポリシーをプッシュすることができる：
+
+[subs="+attributes",shell]
+----
+$ kwctl push annotated-policy.wasm \
+     <oci-registry>/kubewarden-policies/palindromify-policy:v0.0.1
+----
+
+注釈のない政策を推し進めることは推奨されない。ポリシー・サーバーは、アノテーションによって提供されるメタデータを使用して、ポリシーを正しく実行する。デフォルトでは、`+kwctl push+` 、このようなポリシーをOCIレジストリにプッシュすることは拒否される。注釈のないポリシーが必要な場合は、`+kwctl push+` の`+-&#x200D;-&#x200D;force+` フラグを使用します。
+
+{short-project-name} Policy Server または`+kwctl+` から、`+registry://<oci-registry>/kubewarden-policies/palindromify-policy:v0.0.1+` としてポリシーを参照できます。
