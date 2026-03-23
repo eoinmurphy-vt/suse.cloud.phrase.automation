@@ -1,0 +1,431 @@
+:doctype: book
+
+= ランチャータートル トラブルシューティング
+:revdate: 2025-12-17
+:page-revdate: {revdate}
+
+このガイドでは、Rancher TurtlesとクラスタAPI（CAPI）クラスタのトラブルシューティング手順を説明します。安定した機能的な環境を維持するための、一般的な問題とその解決策について説明しています。
+
+このガイドを読む前に、まずCAPIプロジェクトの公式ドキュメントであるhttps://cluster-api.sigs.k8s.io/user/troubleshooting[`+troubleshooting+`]の公式ドキュメントを参照してください。
+
+効果的なトラブルシューティングには、ランチャータートルとCAPIの複雑さを理解することが重要です。このガイドは、ランチャータートルとCAPIの基本的な問題を診断し、解決するための知識を身につけることを目的としています。
+
+== 前提条件
+
+Rancher TurtlesとCAPIクラスタを効果的にトラブルシュートするには、以下のものが必要です：
+
+* Rancher管理クラスタにアクセスするためにkubectlが設定されたターミナルにアクセスする。
+* kubectl用のKrewプラグインマネージャーがインストールされました。
+* Helm CLIツールがインストールされている。
+
+https://krew.sigs.k8s.io/docs/user-guide/setup/install/[] Krew指示に従ってKrewをインストールすることができます。
+
+== ログの確認方法
+
+以下のネームスペースで、以下のポッドを表示し、そのログを確認できます：
+
+
+|===
+| 名前空間 | 配備 | 説明
+
+| cattle-turtles-system
+| rancher-turtles-controller-manager
+| Rancherの統合を処理し、タートルズのカスタムリソースを管理する。
+
+| fleet-addon-system
+| caapf-controller-manager
+| カスタムインフラストラクチャプロバイダのためのクラスタAPIプロバイダフレームワークを制御する
+
+| cattle-capi-system
+| capi-controller-manager
+| 主なクラスタリソースを調整するコアクラスタAPIコントローラ
+
+| rke2-bootstrap-system
+| rke2-bootstrap-controller-manager
+| RKE2ノードのブートストラップ設定を管理します。
+
+| rke2-control-plane-system
+| rke2-control-plane-controller-manager
+| RKE2コントロールプレーンコンポーネントの初期化と管理を行う。
+
+| *-システム
+| *-controller-manager
+| インフラストラクチャ・プロバイダー・コンポーネントの初期化と管理を行う。
+
+| ブートストラップ・システム
+| $-bootstrap-controller-manager
+| カスタム・プロバイダーのブートストラップ・コンフィギュレーションを管理します。
+
+| $-control-plane-system
+| $-control-plane-controller-manager
+| カスタムプロバイダーのコントロールプレーン・コンポーネントの初期化と管理を行う。
+|===
+
+'*' - 使用中のインフラストラクチャ・プロバイダーによる '$' - 使用中のコントロール・プレーン／ブートストラップ・プロバイダーによる（例：kubeadmやrke2など
+
+クラスタAPIコントロールプレーンのポッドからログを監視する1つの方法は、`+kubectl logs+` 、ラベルセレクタを使用することです。
+
+[source,bash]
+----
+kubectl logs -l control-plane=controller-manager -n cattle-turtles-system -f
+kubectl logs -l control-plane=controller-manager -n cattle-capi-system -f
+kubectl logs -l control-plane=controller-manager -n rke2-bootstrap-system -f
+kubectl logs -l control-plane=controller-manager -n rke2-control-plane-system -f
+----
+
+[CAUTION]
+====
+`+kubectl krew+` を使って船尾プラグインをインストールすると、サードパーティのソフトウェアが使用されるため、本番環境ではセキュリティ上のリスクが生じる可能性があります。ログを見るには便利なツールだが、主に開発やテスト環境で使うべきだ。サードパーティのプラグインは、機密クラスタや本番クラスタにインストールする前に必ず確認してください。
+====
+
+異なるポッドからのログを監視する最良の方法は、以下の方法を使用することです。
+
+[source,bash]
+----
+kubectl krew install stern
+----
+
+そうすれば、すべてのポッドからのログをリアルタイムで尾行できる。
+
+[source,bash]
+----
+kubectl stern . -n cattle-turtles-system -n rke2-bootstrap-system -n rke2-control-plane-system -n cattle-capi-system
+----
+
+または
+
+[source,bash]
+----
+kubectl stern -A -l control-plane=controller-manager
+----
+
+== ランチャータートルとCAPI資源の管理方法
+
+*RancherおよびクラスタAPIリソースを一覧表示する*
+
+CAPIとRancherによって作成された異なるCRDの長いリストをどのように扱うことができるか、ユーザーはよく質問します。
+
+. すべての CAPI と Rancher 関連の資格情報をリストする。
++
+[source,bash]
+----
+kubectl api-resources | grep 'cattle.io\|cluster.x-k8s.io'
+----
++
+. 資源について学ぶ。何をやっているのか、どんな設定オプションがあるのか、詳しい説明を受けることができる。
++
+[source,bash]
+----
+kubectl api-resources | grep clusterclass
+kubectl explain clusterclass.cluster.x-k8s.io
+----
++
+. その後、各フィールドとコンフィギュレーション・セクションについての説明が表示される。
++
+[source,bash]
+----
+kubectl explain clusterclass.spec
+kubectl explain clusterclass.spec.controlPlane
+kubectl explain clusterclasses.spec.controlPlane.machineInfrastructure
+----
+
+*既存のRancherおよびクラスタAPIオブジェクトリソースを一覧表示する*
+
+最もよくある間違いは、Kubernetesの`+default+` 名前空間を仕事に使うことだ。これでは、コンフィギュレーションが本当に厄介になり、管理やトラブルシューティングが難しくなる。CAPI ダウンストリームクラスターのデプロイと作成には個別の名前空間を使用し、`+default+` や`+kube-*+` などの Kubernetes システム名前空間の使用を避けることを強くお勧めします。
+
+`+kubectl+` でテンプレートを適用する場合、リソースを既知の場所にプロビジョニングするために、常に`+-n <NAMESPACE>+` を指定します。このコマンドで*KUBECONFIGの*名前空間を切り替えることができる：
+
+[source,bash]
+----
+kubectl config view
+kubectl config set-context --current --namespace <NAMESPACE>
+----
+
+名前空間を分離すれば、この方法で簡単にリソースを管理できる。
+
+[CAUTION]
+====
+リネージ・プラグインをインストールするために`+kubectl krew+` を使用することは、本番環境においてセキュリティ・リスクをもたらす可能性のあるサードパーティ・ソフトウェアを伴います。ログを見るには便利なツールだが、主に開発やテスト環境で使うべきだ。サードパーティのプラグインは、機密クラスタや本番クラスタにインストールする前に必ず確認してください。
+====
+
+. `+krew+` を使って`+get-all+` と`+lineage+` プラグインをインストールする。 `+kubectl+`
++
+[source,bash]
+----
+kubectl krew install lineage
+kubectl krew install get-all
+----
++
+. 次に、下流のクラスタ構成がデプロイされているネームスペース（たとえば`+capi-clusters+` ）にある既存のリソースをすべてリストします。
++
+[source,bash]
+----
+kubectl get-all -n capi-clusters
+----
++
+出力例：
++
+[source,bash]
+----
+NAME                                                                                      NAMESPACE      AGE
+configmap/kube-root-ca.crt                                                                capi-clusters  23h
+secret/cluster1-shim                                                                     capi-clusters  32s
+serviceaccount/default                                                                    capi-clusters  23h
+rke2config.bootstrap.cluster.x-k8s.io/cluster1-mp-0-dm59p                                capi-clusters  32s
+rke2config.bootstrap.cluster.x-k8s.io/cluster1-mp-1-gv6kh                                capi-clusters  32s
+rke2configtemplate.bootstrap.cluster.x-k8s.io/cluster1-pool0                             capi-clusters  33s
+rke2configtemplate.bootstrap.cluster.x-k8s.io/cluster1-pool1                             capi-clusters  33s
+clusterclass.cluster.x-k8s.io/clusterclass1                                               capi-clusters  33s
+cluster.cluster.x-k8s.io/cluster1                                                        capi-clusters  32s
+machinepool.cluster.x-k8s.io/cluster1-mp-0-d4fdv                                         capi-clusters  32s
+machinepool.cluster.x-k8s.io/cluster1-mp-1-l86kv                                         capi-clusters  32s
+clustergroup.fleet.cattle.io/clusterclass1                                                capi-clusters  33s
+azureclusteridentity.infrastructure.cluster.x-k8s.io/cluster-identity                     capi-clusters  33s
+azuremanagedcluster.infrastructure.cluster.x-k8s.io/cluster1-l2cs6                       capi-clusters  32s
+azuremanagedclustertemplate.infrastructure.cluster.x-k8s.io/cluster                     capi-clusters  33s
+azuremanagedcontrolplane.infrastructure.cluster.x-k8s.io/cluster1-rv8v4                  capi-clusters  32s
+azuremanagedcontrolplanetemplate.infrastructure.cluster.x-k8s.io/cluster1-control-plane  capi-clusters  33s
+azuremanagedmachinepool.infrastructure.cluster.x-k8s.io/cluster1-mp-0-78tck              capi-clusters  32s
+azuremanagedmachinepool.infrastructure.cluster.x-k8s.io/cluster1-mp-1-zdscw              capi-clusters  32s
+azuremanagedmachinepooltemplate.infrastructure.cluster.x-k8s.io/cluster1-pool0           capi-clusters  33s
+azuremanagedmachinepooltemplate.infrastructure.cluster.x-k8s.io/cluster1-pool1           capi-clusters  33s
+----
++
+. そして、すべてのオブジェクト・リソース間の関係をチェックすることができる。
++
+[source,bash]
+----
+kubectl lineage -n capi-clusters cluster.cluster.x-k8s.io/cluster1
+----
++
+出力：
++
+image::lineage-cluster-output.png[出力]
+
+== {product_name} および CAPI プロバイダのデバッグモードを有効にする方法
+
+* {product_name} -{product_name} でデバッグ・モードを有効にするには、`+cattle-system/rancher-config+` の configmap に以下のようにパッチを当てる必要がある：
++
+[source,bash]
+----
+kubectl patch configmap -n cattle-system rancher-config --type merge --patch '{"data":{"rancher-turtles": "managerArguments:\n  - --v=5\n"}}'
+----
+(5 は DEBUG に相当)
++
+この結果、新しい設定を使用するために、Turtlesポッドが再起動される。
+
+* クラスタAPIプロバイダ - ログ・レベルの増加が必要なプロバイダのCAPIProviderリソースを編集します。自分の望むレベルに変更する：
++
+[source,bash]
+----
+CAPIProvider.Spec.Manager.Verbosity=5
+----
+(5 は DEBUG に相当)
+
+== ランチャータートルとCAPIからの情報収集方法
+
+https://github.com/crust-gather/crust-gather[crust-gatherは]Cluster API開発者によって作られたプロジェクトで、特にCAPI環境からログやリソースの状態を収集するために設計されています。トラブルシューティングのための包括的な診断情報を収集するために、あらゆる環境（本番、テスト、開発）で使用できる安全で公式なツールです。
+
+以下の手順でインストールできる：
+
+[source,bash]
+----
+kubectl krew install crust-gather
+
+kubectl crust-gather --help
+----
+
+あるいは、*install.sh*スクリプトを使ってスタンドアロンでインストールすることもできる：
+
+[source,bash]
+----
+curl -sSfL https://github.com/crust-gather/crust-gather/raw/main/install.sh | sh
+
+crust-gather --help
+----
+
+フィルタのリストを指定してデータを収集することができます。デフォルトでは、クラスタ全体のスナップショットが作成される。データはデフォルトでcrust-gatherディレクトリに保存される。
+Crust-gatherは、Rancherまたは子クラスタ用に事前に定義されたフィルタ設定を受け付ける。構成例は以下を参照。
+
+`+child-crust-gather.yaml+` ファイルの YAML フィルタ設定例：
+
+[source,yaml]
+----
+filters:
+  - include_kind:
+    - Node
+    - Namespace
+    - CustomResourceDefinition
+  - include_group:
+    - management.cattle.io/.*
+    - provisioning.cattle.io/.*
+  - include_namespace:
+    - cattle.*
+    - fleet.*
+    - kube-system
+settings:
+  insecure_skip_tls_verify: true
+  secrets_file: secrets.txt
+----
+
+`+rancher-crust-gather.yaml+` ファイルの YAML フィルタ設定例：
+
+[source,yaml]
+----
+filters:
+  - include_group:
+    - .*cluster.x-k8s.io/.*
+    - turtles-capi.cattle.io/.*
+  - include_kind:
+    - CustomResourceDefinition
+    - Node
+    - Namespace
+  - include_group:
+    - management.cattle.io/.*
+    - provisioning.cattle.io/.*
+  - include_namespace:
+    - cattle-turtles-system
+    - capi-.*
+    - cattle.*
+    - fleet.*
+    - c-.*
+    - rke2.*
+    - cert-manager
+    - kube-system
+settings:
+  insecure_skip_tls_verify: true
+  secrets_file: secrets.txt
+----
+
+kubeconfigが正しいクラスタを指していることを確認してから、以下のコマンドを実行します：
+
+[source,bash]
+----
+kubectl crust-gather collect-from-config -c config.yaml
+----
+
+通常のフラグによる使用：
+
+[source,bash]
+----
+kubectl crust-gather collect --include-namespace cattle-turtles-system --include-namespace capi-* --include-namespace cattle* --include-namespace c-* --include-namespace=<any-capi-cluster-namespace> --kubeconfig=<KUBECONFIG>
+----
+
+シークレットを含むファイルや、シークレット文字列を含む環境変数を指定して除外することができる。
+
+例えば、こうだ：
+
+[source,bash]
+----
+kubectl crust-gather collect -s ENV_WITH_SECRET --secrets-file=secrets.txt
+----
+
+または、すべての秘密リソースをコレクションから除外する：
+
+[source,bash]
+----
+kubectl crust-gather collect --exclude-kind Secret
+----
+
+== ランチャータートルとCAPIリソースのクリーンアップ方法
+
+インフラストラクチャのクリーンアップに失敗し、リソースが保留になることがある。この場合、手動でリソースを削除する必要があります。
+
+ファイナライザーを手動で削除**するには、**インフラストラクチャ・プロバイダーがプロビジョニングされたリソースを手動でクリーニングする**必要がある**ことに留意してください。
+
+[source,bash]
+----
+export NAMESPACE=capi-clusters
+
+for RESOURCE in `+kubectl get-all -n $NAMESPACE -o name | grep 'cattle.io\|cluster.x-k8s.io'+`; 
+do 
+        echo "Patching $RESOURCE in namespace $NAMESPACE";
+        kubectl patch $RESOURCE -n $NAMESPACE -p '{"metadata":{"finalizers":[]}}' --type=merge;
+        kubectl delete $RESOURCE -n $NAMESPACE;
+done
+----
+
+== Rancher TurtlesとCAPIプロジェクトのアンインストール方法
+
+管理クラスタからRancher TurtlesとCAPIコンポーネントをアンインストールするには、以下の手順を順に実行します：
+
+. まず、CAPIで作成したダウンストリームクラスターをすべて削除する。各クラスターについて：
++
+[source,bash]
+----
+kubectl delete -n capi-clusters cluster.cluster.x-k8s.io cluster1
+----
++
+[NOTE]
+====
+`+capi-clusters+` をクラスタがデプロイされているネームスペースに、`+cluster1+` をクラスタ名に置き換えてください。次のステップに進む前に、各クラスタが完全に削除されるのを待ちます。
+====
+
+. ランチャータートルズのヘルムチャートをアンインストールします：
++
+[source,bash]
+----
+helm uninstall -n cattle-turtles-system rancher-turtles
+----
+
+. CAPIプロバイダによって作成された可能性のあるWebhook設定を削除します：
++
+[source,bash]
+----
+# List all webhook configurations
+kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io
+
+# Delete provider-specific webhooks (examples)
+kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io azureserviceoperator-validating-webhook-configuration
+kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io capz-validating-webhook-configuration
+kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io capi-validating-webhook-configuration
+kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io rke2-webhook-configuration
+
+# Also check and delete mutating webhooks if present
+kubectl get mutatingwebhookconfigurations
+kubectl delete mutatingwebhookconfigurations [webhook-name]
+----
+
+. 残った名前空間とリソースを一掃する。以下の名前空間は、アンインストール後も残る可能性があります：
+   * cattle-turtles-system
+   * rke2-bootstrap-system
+   * rke2-control-plane-system
+   * カピシステム
+   * capz-system (またはcapv-system、capa-systemなどのプロバイダー固有の名前空間)
+   * capi-clusters（またはクラスタをデプロイした他のネームスペース）
++
+これらの名前空間を削除するには
++
+[source,bash]
+----
+# First remove any finalizers that might be blocking deletion
+for NS in cattle-turtles-system rke2-bootstrap-system rke2-control-plane-system capi-system capz-system capi-clusters; do
+  kubectl get namespace $NS -o json | jq '.spec.finalizers = []' | kubectl replace --raw "/api/v1/namespaces/$NS/finalize" -f -
+done
+
+# Then delete the namespaces
+kubectl delete namespace cattle-turtles-system rke2-bootstrap-system rke2-control-plane-system capi-system capz-system capi-clusters
+----
+
+. 最後に、Cluster APIとRancher Turtlesに関連するCRDを削除する：
++
+[source,bash]
+----
+# Delete all Cluster API and Rancher Turtles CRDs
+kubectl get crds | grep 'cluster.x-k8s.io\|turtles-capi.cattle.io' | awk '{print $1}' | xargs kubectl delete crd
+
+# Or manually delete them one by one
+kubectl delete crd clusters.cluster.x-k8s.io
+kubectl delete crd clusterclasses.cluster.x-k8s.io
+kubectl delete crd machines.cluster.x-k8s.io
+kubectl delete crd machinepools.cluster.x-k8s.io
+kubectl delete crd providers.turtles-capi.cattle.io
+kubectl delete crd clusterconfigs.turtles-capi.cattle.io
+# ... and other related CRDs
+----
++
+[CAUTION]
+====
+これらのCRDを削除する前に、すべてのクラスタが完全に削除されていることを確認してください。
+====
+
