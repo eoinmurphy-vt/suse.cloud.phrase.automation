@@ -1,0 +1,33 @@
+include::partial$variables.adoc[]
+= 证书轮换
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解如何在{project-name} 中轮换证书而不会导致停机。
+:doc-persona: ["kubewarden-operator"]
+:doc-topic: ["explanations", "certificates"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "certificate", "controller", "reconciliation"]
+:sidebar_label: 证书轮换
+:sidebar_position: 21
+
+{project-name} v1.17.0 删除了 cert-manager 依赖关系。控制器能够管理所有组件使用的所有证书。现在，控制器有了一个新的调节循环，可以确保证书始终是最新的，网络钩子配置也是正确的。
+
+Helm 图表安装程序会生成第一份证书。它生成的根 CA 有效期为 10 年。Helm 图表安装还会生成由根 CA 签名的控制器 webhook 网络服务器证书。API 服务器借此与{short-project-name} 控制器通信，以验证 CRD。有效期为一年。
+
+控制器启动后，其调节器会在证书即将过期时自动更新证书。它还会更新整个{short-project-name} 协议栈使用的所有证书和 webhook 配置。
+
+[NOTE]
+====
+Helm 图表生成的所有证书以及控制器随后生成的证书都使用 ECDSA P256 密钥。
+====
+
+对账循环会在证书到期前 60 天更新证书。
+证书轮换无需停机。调和循环还负责更新根 CA。
+
+控制器会在到期前 60 天生成新的根 CA。控制器会更新所有 webhooks 使用的 CA 捆绑包，以包括新的根 CA 和旧的 CA。
+
+根 CA 的变更会导致调节器重新创建向网络钩子签发的证书。新证书的传播需要一段时间。不过，在此期间，更新的 CA 捆绑程序可让 API 服务器继续与所有网络钩子通信，而不会出现任何停机。
+
+当新证书准备就绪而旧证书失效时，控制器会更新 Webhooks 使用的 CA 捆绑包，使其只包含最新的根 CA。
+
+当策略服务器或控制器网络服务器证书更新时，控制器会用根 CA 签发的新证书更新密文。由于具有重载功能，控制器和策略服务器在使用新证书时无需重启进程，因此不会出现停机。
