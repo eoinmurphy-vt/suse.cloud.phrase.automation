@@ -1,0 +1,66 @@
+= .NET-Anwendungen
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+== Automatische Instrumentierung
+
+Die automatische Instrumentierung für .NET kann automatisch Traces und Metriken für eine Vielzahl von https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/blob/main/docs/internal/instrumentation-libraries.md[Bibliotheken und Frameworks] erfassen.
+
+Die automatische Instrumentierung erfordert keine Änderungen an der Anwendung. Führen Sie die folgenden Schritte aus, um sie einzurichten:
+
+. Laden Sie die https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases/latest/download/opentelemetry-dotnet-instrumentation-linux-glibc.zip[glibc] oder https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases/latest/download/opentelemetry-dotnet-instrumentation-linux-musl.zip[musl] Version der Instrumentierungsbibliotheken (musl für Alpine, glibc für die meisten anderen Docker-Images) von den https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases[Releases] des opentelemetry-dotnet-instrumentation Repository herunter. Entpacken Sie die Dateien und binden Sie sie in Ihr Anwendungs-Docker-Image in einem Verzeichnis ein, hier verwenden wir `+/autoinstrumentation+`.
+. Setzen Sie die folgenden Umgebungsvariablen, hier über die `+env+` des Containers in der Kubernetes-Pod-Spezifikation:
++
+[,yaml]
+----
+env:
+- name: CORECLR_ENABLE_PROFILING
+  value: "1"
+- name: CORECLR_PROFILER
+  value: "{918728DD-259F-4A6A-AC2B-B85E1B658318}"
+- name: CORECLR_PROFILER_PATH
+  # for glibc:
+  value: "/autoinstrumentation/linux-x64/OpenTelemetry.AutoInstrumentation.Native.so"
+  # For musl use instead:
+  # value: "/autoinstrumentation/linux-musl-x64/OpenTelemetry.AutoInstrumentation.Native.so"
+- name: DOTNET_ADDITIONAL_DEPS
+  value: "/autoinstrumentation/AdditionalDeps"
+- name: DOTNET_SHARED_STORE
+  value: "/autoinstrumentation/store"
+- name: DOTNET_STARTUP_HOOKS
+  value: "/autoinstrumentation/net/OpenTelemetry.AutoInstrumentation.StartupHook.dll"
+- name: OTEL_DOTNET_AUTO_HOME
+  value: "/autoinstrumentation"
+----
+
+. Fügen Sie auch die zusätzlichen Umgebungsvariablen hinzu xref:/setup/otel/languages/sdk-exporter-config.adoc[, um den Dienstnamen und den Exporter-Endpunkt] auf dem Pod xref:/setup/otel/languages/sdk-exporter-config.adoc[zu konfigurieren].
+. Stellen Sie Ihre Anwendung mit den Änderungen bereit
+. xref:/setup/otel/languages/verify.adoc[Überprüfen Sie, ob] SUSE Observability Abhängigkeiten und/oder Metriken empfängt.
+
+Weitere Einzelheiten entnehmen Sie bitte der https://opentelemetry.io/docs/languages/java/automatic/[Dokumentation].
+
+== Manuelle Instrumentierung
+
+Manuelle Instrumentierung kann verwendet werden, wenn Sie Metriken, Traces oder Protokolle von Teilen des Codes benötigen, die von der automatischen Instrumentierung nicht unterstützt werden. Zum Beispiel nicht unterstützte Bibliotheken, firmeneigener Code oder Metriken auf Unternehmensebene.
+
+Um diese Daten zu erfassen, müssen Sie Ihre Anwendung ändern.
+
+. Einbindung des Open Telemetry SDK als Abhängigkeit
+. Fügen Sie Ihrer Anwendung Code hinzu, um bei Bedarf Metriken, Spans oder Protokolle zu erfassen.
+
+Eine ausführliche Dokumentation hierzu finden Sie auf den https://opentelemetry.io/docs/languages/net/instrumentation/[Dokumentseiten des].
+
+Stellen Sie sicher, dass Sie den OTLP-Exporter (dies ist die Standardeinstellung) und die https://opentelemetry.io/docs/languages/java/instrumentation/#_autoconfiguration[automatische Konfiguration] verwenden. Bei der Bereitstellung der Anwendung werden der Dienstname und der Exporter xref:/setup/otel/languages/sdk-exporter-config.adoc[über Umgebungsvariablen konfiguriert].
+
+== Metriken in SUSE Observability
+
+ifdef::ss-ff-stackpacks2_enabled[]
+Für einige .NET-Metriken, z. B. für Garbage-Collector-Metriken, hat SUSE Observability Diagramme für die entsprechenden Komponenten definiert. Für Kubernetes sind die Diagramme auf den Pods verfügbar. Es ist möglich, xref:/setup/custom-integrations/metric-bindings/index.adoc[Diagramme für weitere Metriken hinzuzufügen], dies funktioniert für Metriken aus der automatischen Instrumentierung, aber auch für anwendungsspezifische Metriken aus der manuellen Instrumentierung.
+endif::[]
+
+
+ifndef::ss-ff-stackpacks2_enabled[]
+Für einige .NET-Metriken, z. B. für Garbage-Collector-Metriken, hat SUSE Observability Diagramme für die entsprechenden Komponenten definiert. Für Kubernetes sind die Diagramme auf den Pods verfügbar. Es ist möglich, xref:/use/metrics/k8s-add-charts.adoc[Diagramme für weitere Metriken hinzuzufügen], dies funktioniert für Metriken aus der automatischen Instrumentierung, aber auch für anwendungsspezifische Metriken aus der manuellen Instrumentierung.
+endif::[]
+
