@@ -1,0 +1,196 @@
+= Lenguaje de consulta de observabilidad de SUSE (STQL)
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidad de SUSE
+
+== Visión general
+
+En esta página se describe cómo utilizar el Lenguaje de consulta de SUSE Observability (STQL) integrado para escribir filtros avanzados de componentes de topología. Las consultas STQL se utilizan en SUSE Observability para escribir xref:/use/views/k8s-filters.adoc#_advanced_topology_filters[filtros de topología avanzados].
+
+Una consulta STQL consta de <<_component_filters,filtros>> y <<_functions,funciones>> <<_component_filters,componentes>>. El resultado de la consulta es un componente, o conjunto de componentes, filtrado a partir de la topología completa.
+
+== Filtros de componentes
+
+Los filtros de componentes se utilizan de dos maneras en STQL:
+
+* Defina el conjunto de componentes que se incluirán en la salida de la consulta.
+* Especifique el conjunto de componentes que debe manejar una función STQL incorporada.
+
+=== Filtros
+
+Los filtros descritos a continuación pueden combinarse utilizando los <<_operators,operadores>> disponibles para lograr selecciones complejas de componentes.
+
+|===
+| Filtro | Por defecto | Descripción
+
+| `+healthstate+`
+| "all"
+| Componentes con el estado de salud indicado.
+
+| `+label+`
+| "all"
+| Componentes con las etiquetas nombradas.
+
+| `+name+`
+| "all"
+| Componentes con el nombre especificado.
+
+| `+type+`
+| "all"
+| Componentes del tipo especificado.
+
+| `+identifier+`
+| "all"
+| Componentes con el identificador URN especificado. El filtro de identificadores sólo es compatible con el filtrado básico cuando se especifica mediante `+identifier IN (...)+` y se combina con otros filtros mediante un operador `+OR+`. Cuando el filtro de conjuntos es compatible con el filtrado básico, el número de identificadores de componentes consultados se indicará en la xref:/use/views/k8s-filters.adoc#_other_filters[casilla*Otros filtros*].
+
+| `+layer+`
+| "all"
+| Componentes de la capa nombrada.
+
+| `+domain+`
+| "all"
+| Componentes en el dominio o dominios especificados.
+
+| `+environment+`
+| "all"
+| Componentes en el entorno nombrado.
+|===
+
+=== Operadores
+
+Los operadores descritos a continuación están disponibles para su uso en consultas STQL. Tenga en cuenta que los operadores booleanos se ejecutarán en el orden estándar: NOT, OR, AND.
+
+|===
+| Operador | Descripción | Ejemplo
+
+| =
+| Igualdad
+| `+name = "cert-manager"+`
+
+| !=
+| Equiparación de desigualdades
+| `+name != "coredns"+`
+
+| IN
+| El valor está en el subconjunto
+| `+name in ("cert-manager", "cluster_autoscaler")+`
+
+| NO
+| Negación
+| `+name NOT in ("cert-manager", "cluster_autoscaler")+`
+
+| AND y OR
+| Filtro basado en más de una condición o subconsulta
+| `+name = "cert-manager" OR type = "deployment"+`
+
+| ()
+| Utilice paréntesis para agrupar los resultados
+| `+(name = … AND type = …) OR (…)+`
+|===
+
+Por ejemplo:
+
+[,yaml]
+----
+# Return all components named cert-manager or coredns regardless of type:
+  name = "cert-manager" OR name = "coredns"
+
+# Return only deployments named coredns and configmaps named kube-root-ca.crt:
+  (name = "coredns" AND type = "deployment") OR (name = "kube-root-ca.crt" AND type = "configmap")
+----
+
+=== Comodín
+
+Puede utilizar `+*+` como comodín completo en un filtro de componentes. No es posible filtrar por coincidencias parciales utilizando un carácter comodín.
+
+=== Ejemplos
+
+[,text]
+----
+# Select all components
+name = "*"
+
+# Select all components with name "etcd-manager"
+name = "etcd-manager"
+
+# Select all components in the "Containers" layer:
+layer = "Containers"
+
+# Select all components named either "etcd-manager" or "coredns" that don't have a label "cluster-name:prod.stackstate.io"
+name IN ("etcd-manager","coredns") NOT label = "cluster-name:prod.stackstate.io"
+
+# Select all components named "coredns" that don't have a label "bck" or "test"
+name = "cert-manager" NOT label in ("image_name:cert-manager/cert-manager-controller:testA", "image_name:cert-manager/cert-manager-controller:testB")
+----
+
+== Funciones
+
+=== withNeighborsOf
+
+La función withNeighborsOf amplía la salida de la consulta STQL, añadiendo componentes conectados en la(s) dirección(es) especificada(s). El número de niveles de topología incluidos puede ajustarse hasta un máximo de 15.
+
+`+withNeighborsOf(components=(), levels=, direction=)+`
+
+Para ser compatible con el filtrado básico, la función sólo puede combinarse con otros filtros mediante un operador `+OR+`. Cuando un filtro avanzado incluye una función `+withNeighborsOf+` compatible con el filtrado básico, el número de componentes cuyos vecinos se consultan se muestra en el xref:/use/views/k8s-filters.adoc#_other_filters[cuadro*Otros filtros*].
+
+==== Parámetros / campos
+
+|===
+| Parámetro | Por defecto | Valores permitidos | Descripción
+
+| `+components+`
+| "all"
+| Un filtro de componentes
+| Componente(s) para los que se devolverán los vecinos, ver <<_component_filters,filtros de componentes>>.
+
+| `+levels+`
+| 1
+| "all", [1:14]
+| El número de niveles a incluir en la salida. Utilice "todos" para mostrar todos los niveles disponibles (máximo 15)
+
+| `+direction+`
+| "ambos"
+| "up", "down", "both"
+| *arriba*: sólo se añadirán los componentes que dependan de los componentes nombrados *abajo*: sólo se añadirán las dependencias de los componentes nombrados *ambos*: se añadirán los componentes que dependan y las dependencias de los componentes nombrados.
+|===
+
+==== Ejemplo
+
+El siguiente ejemplo devolverá todos los componentes de la capa de aplicación que tengan un estado de salud de `+DEVIATING+` o `+CRITICAL+`. También se incluirán los componentes con nombres "appA" o "appB" y sus vecinos.
+
+[,text]
+----
+layer = "Containers"
+  AND (healthstate = "CRITICAL" OR healthstate = "DEVIATING")
+  OR withNeighborsOf(components = (name in ("cert-manager","coredns")))
+----
+
+== Compatibilidad filtros básicos y avanzados
+
+=== Filtrado de básico a avanzado
+
+Puede pasar del filtrado básico al avanzado seleccionando *Avanzado* en *Topología de filtros* en el panel *Ver filtros*.
+
+Siempre es posible pasar del filtrado básico al avanzado. Los filtros básicos seleccionados se convertirán directamente en una consulta STQL.
+
+=== Filtrado de avanzado a básico
+
+Puede pasar del filtrado avanzado al básico seleccionando *Básico* en *Topología de filtros* en el panel *Ver filtros*.
+
+No siempre es posible pasar del filtrado avanzado al filtrado básico. Las consultas simples de Mpst pueden convertirse en filtros básicos, sin embargo, algunas consultas avanzadas no son compatibles con los filtros básicos.
+
+* Los filtros básicos no pueden contener una desigualdad.
+* Los filtros básicos no utilizan `+=+`, siempre se formatean utilizando el operador `+IN+`. Por ejemplo `+name IN ("cert-manager”)+` y no `+name = "cert-manager”+`.
+* Los filtros básicos utilizan AND/OR de forma específica:
+ ** Todos los elementos de cada cuadro de filtro básico se unen con un *OR*: `+layer IN ("Containers", "Services", "Storage")+`
+ ** Las diferentes cajas de filtros básicos se encadenan mediante un *AND*: `+layer IN ("Containers") AND domain IN ("cluster.test.stackstate.io”)+`
+ ** El cuadro de filtro básico *Incluir componentes* (`+name+`) es la excepción - éste se encadena a los otros cuadros de filtro con un OR: `+layer IN ("Containers") AND domain IN ("cluster.test.stackstate.io") OR name IN ("cert-manager”)+`
+ ** Para ser compatible con el filtrado básico, la función *withNeighborsOf* y el filtro *identificador* deben unirse a otros filtros con un *OR*: `+layer in ("Containers") OR identifier IN ("urn:kubernetes:/cluster.test.stackstate.io:kube-system:pod/cert-manager-7749f44bb4-vspjj:container/cert-manager")+`
+
+Si intenta cambiar de un filtro avanzado a un filtro básico y la consulta no es compatible, SUSE Observability le pedirá confirmación antes de eliminar los filtros incompatibles. Para conservar los filtros, puedes optar por permanecer en el filtrado avanzado.
+
+== Ver también
+
+* xref:/use/views/k8s-filters.adoc#_basic_topology_filters[Filtros de topología básica]
+* xref:/use/views/k8s-filters.adoc#_topology_filtering_limits[Límites del filtro de topología]
+* xref:/use/views/k8s-filters.adoc[Cómo filtrar la topología en la interfaz de usuario de SUSE Observability]
