@@ -1,0 +1,506 @@
+= Backups wiederherstellen
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Selbstgehostet
+
+[NOTE]
+====
+Diese Seite gilt für {stackstate-product-name} v2.7.0 oder neuer.
+====
+
+== Übersicht
+
+Auf dieser Seite wird beschrieben, wie Sie mit Hilfe der Backup-CLI Sicherungen für {stackstate-product-name} Datenspeicher wiederherstellen können.
+
+[WARNING]
+====
+*Bei der Wiederherstellung von der Sicherung werden vorhandene Daten gelöscht oder überschrieben. Dieser Vorgang kann nicht rückgängig gemacht werden.*
+
+Überprüfen Sie immer den Sicherungsnamen und den Namensraum, bevor Sie einen Wiederherstellungsvorgang bestätigen.
+
+*Auswirkungen auf den GitOps-Workflow*Dieses Backup-Tool ändert K8s-Ressourcen direkt in Ihrem Cluster:
+
+- Skaliert StatefulSets/Deployments auf 0 Replikate
+- Fügt Anmerkungen für die Wiederherstellungsverfolgung hinzu
+
+Diese Änderungen stehen in Konflikt mit Ihrem GitOps-Workflow, da sie den Git-basierten Abgleich umgehen. GitOps-Controller können versuchen, diese Änderungen während der Sicherungsvorgänge rückgängig zu machen.
+*Das ist wichtig:* Der automatische Abgleich für den SUSE Observability Helm-Diagrammeinsatz muss während der Sicherungswiederherstellung deaktiviert werden, um Konflikte zu vermeiden.
+====
+
+[NOTE]
+====
+*Bevor Sie die CLI verwenden, stellen Sie sicher, dass:*
+
+* Sie verwenden die neueste Version der Backup-CLI.
+* Die CLI erwartet eine kubeconfig mit einem aktuellen Kontext zum Cluster, in dem SUSE Observability installiert ist.
+====
+
+== Laden Sie die Backup-CLI herunter
+
+Laden Sie die neueste Version der Backup-CLI mit den unten aufgeführten Befehlen für Ihre Plattform herunter. Die Binärdatei heißt `+sts-backup+`.
+
+[tabs]
+====
+macOS (Apple Silizium)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.darwin-arm64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.darwin-arm64.tar.gz
+----
+
+--
+macOS (Intel)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.darwin-x86_64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.darwin-x86_64.tar.gz
+----
+
+--
+Linux (ARM64)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.linux-arm64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.linux-arm64.tar.gz
+----
+
+--
+Linux (x86_64)::
++
+--
+
+[,bash]
+----
+VERSION=$(curl -sL https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+curl -LO "https://github.com/StackVista/stackstate-backup-cli/releases/download/${VERSION}/stackstate-backup-cli-${VERSION#v}.linux-x86_64.tar.gz"
+tar -xzf stackstate-backup-cli-${VERSION#v}.linux-x86_64.tar.gz
+----
+
+--
+Windows (x86_64)::
++
+--
+
+[,powershell]
+----
+$VERSION = (Invoke-RestMethod -Uri "https://api.github.com/repos/StackVista/stackstate-backup-cli/releases/latest").tag_name
+Invoke-WebRequest -Uri "https://github.com/StackVista/stackstate-backup-cli/releases/download/$VERSION/stackstate-backup-cli-$($VERSION.TrimStart('v')).windows-x86_64.zip" -OutFile "stackstate-backup-cli.zip"
+Expand-Archive -Path "stackstate-backup-cli.zip" -DestinationPath "."
+----
+
+--
+====
+
+[TIP]
+====
+Kopieren Sie der Einfachheit halber die Binärdatei `+sts-backup+` in ein Verzeichnis in Ihrem `+$PATH+` (z. B. `+/usr/local/bin+` unter Linux/macOS), damit Sie sie von überall aus ausführen können, ohne den vollständigen Pfad angeben zu müssen.
+====
+
+== Konfigurations- und Topologiedaten (StackGraph)
+
+=== StackGraph-Sicherungen auflisten
+
+Um die StackGraph-Backups aufzulisten, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+sts-backup stackgraph list --namespace <NAMESPACE>
+----
+
+Ersetzen Sie `+<NAMESPACE>+` durch den Namespace, in dem {stackstate-product-name} installiert ist.
+
+Die Ausgabe sollte wie folgt aussehen:
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Stackgraph backups in bucket 'sts-stackgraph-backup'...
+NAME                            LAST MODIFIED            SIZE
+sts-backup-20251128-0300.graph  2025-11-28 03:08:42 UTC  2GiB
+----
+
+Der Zeitstempel, zu dem die Sicherung erstellt wurde, ist Teil des Sicherungsnamens.
+
+
+=== Wiederherstellen einer StackGraph-Sicherung
+
+Um ein StackGraph-Backup wiederherzustellen, verwenden Sie eine der folgenden Methoden:
+
+==== Wiederherstellen einer bestimmten Sicherung
+
+[,bash]
+----
+sts-backup stackgraph restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== Wiederherstellen der letzten Sicherung
+
+[,bash]
+----
+sts-backup stackgraph restore --namespace <NAMESPACE> --latest
+----
+
+==== Gemeinsame Flaggen
+
+* `+--yes+` oder `+-y+` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
+* `+--background+` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
+
+==== Hintergrund wiederherstellen
+
+Bei Verwendung von `+--background+` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
+
+[,bash]
+----
+sts-backup stackgraph check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+Der Befehl `+check-and-finalize+`:
+
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `+--wait+` Flagge, wartet auf den Abschluss des Auftrags
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
+
+[NOTE]
+====
+Wenn eine Wiederherstellung ohne `+--background+` unterbrochen wird (z. B. durch Strg+C), müssen Sie `+check-and-finalize+` ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
+====
+
+== Einstellungen
+
+Backups der Einstellungen umfassen installierte StackPacks mit ihrer Konfiguration und andere vom Benutzer erstellte Anpassungen wie Monitore, benutzerdefinierte Ansichten und Dienst-Token. Einstellungssicherungen sind leicht (in der Regel nur einige Megabyte) und lassen sich schnell und mit minimaler Ausfallzeit wiederherstellen.
+
+=== Liste Einstellungssicherungen
+
+Um die Einstellungssicherungen aufzulisten, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+sts-backup settings list --namespace <NAMESPACE>
+----
+
+Ersetzen Sie `+<NAMESPACE>+` durch den Namespace, in dem SUSE Observability installiert ist.
+
+Die Ausgabe sollte wie folgt aussehen:
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Settings backups in bucket 'sts-configuration-backup'...
+NAME                          LAST MODIFIED            SIZE
+sts-backup-20251128-1328.sty  2025-11-28 13:29:12 UTC  2MiB
+----
+
+Der Zeitstempel, zu dem die Sicherung erstellt wurde, ist Teil des Sicherungsnamens.
+
+=== Wiederherstellen einer Einstellungssicherung
+
+[CAUTION]
+====
+Bei der Wiederherstellung eines Einstellungs-Backups wird auch die gesamte Topologie, einschließlich der Zustände, Warnungen und des Topologieverlaufs, entfernt.
+====
+
+Um eine Einstellungssicherung wiederherzustellen, verwenden Sie eine der folgenden Methoden:
+
+==== Wiederherstellen einer bestimmten Sicherung
+
+[,bash]
+----
+sts-backup settings restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== Wiederherstellen der letzten Sicherung
+
+[,bash]
+----
+sts-backup settings restore --namespace <NAMESPACE> --latest
+----
+
+==== Gemeinsame Flaggen
+
+* `+--yes+` oder `+-y+` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
+* `+--background+` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
+
+==== Hintergrund wiederherstellen
+
+Bei Verwendung von `+--background+` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
+
+[,bash]
+----
+sts-backup settings check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+Der Befehl `+check-and-finalize+`:
+
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `+--wait+` Flagge, wartet auf den Abschluss des Auftrags
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
+
+[NOTE]
+====
+Wenn eine Wiederherstellung ohne `+--background+` unterbrochen wird (z. B. durch Strg+C), müssen Sie `+check-and-finalize+` ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
+====
+
+== Metriken (Victoria Metriken)
+
+Je nach Profil, `+nonha+` oder `+ha+`, wird Victoria Metrics in verschiedenen Modi eingesetzt:
+
+* *nonha-Profil* - Single-Node-Modus mit einer Victoria Metrics-Instanz (`+victoria-metrics-0+`)
+* *ha-Profil* - HA-Modus (Spiegelung) mit zwei Victoria Metrics-Instanzen (`+victoria-metrics-0+` und `+victoria-metrics-1+`)
+
+=== Liste Victoria Metrics-Sicherungen
+
+Um die Victoria Metrics-Sicherungen aufzulisten, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+sts-backup victoria-metrics list --namespace <NAMESPACE>
+----
+
+Ersetzen Sie `+<NAMESPACE>+` durch den Namespace, in dem SUSE Observability installiert ist.
+
+==== Ausgabe im Ein-Knoten-Modus (nonha-Profil)
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing VictoriaMetrics backups in bucket ...
+NAME ({bucket}/{instance}-{created})                           UPDATED
+sts-victoria-metrics-backup/victoria-metrics-0-20251030152500  2025-11-28 09:25:05 UTC
+----
+
+==== Ausgabe im HA-Modus (ha-Profil)
+
+[,bash]
+----
+Setting up port-forward to suse-observability-minio:9000 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing VictoriaMetrics backups in bucket ...
+NAME ({bucket}/{instance}-{created})                           UPDATED
+sts-victoria-metrics-backup/victoria-metrics-1-20251030152500  2025-11-28 09:35:08 UTC
+sts-victoria-metrics-backup/victoria-metrics-0-20251030152500  2025-11-28 09:25:04 UTC
+
+NOTE: In HA mode, backups from both instances (victoria-metrics-0 and victoria-metrics-1) are listed.
+      The restore command accepts either backup to restore both instances.
+----
+
+Im HA-Modus werden Backups für beide Instanzen mit unterschiedlichen Präfixen erstellt (`+victoria-metrics-0+` und `+victoria-metrics-1+`). Bei der Wiederherstellung können Sie eine der beiden Sicherungen angeben - der Wiederherstellungsvorgang wird die ausgewählte Sicherung in beiden Instanzen wiederherstellen.
+
+=== Wiederherstellung einer Victoria Metrics-Sicherung
+
+[NOTE]
+====
+Alle neuen Metriken werden von `+vmagent+` während des Wiederherstellungsprozesses zwischengespeichert. Vergewissern Sie sich, dass die `+vmagent+` über genügend Speicherplatz für die Zwischenspeicherung von Metriken verfügt.
+====
+
+Um eine Victoria Metrics-Sicherung wiederherzustellen, verwenden Sie eine der folgenden Methoden:
+
+==== Wiederherstellen einer bestimmten Sicherung
+
+[,bash]
+----
+sts-backup victoria-metrics restore --namespace <NAMESPACE> --archive <BACKUP_NAME>
+----
+
+==== Wiederherstellen der letzten Sicherung
+
+[,bash]
+----
+sts-backup victoria-metrics restore --namespace <NAMESPACE> --latest
+----
+
+==== Gemeinsame Flaggen
+
+* `+--yes+` oder `+-y+` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
+* `+--background+` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
+
+==== Hintergrund wiederherstellen
+
+Bei Verwendung von `+--background+` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
+
+[,bash]
+----
+sts-backup victoria-metrics check-and-finalize --job <JOB_NAME> --wait --namespace <NAMESPACE>
+----
+
+Der Befehl `+check-and-finalize+`:
+
+* Überprüft den Status des Wiederherstellungsauftrags
+* Mit `+--wait+` Flagge, wartet auf den Abschluss des Auftrags
+* Automatische Skalierung von StatefulSets, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
+
+[NOTE]
+====
+Wenn eine Wiederherstellung ohne `+--background+` unterbrochen wird (z. B. durch Strg+C), müssen Sie `+check-and-finalize+` ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
+====
+
+== OpenTelemetry (KlickHaus)
+
+=== ClickHouse-Sicherungen auflisten
+
+Um ClickHouse-Backups aufzulisten, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+sts-backup clickhouse list --namespace <NAMESPACE>
+----
+
+Ersetzen Sie `+<NAMESPACE>+` durch den Namespace, in dem SUSE Observability installiert ist.
+
+Die Ausgabe sollte wie folgt aussehen:
+
+[,bash]
+----
+Setting up port-forward to suse-observability-clickhouse-backup:7171 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Listing Clickhouse backups...
+NAME                             CREATED              SIZE
+incremental_2025-11-28T09-45-00  2025-11-28 09:45:03  65MiB
+incremental_2025-11-28T08-45-00  2025-11-28 08:45:03  223MiB
+full_2025-11-28T00-45-00         2025-11-28 00:45:03  3GiB
+incremental_2025-11-27T23-45-00  2025-11-27 23:45:03  118MiB
+----
+
+Sicherungsnamen, die mit `+full_+` beginnen, sind vollständige Sicherungen, während Namen, die mit `+incremental_+` beginnen, inkrementelle Sicherungen sind.
+
+=== Wiederherstellen einer ClickHouse-Sicherung
+
+[NOTE]
+====
+Bei der Wiederherstellung werden datenproduzierende Workloads (wie OpenTelemetry-Exporter) automatisch heruntergefahren, um Datenverluste während der Wiederherstellung zu vermeiden.
+====
+
+Um ein ClickHouse-Backup wiederherzustellen, verwenden Sie eine der folgenden Methoden:
+
+==== Wiederherstellen einer bestimmten Sicherung
+
+[,bash]
+----
+sts-backup clickhouse restore --namespace <NAMESPACE> --snapshot <BACKUP_NAME>
+----
+
+==== Wiederherstellen der letzten Sicherung
+
+[,bash]
+----
+sts-backup clickhouse restore --namespace <NAMESPACE> --latest
+----
+
+==== Gemeinsame Flaggen
+
+* `+--yes+` oder `+-y+` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
+* `+--background+` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
+
+==== Hintergrund wiederherstellen
+
+Bei Verwendung von `+--background+` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
+
+[,bash]
+----
+sts-backup clickhouse check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
+----
+
+Der Befehl `+check-and-finalize+`:
+
+* Überprüft den Status des Wiederherstellungsvorgangs
+* Mit `+--wait+` Flagge, wartet auf den Abschluss der Operation
+* Führt SQL-Befehle nach der Wiederherstellung aus
+* Automatische Skalierung von StatefulSets, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
+
+[NOTE]
+====
+Wenn eine Wiederherstellung ohne `+--background+` unterbrochen wird (z. B. durch Strg+C), müssen Sie `+check-and-finalize+` mit der Vorgangskennung ausführen, um StatefulSets zu skalieren und Ressourcen zu bereinigen.
+====
+
+== Telemetriedaten (Elasticsearch)
+
+=== Elasticsearch-Schnappschüsse auflisten
+
+Um die Elasticsearch-Snapshots aufzulisten, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+sts-backup elasticsearch list --namespace <NAMESPACE>
+----
+
+Ersetzen Sie `+<NAMESPACE>+` durch den Namespace, in dem SUSE Observability installiert ist.
+
+Die Ausgabe sollte wie folgt aussehen:
+
+[,bash]
+----
+Setting up port-forward to suse-observability-elasticsearch-master-headless:9200 in namespace <NAMESPACE>...
+✓ Port-forward established successfully
+Fetching snapshots from repository 'sts-backup'...
+SNAPSHOT                                         STATE    START TIME                DURATION (ms)  FAILURES
+sts-backup-20251128-1135-dpkj2dqrszo6cscpgfhrhg  SUCCESS  2025-11-28T11:35:10.967Z  329158         0
+----
+
+Der Zeitstempel, zu dem der Snapshot erstellt wurde, ist Teil des Snapshot-Namens.
+
+=== Wiederherstellen eines Elasticsearch-Snapshots
+
+[NOTE]
+====
+Der Wiederherstellungsprozess löscht automatisch alle STS-Indizes (die dem Muster `+sts*+` entsprechen), bevor der Snapshot wiederhergestellt wird. Dazu gehört auch ein Rollover der Datenströme, um eine saubere Wiederherstellung zu gewährleisten.
+====
+
+Um einen Elasticsearch-Snapshot wiederherzustellen, verwenden Sie einen der folgenden Ansätze:
+
+==== Wiederherstellung eines bestimmten Schnappschusses
+
+[,bash]
+----
+sts-backup elasticsearch restore --namespace <NAMESPACE> --snapshot <SNAPSHOT_NAME>
+----
+
+==== Wiederherstellen des letzten Schnappschusses
+
+[,bash]
+----
+sts-backup elasticsearch restore --namespace <NAMESPACE> --latest
+----
+
+==== Gemeinsame Flaggen
+
+* `+--yes+` oder `+-y+` - Bestätigungsaufforderung überspringen (nützlich für die Automatisierung)
+* `+--background+` - Wiederherstellung im Hintergrund ausführen, ohne auf den Abschluss zu warten
+
+==== Hintergrund wiederherstellen
+
+Bei Verwendung von `+--background+` läuft die Wiederherstellung asynchron. Verwenden Sie nach dem Start der Wiederherstellung den folgenden Befehl, um den Status zu prüfen und die Wiederherstellung abzuschließen:
+
+[,bash]
+----
+sts-backup elasticsearch check-and-finalize --operation-id <OPERATION_ID> --wait --namespace <NAMESPACE>
+----
+
+Der Befehl `+check-and-finalize+`:
+
+* Überprüft den Status des Wiederherstellungsvorgangs
+* Mit `+--wait+` Flagge, wartet auf den Abschluss der Operation
+* Automatisches Skalieren von Bereitstellungen, die während der Wiederherstellung verkleinert wurden
+* Räumt Ressourcen nach der Fertigstellung auf
+
+[NOTE]
+====
+Wenn eine Wiederherstellung ohne `+--background+` unterbrochen wird (z. B. durch Strg+C), müssen Sie `+check-and-finalize+` mit der Vorgangs-ID (Snapshot-Name) ausführen, um Verteilungen zu skalieren und Ressourcen zu bereinigen.
+====
