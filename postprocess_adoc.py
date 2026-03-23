@@ -39,28 +39,30 @@ def detect_and_convert_to_utf8(file_path):
 def cleanup_text(text):
     before = text
     
-    # 1. PROTECT CODE BLOCKS: Temporarily hide ---- and .... blocks
+    # --- 1. GLOBAL RULES
+    # Fix Phrase's habit of adding + signs inside backticks and quotes
+    text = re.sub(r'&quot;\`\+([^\`\n]+)\+\`&quot;', r'"`\1`"', text)
+    text = re.sub(r'&apos;\`\+([^\`\n]+)\+\`&apos;', r"'`\1`'", text)
+    text = re.sub(r'\`\+([^\`\n]+)\+\`', r'`\1`', text) 
+    
+    # --- 2. PROTECT CODE BLOCKS ---
     protected_blocks = []
     def protect(match):
         protected_blocks.append(match.group(0))
         return f"__PROTECTED_BLOCK_{len(protected_blocks)-1}__"
         
-    # Finds anything between 4 dashes (----) or 4 dots (....)
     text = re.sub(r'^(-{4,}|\.{4,})$.*?^\1$', protect, text, flags=re.MULTILINE | re.DOTALL)
 
-    # --- APPLY ALL CLEANUP RULES TO THE NORMAL TEXT ---
-    text = re.sub(r'&quot;\`\+([^\`\n]+)\+\`&quot;', r'"`\1`"', text)
-    text = re.sub(r'&apos;\`\+([^\`\n]+)\+\`&apos;', r"'`\1`'", text)
-    text = re.sub(r'\`\+([^\`\n]+)\+\`', r'`\1`', text)
+    # --- 3. NORMAL TEXT CLEANUP (Runs only outside of code blocks) ---
     text = re.sub(r'\[literal\]#([^#]+)#', r'[monospaced]#\1#', text, flags=re.IGNORECASE)
     
-    # This was the culprit destroying the certs! Now it only affects normal text.
+    # The aggressive plus-sign stripper (Base64 certs are safely hidden)
     text = re.sub(r'\+([A-Za-z0-9/_\.-]+)\+', r'\1', text)
     
-    # The circumflex fix we added earlier
+    # The Phrase footnote/circumflex backslash fix
     text = re.sub(r'\\\^\[(.*?)\]\^', r'^[\1]^', text)
     
-    # 2. RESTORE CODE BLOCKS: Put the original code/certs back exactly as they were
+    # --- 4. RESTORE CODE BLOCKS ---
     for i, block in enumerate(protected_blocks):
         text = text.replace(f"__PROTECTED_BLOCK_{i}__", block)
         
