@@ -1,0 +1,259 @@
+= ManagedOSImage-Referenz
+:revdate: 2025-11-06
+:page-revdate: {revdate}
+
+Die Ressource ManagedOSImage ist für die Definition eines Betriebssystem-Images oder einer Image-Version zuständig, das bzw. die auf jeden Knoten in einer Gruppe von Ziel-Clustern angewendet werden muss. Nach der Erstellung kann die Ressource ManagedOSImage mit einer neuen `+osImage+` oder `+managedOSVersionName+` aktualisiert werden, um ein neues Upgrade auszulösen. In ähnlicher Weise kann ein bestehendes ManagedOSImage aktualisiert werden, um neue Cluster zu erreichen.
+
+Es gibt mehrere Schlüssel, die unter einer `+ManagedOSImage+` resource spec konfiguriert werden können.
+
+.upgrade-cluster-target.yaml
+[,yaml]
+----
+include::example$upgrade/upgrade-cluster-target.yaml[]
+----
+
+== `+ManagedOSImageSpec+` Referenz
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| osImage
+| String
+| leer
+| Das vollständig qualifizierte Image, auf das die Knoten aktualisiert werden sollen. Dieser Wert hat Vorrang vor `+managedOSVersionName+`, wenn beide konfiguriert sind.
+
+| managedOSVersionName
+| String
+| leer
+| Der Name eines `+ManagedOSVersion+`, auf den die Knoten aktualisiert werden sollen.
+
+| cloudConfig
+| Objekt
+| null
+| Eine cloud-init- oder yip-Konfiguration, die bei Upgrades auf die Knoten anzuwenden ist. Siehe <<_cloudconfig,Referenz>>.
+
+| nodeSelector
+| Objekt
+| null
+| Dieser Selektor kann verwendet werden, um bestimmte Knoten innerhalb der `+clusterTargets+` anzusteuern. Siehe <<_nodeselector,Referenz>>.
+
+| Gleichzeitigkeit
+| int
+| 1
+| Wie viele Knoten innerhalb desselben Clusters gleichzeitig aktualisiert werden sollen.
+
+| Kordon
+| bool
+| true
+| Setzen Sie diesen Wert auf true, wenn die Knoten vor der Durchführung des Upgrades abgesperrt werden sollen. Unwirksam, wenn `+drain+` ebenfalls konfiguriert ist.
+
+| Ablauf
+| Objekt
+| Siehe ref
+| Legen Sie fest, ob und wie die Knoten vor der Durchführung des Upgrades entleert werden sollen. Siehe <<_drain,Referenz>>.
+
+| vorbereiten
+| Objekt
+| null
+| Der Container prepare init wird, falls angegeben, vor dem Container cordon/drain ausgeführt, der wiederum vor dem Container upgrade läuft. Siehe <<_prepare,Referenz>>.
+
+| upgradeContainer
+| Objekt
+| null
+| Der Upgrade-Container, der das Upgrade auf den Knoten ausführt. Siehe <<_upgradecontainer,Referenz>>.
+
+| clusterRolloutStrategy
+| Objekt
+| null
+| RolloverStrategy steuert das Rollout des Upgrade-Bundles über Cluster hinweg. Siehe <<_clusterrolloutstrategy,Referenz>>.
+
+| clusterTargets
+| Liste
+| null
+| Legt fest, in welchen Clustern der Upgrade-Plan eingesetzt werden soll. Siehe <<_clustertargets,Referenz>>.
+|===
+
+== `+cloudConfig+`
+
+Dies beschreibt eine cloud-init- oder yip-Konfiguration, die auf jeden aktualisierten Knoten in den Pfad `+/oem/90_operator.yaml+` kopiert wird. +
+Diese Konfiguration wird vom System nach dem Neustart übernommen. +
+Weitere Informationen und Beispiele sind in der xref:references/cloud-config-reference.adoc[Referenz] `+MachineRegistration+` `+spec.config.cloud-config+` zu finden.
+
+== `+nodeSelector+`
+
+Dieser https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors[Label Selector] kann verwendet werden, um die Upgrades auf eine bestimmte Gruppe von Knoten innerhalb des Ziel-Clusters zu beschränken.
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+nodeSelector:
+  matchExpressions:
+  - {key: my-node/label, operator: Exists}
+----
+====
+
+== `+drain+`
+
+Konfigurieren Sie, ob und wie Knoten entleert werden sollen. +
+Um den Abfluss bei Upgrades zu deaktivieren, können Sie dieses Feld auf `+null+` setzen. +
+Der Abfluss ist standardmäßig aktiviert.
+
+Die Drain-Einstellungen entsprechen direkt dem Befehl https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[drain] kubectl, der vor dem Upgrade auf dem Knoten ausgeführt wird.
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| timeout
+| Zeit.Dauer
+| null
+| Die Zeitspanne, die gewartet werden muss, bevor die Entleerung eines Knotens aufgegeben wird; Null bedeutet unendlich.
+
+| gracePeriod
+| int
+| null
+| Zeitspanne in Sekunden, die jedem Pod für die ordnungsgemäße Beendigung eingeräumt wird. Ist der Wert negativ, wird der im Pod angegebene Standardwert verwendet.
+
+| deleteEmptydirData
+| bool
+| true
+| Fortfahren, auch wenn es Pods gibt, die emptyDir verwenden (lokale Daten, die gelöscht werden, wenn der Knoten entleert wird).
+
+| ignoreDaemonSets
+| bool
+| true
+| DaemonSet-verwaltete Pods ignorieren.
+
+| Kraft
+| bool
+| true
+| Fahren Sie fort, auch wenn es Pods gibt, die keinen Controller deklarieren.
+
+| disableEviction
+| bool
+| falsch
+| Abfluss zum Löschen zwingen, auch wenn Räumung unterstützt wird. Dadurch wird die Überprüfung von PodDisruptionBudgets umgangen, daher ist Vorsicht geboten.
+
+| skipWaitForDeleteTimeout
+| int
+| 60
+| Wenn pod DeletionTimestamp älter als N Sekunden ist, wird das Warten auf den pod übersprungen. Zum Überspringen müssen die Sekunden größer als 0 sein.
+
+| podSelector
+| Etikettenwähler
+| null
+| Etikettenselektor zum Filtern von Pods auf dem Knoten. Nur ausgewählte Schoten werden vertrieben.
+|===
+
+== `+prepare+`
+
+Definiert einen `+prepare+` Init-Container, der vor dem `+upgrade+` Container ausgeführt wird, der den Upgrade-Auftrag auf einem Knoten ausführt. +
+Die Schlüssel lassen sich direkt in die https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[Container-Spezifikation] übersetzen. +
+Beachten Sie, dass das Node-Dateisystem innerhalb des Containers unter `+/host+` eingehängt ist.
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| Bild
+| String
+| leer
+| Name des Containerbildes.
+
+| Befehl
+| Liste
+| leer
+| Eingangspunkt-Array.
+
+| args
+| Liste
+| leer
+| Argumente für den Einstiegspunkt.
+
+| env
+| Liste
+| leer
+| Liste der im Container zu setzenden Umgebungsvariablen.
+
+| envFrom
+| Liste
+| leer
+| Liste der Quellen zur Befüllung der Umgebungsvariablen im Container.
+
+| Bände
+| Liste
+| leer
+| Liste der `+hostPath+` Bände. Siehe <<_prepare_volumes,Referenz>>.
+
+| securityContext
+| Objekt
+| null
+| Die Sicherheitsoptionen, mit denen der ephemere Container betrieben werden soll.
+|===
+
+=== `+prepare.volumes+`
+
+Jede Volume-Definition wird in ein https://kubernetes.io/docs/concepts/storage/volumes/#hostpath-volume-types[hostPath-Volume] (`+source+`) übersetzt, das in den Container (`+destination+`) eingebunden wird. +
+Beachten Sie, dass das Root-Dateisystem des Hosts `+/+` standardmäßig immer unter `+/host+` eingehängt wird.
+
+|===
+| Schlüssel | Typ | Standardwert | Beschreibung
+
+| name
+| String
+| leer
+| Name des Bandes.
+
+| Quelle
+| String
+| leer
+| HostPath Volume-Pfad.
+
+| Zielort
+| String
+| leer
+| HostPath Volume-Mount-Pfad.
+|===
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+volumes:
+  - name: my-custom-volume
+    source: /foo
+    destination: /foo
+----
+====
+
+== `+upgradeContainer+`
+
+Definiert den `+upgrade+` Container, der den Upgrade-Auftrag auf einem Knoten ausführt. +
+Die Schlüssel lassen sich direkt in die https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[Container-Spezifikation] übersetzen. +
+Beachten Sie, dass das Node-Dateisystem innerhalb des Containers unter `+/host+` eingehängt ist.
+
+[CAUTION]
+====
+Bei der Verwendung eines {elemental-product-name} oder xref:operator-operational-tasks/custom-images.adoc[{elemental-product-name} basierten Bildes] wird erwartet, dass Sie nur den Schlüssel `+env+` bearbeiten, um optional die Variablen `+FORCE+`, `+UPGRADE_RECOVERY+` oder `+UPGRADE_RECOVERY_ONLY+` zu setzen. +
+Weitere Informationen finden Sie in der xref:node-operational-tasks/upgrade.adoc#_upgrade_via_command_line_interface[Upgrade-Dokumentation]. +
+Jede andere Änderung an der `+upgradeContainer+` kann zu Problemen bei Upgrades führen. +
+====
+
+== `+clusterRolloutStrategy+`
+
+Dies steuert das Rollout des Pakets über die Cluster hinweg. Weitere Informationen finden Sie in der https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_rolloutstrategy[Referenzdokumentation].
+
+== `+clusterTargets+`
+
+Wählen Sie die Cluster aus, die für das Betriebssystem-Image-Upgrade ausgewählt werden sollen. Weitere Informationen finden Sie in der https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_bundletarget[Referenzdokumentation].
+
+.Klicken Sie hier für Details
+[%collapsible]
+====
+[,yaml]
+----
+clusterTargets:
+  - clusterName: volcano
+----
+====
