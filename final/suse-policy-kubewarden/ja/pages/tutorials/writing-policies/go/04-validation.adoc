@@ -1,50 +1,50 @@
 include::partial$variables.adoc[]
-= 検証ロジックの作成
+= 検証ロジックを書く
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Goでの検証ロジックの作成とテスト方法を学び、受信したペイロードから関連情報を抽出し、設定オブジェクトを作成します。
+:description: 受信したペイロードから関連情報を抽出し、設定オブジェクトを作成することによって、Goで検証ロジックを書いてテストする方法を学びます。
 :doc-persona: ["kubewarden-policy-developer"]
 :doc-topic: ["kubewarden", "writing-policies", "golang", "validation-logic"]
 :doc-type: ["tutorial"]
-:keywords: ["kubewarden", "kubernetes", "ポリシーの作成", "golang", "go"]
-:sidebar_label: 検証ロジック
+:keywords: ["kubewarden", "kubernetes", "writing policies", "golang", "go"]
+:sidebar_label: バリデーション・ロジック
 :sidebar_position: 32
 :current-version: {page-origin-branch}
 
-検証ロジックは`validate.go`ファイルに配置されます。
+検証ロジックは`validate.go` 。
 
-検証ロジックは次のようにする必要があります：
+バリデーション・ロジックが必要だ：
 
-* 受信した`payload`オブジェクトから関連情報を抽出します。
-* 入力とポリシー設定に基づいて応答を返します。
+* 受信した`payload` オブジェクトから関連情報を抽出する。
+* 入力とポリシー設定に基づいた応答を返す。
 
-受信したペイロードはJSONオブジェクトであり、xref:reference/spec/03-validating-policies.adoc[この文書]で説明されています。データは2つの方法で取得できます：
+受信ペイロードは、xref:reference/spec/03-validating-policies.adoc[このドキュメントで]説明されているJSONオブジェクトであり、そこから2つの方法でデータを取得することができる：
 
-. JSONデータをGo型にアンマーシャルします。
-. JSONクエリを実行します（https://stedolan.github.io/jq/[`jq`]に似たもの）。
+. JSONデータをGo型にアンマーシャルする。
+. JSONクエリーを実行する(以下のようなもの)https://stedolan.github.io/jq/[`jq`]).
 
-このドキュメントのこのセクションは、Go型を使用した最初のアプローチに焦点を当てています。
-2番目のアプローチの説明は、後のxref:tutorials/writing-policies/go/09-validation-with-queries.adoc[クエリを使用した検証]セクションにあります。
+このセクションでは、Go型を使った最初のアプローチに焦点を当てる。
+2つ目のアプローチについては、後のxref:tutorials/writing-policies/go/09-validation-with-queries.adoc[クエリーによる検証の]セクションで説明する。
 
 [NOTE]
 ====
 
-Kubernetesオブジェクトに依存することは、jqのような検索を行う代わりに、より大きなWebAssemblyモジュールの生成につながります。
-Kubernetesオブジェクトを使用するポリシーは約1.5&nbsp;MBであり、`gjson`を使用するポリシーは約300&nbsp;KBです。
+Kubernetesのオブジェクトに依存することで、jqのような検索を行う代わりに、より大きなWebAssemblyモジュールを生成することになる。
+Kubernetesのオブジェクトを使ったポリシーは1.5&nbsp;MB程度だが、`gjson` を使ったポリシーは300&nbsp;KB程度だ。
 
-サイズ以外にも、Kubernetesオブジェクトを使用するポリシーは初回実行時にはるかに多くの時間を要します。
-その後の呼び出しは速く、{project-name}がWasmtimeのキャッシュ機能を使用するためです。
-最初の実行には約20秒かかる場合があり、以降の実行は1〜2秒です。
-したがって、{short-project-name}ポリシーサーバーは起動時間が遅いですが、その後のポリシー評価時間は通常Kubernetesオブジェクトの使用によって影響を受けません。
+サイズとは別に、Kubernetesオブジェクトを使用するポリシーは、最初の実行時に多くの時間がかかる。
+{project-name} 、Wasmtimeのキャッシュ機能を使用しているため、以下の呼び出しは高速である。
+最初の実行は`kwctl` 、約20秒かかるが、その後の実行は1～2秒である。
+そのため、{short-project-name} Policy Serverの起動時間は遅くなるが、Kubernetesオブジェクトの使用によってポリシーの評価時間が影響を受けることは通常ない。
 ====
 
 
-== `validate`関数
+== `validate` 関数
 
-スキャフォールドテンプレートによって提供されたポリシーは、`validate.go`において、すでに`validate`関数を持っています。
-このチュートリアルのために、いくつかの変更を加える必要があります。
+`validate.go` 、足場テンプレートによって提供されるポリシーは、すでに`validate` 関数を持っている。
+このチュートリアルでは、これに少し変更を加える必要がある。
 
-完成時の関数は次のようになります：
+これが、完成したときの機能のあるべき姿である：
 
 [,go]
 ----
@@ -101,16 +101,16 @@ func validate(payload []byte) ([]byte, error) {
 }
 ----
 
-コードには`NOTE`セクションがあります：
+コードには`NOTE` ：
 
-. JSONペイロードをアンマーシャルして`kubewarden_protocol.ValidationRequest`を作成します。
-. `settings.go`ファイルで以前に定義した関数を使用して`Settings`オブジェクトを作成します。
-. `ValidationRequest`の一部であるPodの生のJSON表現にアクセスします。
-. Podオブジェクトをアンマーシャルします。
-. Podのラベルを反復処理します。
-ポリシーに違反しているラベルを特定するために、`validateLabel`という新しい関数を使用します。
+. JSONペイロードをアンマーシャリングして`kubewarden_protocol.ValidationRequest` 。
+. 先に`settings.go` ファイルで定義した関数を使用して、`Settings` オブジェクトを作成する。
+. `ValidationRequest` の一部であるPodの生のJSON表現にアクセスする。
+. Podオブジェクトのunmarshal。
+. Podのラベルを反復処理する。
+`validateLabel` 」という新しい関数を使い、ポリシー違反のラベルを特定する。
 
-`validate.go`ファイルで`validateLabel`関数も定義する必要があります：
+また、`validate.go` ファイルで`validateLabel` 関数を定義する必要がある：
 
 [,go]
 ----
@@ -133,10 +133,10 @@ func validateLabel(label, value string, settings *Settings) error {
 
 == 検証コードのテスト
 
-これで、検証コードが正しく動作しているかを確認するためのユニットテストを書くことができます。
-`validate_test.go`ファイル内のテストを見つけます。
+これで、検証コードの動作をチェックするためのユニットテストを書くことができる。
+`validate_test.go` ファイルからテストを探す。
 
-スキャフォールディングファイルの内容をこれに合わせて置き換えるべきです：
+これに合わせて足場ファイルの内容を置き換える必要がある：
 
 .`validate_test.go`
 [%collapsible]
@@ -284,8 +284,8 @@ func TestValidateLabel(t *testing.T) {
 
 ======
 
-テストは「テストケース駆動」アプローチを使用します。
-テストケースが必要とするデータを保持する`struct`を定義することから始めます。`NOTE 1`を参照してください：
+このテストは「テストケース駆動型」のアプローチを採用している。
+テストケースに必要なデータを保持する`struct` を定義することから始めます。`NOTE 1` を参照してください：
 
 [,go]
 ----
@@ -297,11 +297,11 @@ struct {
 }
 ----
 
-その後、いくつかのテストケースを宣言します。
-それらは、上の大きな折りたたみ可能なコードブロック内で➀から➅までの開始行がマークされています。
+そして、いくつかのテストケースを宣言する。
+上の大きな折りたたみ可能なコードブロックの➀から➅にスタートラインが記されている。
 
-例えば、ラベルがないPodは有効と見なすべきです。
-これらの入力値を使ってテストできます：
+例えば、ラベルのないポッドは有効であると考えるべきである。
+これらの入力値でテストすることができる：
 
 [,go]
 ----
@@ -313,25 +313,25 @@ struct {
 }
 ----
 
-テストはこのように新しいシナリオを定義します：`NOTE 2`。
-ここでは、次のコードを使用して異なるテストケースを繰り返します：
+`NOTE 2` まで、テストはこの方法で新しいシナリオを定義する。
+ここでは、以下のコードを使用して、さまざまなテストケースを繰り返し実行する：
 
-. `testCase`から提供されたデータを使用して`BasicSettings`オブジェクトを作成します。
-. `testCase`で定義されたラベルを割り当てて`Pod`オブジェクトを作成します。
-. `payload`オブジェクトを作成します。{short-project-name} SDKのヘルパー関数を使用してこれを行います：`kubewarden_testing.BuildValidationRequest`。
-この関数は、リクエストに関するオブジェクト、`Pod`、および設定を説明するオブジェクト、`BasicSettings`インスタンスを入力として受け取ります。
-. 最後に、コードはあなたの`validate`関数を呼び出し、結果をチェックします。
+. `testCase` から提供されるデータを使用して、`BasicSettings` オブジェクトを作成する。
+. `Pod` オブジェクトを作成し、`testCase` で定義したラベルを割り当てる。
+. `payload` オブジェクトを作成する。これには{short-project-name} SDK のヘルパー関数`kubewarden_testing.BuildValidationRequest` を使用します。
+この関数は、リクエストの対象であるオブジェクト、`Pod` 、および設定を記述するオブジェクト、`BasicSettings` インスタンスを入力として受け取る。
+. 最後に、`validate` 関数を呼び出し、その結果をチェックする。
 
-これで、`settings_test.go`で定義されたものを含むすべてのユニットテストを実行できます：
+これで、`settings_test.go` で定義したものを含め、すべてのユニットテストを実行できるようになった：
 
 [,console]
 ----
 make test
 ----
 
-これにより、次の出力が生成されます：
+この結果、次のような出力が得られる：
 
-.`make test`からの出力
+.出力 `make test`
 [%collapsible]
 ======
 
@@ -376,32 +376,33 @@ make: *** [Makefile:29: test] Error 1
 
 ======
 
-ご覧の通り、すべての`Settings`テストは合格していますが、`TestValidateLabel`のテストケースの1つは合格していません：
+ご覧の通り、`Settings` のテストはすべてパスしているが、`TestValidateLabel` のテストケースでパスしていないものがある：
 
 [,console]
 ----
 validate_test.go:126: Unexpected acceptance with pod labels: map[owner:team-kubewarden], denied labels: Set{hello}, constrained labels: map[cc-center:team-\d+]
 ----
 
-このシナリオでは、ポリシー設定はPodsにラベルを持たせる必要があると述べています。キーは`cc-center`で、`team-\d+`の正規表現を満たす必要があります。
-テストされたPodにはこのラベルがないため、拒否する必要があります。
-しかし、これは発生していないので、次のセクションで修正できます。
+このシナリオでは、ポリシーの設定により、Pod は`team-\d+` 正規表現を満たすキー`cc-center` を持つラベルを持つ必要があります。
+テストされたポッドにはこのラベルがないので、却下するべきだ。
+しかし、これは起こっていないので、次のセクションで修正することができる。
 
 [NOTE]
 ====
-ユニットテストの出力に`NATIVE: |{"level":"debug","message":"validating pod object","name":"test-pod","namespace":"default"}`のような行が表示される理由を疑問に思っているかもしれません。
+単体テストの出力になぜ次のような行があるのか不思議に思うかもしれない。
+`NATIVE: |{"level":"debug","message":"validating pod object","name":"test-pod","namespace":"default"}`
 
-ポリシー内の`logger`ステートメントはこの出力を生成します。
-これは、コードがWebAssemblyコンテキストの外で実行されるときのみ発生します。
-ポリシーが{short-project-name}で評価されるときにはこれが発生せず、そのコンテキストでは`logger`ステートメントがOpenTelemetryイベントを発生させます。
+ポリシーの`logger` 。
+これは、コードがWebAssemblyコンテキストの外部で実行される場合にのみ発生します。
+これは、ポリシーが{short-project-name} で評価されるときには起こりません。そのコンテキストでは、`logger` ステートメントが、代わりに OpenTelemetry イベントを発行します。
 ====
 
 
-=== 壊れたユニットテストを修正してください
+=== 壊れたユニットテストを修正する
 
-発見した壊れたテストを修正するには、`validate`の`validate.go`で検証関数に変更を加える必要があります。
+あなたが発見した壊れたテストを修正するには、`validate.go` の`validate` バリデーション関数を変更する必要があります。
 
-現在、あなたの検証ロジックのコアは以下の行です：
+現在、バリデーション・ロジックの中核は以下の行だ：
 
 [,go]
 ----
@@ -414,10 +415,10 @@ for label, value := range pod.Metadata.Labels {
 }
 ----
 
-ここでは、各ラベルが拒否されていないこと、そしてユーザーによって指定された制約のいずれにも違反していないことを確認します。
-しかし、Podが`Settings.ConstrainedLabels`で指定されたすべてのラベルを持っていることを確認していません。
+ここでは、各ラベルを繰り返しチェックして、拒否されていないことと、ユーザーによって指定された制約のいずれかに違反していないことを確認する。
+しかし、ポッドが`Settings.ConstrainedLabels` で指定されたラベルをすべて持っていることを確認していない。
 
-新しいコードを`for`ループの直後に追加してください：
+`for` ループの直後に新しいコードを追加する：
 
 [,go]
 ----
@@ -434,16 +435,16 @@ for requiredLabel := range settings.ConstrainedLabels {
 }
 ----
 
-ユニットテストを再度実行してください：
+ユニットテストをもう一度実行する：
 
 [,console]
 ----
 make test
 ----
 
-これにより、次の出力が得られます：
+この出力：
 
-.最終的な`make test`からの出力
+.ファイナルからの出力 `make test`
 [%collapsible]
 ======
 
@@ -485,5 +486,5 @@ ok      github.com/kubewarden/go-policy-template        0.003s
 
 ======
 
-ご覧の通り、今回はすべてのテストが合格しました。
-これで次のステップであるエンドツーエンドテストの作成に進むことができます。
+ご覧の通り、今回はすべてのテストがパスした。
+これで次のステップ、エンド・ツー・エンドのテストを書くことができる。
