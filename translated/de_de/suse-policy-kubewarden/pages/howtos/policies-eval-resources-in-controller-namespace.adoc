@@ -1,24 +1,24 @@
 include::partial$variables.adoc[]
 
-= Erlauben von Bewertungen im Namespace des Admission Controllers
-:description: So konfigurieren Sie den Admission Controller, um die Richtlinienevaluierung in seinem eigenen Namespace zuzulassen
-:keywords: ["Richtlinien", "ClusterAdmissionPolicies", "ClusterAdmissionPoliciesGroup", "Konfiguration", "Namespaces"]
+= Zulassen von Bewertungen im Namensraum des Zulassungssteuerers
+:description: So konfigurieren Sie den Admission Controller so, dass er die Richtlinienevaluierung in seinem eigenen Namespace zulässt
+:keywords: ["policies", "ClusterAdmissionPolicies", "ClusterAdmissionPoliciesGroup", "configuration", "namespaces"]
 :doc-persona: ["kubewarden-operator"]
 :doc-type: ["howto"]
 :doc-topic: ["operator-manual", "policies"]
 
-Standardmäßig erlaubt der Admission Controller nicht, dass Richtlinien Ressourcen in seinem eigenen Namespace evaluieren. Dies verhindert Fehlkonfigurationen, die die {short-project-name}-Installation beschädigen könnten.
+Standardmäßig erlaubt der Admission Controller den Richtlinien nicht, Ressourcen in seinem eigenen Namensraum zu bewerten. Dies verhindert Fehlkonfigurationen, die die Installation von {short-project-name} stören könnten.
 
-Diese Sicherheitsmaßnahme wird in zwei Schichten implementiert. Die erste Schicht wird durch das `+--always-accept-admission-reviews-on-deployments-namespace+` CLI-Flag gesteuert.
-Dieses Flag, das standardmäßig in den Helm-Charts aktiviert ist, sorgt dafür, dass der Controller die `+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+` Umgebungsvariable in den PolicyServer-Implementierungen konfiguriert. Diese Variable teilt dem Policy-Server mit, dass er immer Zulassungsprüfungen aus dem im Variablen definierten Namespace akzeptieren soll. Die zweite Schicht ist der Admission Controller selbst, der standardmäßig einen Namespace-Selektor zu clusterweiten Richtlinien hinzufügt, um den Namespace zu überspringen, in dem der Controller läuft.
+Diese Sicherheitsmaßnahme wird auf zwei Ebenen umgesetzt. Die erste Schicht wird durch das CLI-Flag `+--always-accept-admission-reviews-on-deployments-namespace+` gesteuert.
+Dieses Flag, das in den Helm-Charts standardmäßig aktiviert ist, veranlasst den Controller, die Umgebungsvariable `+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+`in den PolicyServer-Einsätzen zu konfigurieren. Diese Variable weist den Richtlinienserver an, immer Zulassungsprüfungen aus dem in der Variable definierten Namensraum zu akzeptieren. Die zweite Ebene ist der Admission Controller selbst, der standardmäßig einen Namespace-Selektor zu clusterweiten Richtlinien hinzufügt, um den Namespace, in dem der Controller läuft, zu überspringen.
 
-In einigen Szenarien möchten Clusteradministratoren jedoch, dass Richtlinien Ressourcen in diesem Namespace evaluieren. Diese Seite erklärt, wie man dies erreicht, indem man beide Schutzschichten deaktiviert.
+In einigen Szenarien möchten Cluster-Administratoren jedoch möglicherweise, dass die Richtlinien Ressourcen in diesem Namensraum bewerten. Auf dieser Seite wird erklärt, wie man das macht, indem man beide Schutzebenen ausschaltet.
 
-== Entfernen Sie die Umgebungsvariable zum Schutz des PolicyServers
+== Entfernen Sie die Umgebungsvariable PolicyServer protection
 
-Der erste Schritt besteht darin, den Controller so zu konfigurieren, dass er die `+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+` Umgebungsvariable in den PolicyServer-Bereitstellungen nicht setzt.
+Der erste Schritt besteht darin, den Controller so zu konfigurieren, dass die Umgebungsvariable`+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+` in den PolicyServer-Bereitstellungen nicht gesetzt wird.
 
-Um dies zu tun, führen Sie ein Upgrade Ihrer {short-project-name} Installation durch und setzen Sie den `+alwaysAcceptAdmissionReviewsOnDeploymentsNamespace+`-Wert des `+kubewarden-controller+`-Helm-Charts auf `+false+`:
+Aktualisieren Sie dazu Ihre {short-project-name} Installation und setzen Sie den`+alwaysAcceptAdmissionReviewsOnDeploymentsNamespace+` Wert des`+kubewarden-controller+` Helm-Diagramms auf `+false+`:
 
 [source,console]
 ----
@@ -27,19 +27,19 @@ helm upgrade -n kubewarden
   kubewarden-controller kubewarden/kubewarden-controller
 ----
 
-Diese Änderung ermöglicht es Policy-Servern, Ressourcen aus jedem Namespace evaluieren.
-Sobald dies erledigt ist, können Richtlinien so konfiguriert werden, dass sie Zulassungsprüfungen aus dem {short-project-name} Namespace evaluieren.
+Diese Änderung ermöglicht es Richtlinienservern, Ressourcen aus jedem Namensraum zu bewerten.
+Sobald dies geschehen ist, können Richtlinien so konfiguriert werden, dass sie Zulassungsprüfungen aus dem Namensraum {short-project-name} bewerten.
 
-== Richten Sie Richtlinien ein, um Ressourcen im Namespace des Admission Controllers evaluieren.
+== Konfigurieren Sie Richtlinien zur Bewertung von Ressourcen im Namensraum des Admission Controllers
 
-Um einer Richtlinie zu erlauben, Ressourcen zu evaluieren, die im Namespace des Admission Controllers erstellt wurden, implementieren Sie clusterweite Richtlinien mit dem `+allowInsideAdmissionControllerNamespace+` Feld in der Spezifikation, das auf `+true+` gesetzt ist:
+Damit eine Richtlinie Ressourcen auswerten kann, die im Namensraum des Admission Controllers erstellt wurden, stellen Sie clusterweite Richtlinien bereit, bei denen das Feld `+allowInsideAdmissionControllerNamespace+`in der Spezifikation auf `+true+` gesetzt ist:
 
 [NOTE]
-.Und die namespaced Richtlinien?
+.Und die Namespaced-Richtlinien?
 ====
 Dieses Spezifikationsfeld ist nur in clusterweiten Richtlinien verfügbar.
-Da namespaced Richtlinien Ressourcen im selben Namespace evaluieren, in dem sie implementiert werden, macht es keinen Sinn, dieses Feld zu ihren CRDs hinzuzufügen.
-Darüber hinaus sollte der Namespace des Admission Controllers von Clusterbetreibern verwaltet werden, die entscheiden können, ob sie dort eine Richtlinie implementieren.
+Da Namespaced Policies Ressourcen in demselben Namespace auswerten, in dem sie bereitgestellt werden, ist es nicht sinnvoll, dieses Feld zu ihren CRDs hinzuzufügen.
+Darüber hinaus sollte der Namensraum des Zulassungsprüfers von den Betreibern des Clusters verwaltet werden, die entscheiden können, ob eine Richtlinie dort eingesetzt werden soll.
 ====
 
 [source,yaml]
@@ -67,10 +67,10 @@ spec:
   allowInsideAdmissionControllerNamespace: true
 ----
 
-Diese Konfigurationsoption, die standardmäßig `+false+` ist, bewirkt, dass der Controller das Hinzufügen des Namespace-Selectors überspringt, der den Namespace des Admission Controllers ausschließt, sodass die Richtlinie Ressourcen aus allen Namespaces, einschließlich dieses Namespaces, evaluieren kann.
+Mit dieser Konfigurationsoption, die standardmäßig `+false+` lautet, überspringt der Controller das Hinzufügen des Namespace-Selektors, der den Namespace des Admission Controllers ausschließt, so dass die Richtlinie Ressourcen aus allen Namespaces, einschließlich dieses Namespaces, bewerten kann.
 
 [NOTE]
 .Was ist mit meinen benutzerdefinierten Namespace-Selektoren?
 ====
-Die CRDs der Richtlinien erlauben es den Benutzern ebenfalls, ihre eigenen Namespace-Selektoren zu definieren. Diese Selektoren werden nicht geändert. Das bedeutet, dass wenn ein Benutzer einen Selektor definiert, der den {short-project-name} Namespace überspringt, die Richtlinie diesen Namespace wie erwartet ignoriert.
+Mit Policies CRDs können Benutzer auch ihre eigenen Namespace-Selektoren definieren. Diese Selektoren werden nicht geändert. Das heißt, wenn ein Benutzer einen Selektor definiert, der den Namespace {short-project-name} überspringt, wird die Richtlinie diesen Namespace wie erwartet trotzdem ignorieren.
 ====
