@@ -1,0 +1,143 @@
+include::partial$variables.adoc[]
+= Verificar las imágenes de la Colección de Aplicaciones Rancher
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure PolicyServers para autenticarse con y extraer imágenes de Rancher Application Collection utilizando un Docker Config Secret.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "rancher", "installation"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "rancher", "application collection", "appco", "signature", "verification", "verify"]
+:sidebar_label: Verificar imágenes
+:current-version: {page-origin-branch}
+
+Esta sección describe cómo verificar aplicaciones e imágenes de lahttps://apps.rancher.io/[Rancher Application Collection] con {project-name}.
+
+La verificación de imágenes se realiza desplegando la políticahttps://artifacthub.io/packages/kubewarden/verify-image-signatures/verify-image-signatures[Verify Image Signatures] y configurando los PolicyServers para que extraigan las capas de firmas de las imágenes de la Colección de aplicaciones.
+
+[IMPORTANT]
+====
+
+Necesita un token de acceso o autenticación de cuenta de servicio para la Colección de aplicaciones.
+
+====
+
+
+== Autenticación en Rancher Application Collection
+
+Siguiendo las instrucciones dehttps://docs.apps.rancher.io/get-started/authentication/[documentación de Application Collection], cree un token de acceso y configure el clúster para que se extraiga del registro de Application Collection, con un Docker Config Secret:
+
+[subs="+attributes",console]
+----
+$ kubectl create secret docker-registry application-collection \
+  --docker-server=dp.apps.rancher.io \
+  --docker-username=<mymail> \
+  --docker-password=<mytoken>
+----
+
+== Crear Secret para el PolicyServer para que puedan extraer de Rancher Application Collection
+
+El PolicyServer en uso necesita configuración para que pueda extraer las capas de imágenes que contienen las firmas.
+
+Siga las xref:/howtos/policy-servers/02-private-registry.adoc[instrucciones de los registros privados] de los servidores de políticas para crear un Docker Config Secret *en el espacio de nombres PolicyServer*. Para ello, instancie un Secret con el mismo contenido que el anterior `+application-collection+`.
+
+Para PolicyServer `+default+`, instalado con la tabla `+kubewarden-defaults+` Helm bajo el espacio de nombres `+kubewarden+`, sería:
+
+[subs="+attributes",console]
+----
+$ kubectl create secret docker-registry application-collection-kw -n kubewarden \
+  --docker-server=dp.apps.rancher.io \
+  --docker-username=<mymail> \
+  --docker-password=<mytoken>
+----
+
+== Configurar PolicyServers para utilizar el nuevo Secreto
+
+Si utiliza el PolicyServer `+default+` del gráfico de Helm `+kubewarden-defaults+`, configúrelo con el imagePullSecret `+application-collection-kw+`. Esto en el mismo espacio de nombres y se hace mediante el establecimiento de los siguientes valores para el gráfico:
+
+[subs="+attributes",console]
+----
+$ helm upgrade -i --wait --namespace kubewarden \
+  --create-namespace kubewarden-defaults kubewarden/kubewarden-defaults \
+  --reuse-values \
+  --set policyServer.imagePullSecret=application-collection-kw
+----
+
+Si está utilizando otros PolicyServers, configure susxref:reference/CRDs.adoc#_policyserverspec[`+spec.imagePullSecret+`]. El Secret debe estar en el mismo espacio de nombres que el PolicyServer.
+
+== Aplicar la política
+
+Puede aplicar una ClusterAdmissionPolicy haciendo uso de la políticahttps://artifacthub.io/packages/kubewarden/verify-image-signatures/verify-image-signatures[Verify Image Signatures]. Esta directiva comprueba todas las imágenes de contenedor de`+dp.apps.rancher.io/containers/*+`. La política apoya los registros y artefactos OCI.
+
+Puede configurar las opciones de la política con lahttps://docs.apps.rancher.io/howto-guides/verify-signatures-with-kubewarden/[clave pública] de la Colección de aplicaciones (en el momento de redactar este documento) en la matriz `+pubKeys+`.
+
+[subs="+attributes",console]
+----
+$ kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    artifacthub/pkg: verify-image-signatures/verify-image-signatures/0.2.9
+  name: check-appcollection-signatures
+spec:
+  backgroundAudit: true
+  mode: protect
+  module: ghcr.io/kubewarden/policies/verify-image-signatures:v0.2.9
+  mutating: true
+  policyServer: default
+  # On first policy call, the policy-server downloads the image layers to
+  # verify the signatures. Later on it's cached. It may be useful to increase
+  # this timeout:
+  timeoutSeconds: 30 # default 10 seconds.
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["replicationcontrollers"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      resources: ["jobs", "cronjobs"]
+      operations: ["CREATE", "UPDATE"]
+  settings:
+    modifyImagesWithDigest: true
+    rule: PublicKey
+    signatures:
+      - image: dp.apps.rancher.io/containers/*
+        pubKeys:
+          # Note: this array constitutes an AND in validation, not an OR.
+          - |-
+            -----BEGIN PUBLIC KEY-----
+            MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA02FtEt5gBywiyxbmkVsb
+            CujcBg5lur0kpEbfDk10gCcs9shVEqEO3ZsOXHursgoaDAWqdPtsYhsgczGeJz9w
+            Aw+r6BuRV8YOkE37A8s/7IOQUW0tlqtnt11OKhIiZ9+e5l3ed2H1ymKQO3dgreSy
+            rShqYdA3hrItswyp41ApF6zhjSPlR6lAmq3X4wMYLAPptmzfxigTnR4hxB5UNPhs
+            i2qA4vLrUM/i+NohECuLr1EAymvupH26HLEdM+eZnlQn+WbhIP5Grc4ba7XrBv7K
+            kywgTC7CxkiJZR0mUcUD2wTX/Je8Ewj6oPSalx09e2jtzvmU5Kr9XUyMF7Zsj5CA
+            IwIDAQAB
+            -----END PUBLIC KEY-----
+EOF
+----
+
+[subs="+attributes",console]
+----
+$ kubectl apply -f mypolicy.yml
+$ kubectl get admissionpolicies -n default # wait for status active
+----
+
+Para probarlo, despliegue un Pod con una imagen firmada desde la Colección de Aplicaciones:
+
+[subs="+attributes",console]
+----
+$ kubectl run nginx --image [dp.apps.rancher.io/containers/nginx:1.24.0](http://dp.apps.rancher.io/containers/nginx:1.24.0) --overrides='{"spec": {"imagePullSecrets":[{"name": "application-collection"}]}}'
+ pod/nginx created
+----
+
+Puede inspeccionar los registros de su servidor de políticas Pod para comprobar que se ha realizado la verificación.
