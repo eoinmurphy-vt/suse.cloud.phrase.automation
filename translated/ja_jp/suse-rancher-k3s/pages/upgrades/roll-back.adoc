@@ -1,0 +1,185 @@
+= K3のローリングバック
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+アップグレード後にK3s Kubernetesのバージョンをロールバックするには、K3sのバイナリのダウングレードとデータストアのリストアの組み合わせを使用します。ロールバックは、シングルノードSQLite、外部データストア、組み込みetcdなど、あらゆるタイプのクラスタで実行できる。以前のKubernetesマイナーバージョンにロールバックする場合は、ロールバックしたいKubernetesマイナーバージョンでデータストアのスナップショットを取得しておく必要があります。
+
+[WARNING]
+====
+データベースを復元できない場合、以前のマイナーバージョンにロールバックすることはできません。
+====
+
+== 重要な考慮事項
+
+* *バックアップ*アップグレードする前に、古いバージョンのK3sを実行しているクラスタから有効なデータベースまたはetcdスナップショットがあることを確認してください。バックアップがなければ、ロールバックは不可能だ。
+* *データ損失の可能性：*`+k3s-killall.sh+` スクリプトはK3sのプロセスを強制的に終了するため、アプリケーションが適切にシャットダウンされない場合、データが失われる可能性があります。
+* *バージョンの仕様：*ロールバックの前後には、必ずK3とコンポーネントのバージョンを確認してください。
+
+== K3sクラスタのロールバック
+
+[tabs]
+======
+
+SQLite::
++
+--
+SQLiteデータベースを使用しているときにK3sクラスタをロールバックするには、`+.db+` ファイルを、データベースのバックアップ中に作成した`+.db+` ファイルのコピーに置き換えます。
+--
+
+組み込みetcd::
++
+--
+組み込みetcdを使用しているときにK3sクラスタをロールバックするには、以下の手順に従ってください：
+
+. クラスタが実行中で、Kubernetes APIが利用可能な場合は、すべてのノードをドレインすることでワークロードを優雅に停止する：
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
+
+. 各ノードで、K3sサービスと実行中のすべてのポッドプロセスを停止する：
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. 各ノードで、K3sのバイナリを以前のバージョンにロールバックするが、K3sは起動*しない*。
+
+* インターネットアクセスのあるクラスタ：
+
+** サーバーノード：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+** エージェントノード
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+* エアギャップクラスター：
+
+** 成果物をダウンロードし、ローカルでxref:installation/airgap.adoc#_install_k3s[インストールスクリプトを]実行する。K3sが起動しないように、インストールスクリプトを実行する際に環境変数`+INSTALL_K3S_SKIP_START="true"+` 。
+
+. 最初のサーバーノードまたはxref:installation/configuration.adoc[K3s設定]ファイルに`+server:+` エントリがないノードで、クラスタ・リストアを開始します。詳細については、xref:cli/etcd-snapshot.adoc#_snapshot_restore_steps[スナップショットの復元手順を]参照してください：
++
+[,bash]
+----
+k3s server --cluster-reset --cluster-reset-restore-path=<PATH-TO-SNAPSHOT>
+----
++
+[WARNING]
+====
+これにより、etcdデータストア内のすべてのデータが上書きされる。リストアする前にスナップショットの完全性を確認する。スナップショットが大きいと復元に時間がかかるので注意。
+====
+
+. 最初のサーバーノードでK3sサービスを開始します：
++
+[,bash]
+----
+systemctl start k3s
+----
+ 
+. 他のサーバーノードで、K3sデータベースディレクトリを削除します：
++
+[,bash]
+----
+rm -rf /var/lib/rancher/k3s/server/db
+----
+ 
+. 他のサーバーノードでK3sサービスを開始します：
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. すべてのエージェントノードでK3sサービスを開始します：
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. `+systemctl status k3s+` でK3sのサービスステータスを確認する。
+--
+
+外部データベース:: 
++
+--
+外部データベース（PostgreSQL、MySQLなど）を使用している場合にK3sクラスタをロールバックするには、以下の手順に従ってください：
+
+. クラスタが実行中で、Kubernetes APIが利用可能な場合は、すべてのノードをドレインすることでワークロードを優雅に停止する：
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
++
+[NOTE]
+====
+このプロセスは、実行中のアプリケーションを中断させる可能性がある。
+====
+
+. 各ノードで、K3sサービスと実行中のすべてのポッドプロセスを停止する：
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. K3sをアップグレードする前に取得したデータベーススナップショットを復元し、データベースの整合性を検証します。例えば、PostgreSQLを使用している場合、以下のコマンドを実行する：
++
+[,bash]
+----
+pg_restore -U <DB-USER> -d <DB-NAME> <BACKUP-FILE>
+----
+
+. 各ノードで、K3sのバイナリを以前のバージョンにロールバックする。
+
+* インターネットアクセスのあるクラスタ：
+
+** サーバーノード：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" sh -
+----
+
+** エージェントノード
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" sh -
+----
+
+* エアギャップクラスター：
+
+** 成果物をダウンロードし、ローカルでxref:installation/airgap.adoc#_install_k3s[インストールスクリプトを]実行する。インストール後、`+k3s --version+` で K3s のバージョンを確認し、アップグレード前に使用していたカスタム設定を再適用してください。
+
+. 各ノードでK3sサービスを開始します：
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. `+systemctl status k3s+` でK3sのサービスステータスを確認する。
+--
+======
+
+== 検証 
+
+ロールバック後、以下を確認する：
+
+* K3sバージョン： `+k3s --version+`
+* Kubernetesクラスタの健全性： `+kubectl get nodes+`
+* アプリケーションの機能。
+* K3sのログにエラーがないか確認してください。
