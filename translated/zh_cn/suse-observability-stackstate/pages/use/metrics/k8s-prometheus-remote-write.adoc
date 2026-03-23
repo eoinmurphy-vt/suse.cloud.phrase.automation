@@ -1,0 +1,56 @@
+= 普罗米修斯远程写入
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+当您运行自己的内部部署或自行托管的 Prometheus，并在其中汇总环境的指标时，您可以在 SUSE Observability 中镜像这些指标。这样，您就可以使用 SUSE Observability 强大的拓扑和关联功能来排除 Kubernetes 环境的故障，而无需在不同工具间切换。
+
+为了实现这一点，SUSE Observability 将 Prometheus`+remote_write+` 协议作为端点公开。使用该端点，您可以配置 Prometheus 实例向 SUSE Observability 发送指标。然后，这些度量指标将被自动摄取，并可将度量指标与 SUSE Observability 观察到的组件绑定。下图显示了其工作原理：
+
+image::k8s/k8s-prometheus-remotewrite.png[普罗米修斯远程写作]
+
+== 先决条件
+
+要在 SUSE Observability 中镜像您的 Prometheus 指标，您需要查找用于向 SUSE Observability 发送指标的 API 密钥。API 密钥可在 SUSE Observability 中已安装的 Kubernetes StackPack 的描述中找到。以下步骤展示了如何查找 API 密钥：
+
+. 打开 SUSE Observability UI 并导航到 StackPacks 页面
++
+image::k8s/k8s-stackpacks.png[堆栈包]
+
+. 找到 Kubernetes StackPack 并点击它。
+. 在 StackPack 的描述中，您可以找到用于向 SUSE Observability 发送指标的 API 密钥。
++
+image::k8s/k8s-stackpacks-apikey.png[API 密钥]
+
+== 配置 Prometheus 实例
+
+要配置 Prometheus 实例向 SUSE Observability 发送指标，需要在 Prometheus 配置中添加一个新的远程写端点。这可以通过更新`+prometheus.yml+` 文件中的`+remote_write+` 部分来实现。端点身份验证有两种方式，一种是通过标头，另一种是通过基本身份验证。
+
+=== 页眉验证
+
+您可以通过在 prometheus remote_write 请求中添加`+sts-api-key+` 标头，使用 API 密钥进行身份验证。下面的示例显示了如何进行配置：
+
+[,yaml]
+----
+remote_write:
+- url: https://<tenant>.app.stackstate.io/receiver/prometheus/api/v1/write
+  headers:
+    sts-api-key: <API Key>
+----
+
+=== 基本认证
+
+通过在 prometheus remote_write 请求中添加`+basic_auth+` 部分，可以使用基本身份验证进行身份验证。由于对该 API 的请求是从无头服务发出的，因此用户名字段被设置为静态值`+apikey+` 。下面的示例显示了如何进行配置：
+
+[,yaml]
+----
+remote_write:
+- url: https://<tenant>.app.stackstate.io/receiver/prometheus/api/v1/write
+  basic_auth:
+    username: apikey
+    password: <API Key>
+----
+
+== 收尾工作
+
+将配置更改应用到 Prometheus 配置文件后，需要重新启动 Prometheus。重启后，Prometheus 将开始向 SUSE Observability 发送指标。这些指标将自动与环境的其他部分相关联，并在 SUSE Observability UI 中显示。
