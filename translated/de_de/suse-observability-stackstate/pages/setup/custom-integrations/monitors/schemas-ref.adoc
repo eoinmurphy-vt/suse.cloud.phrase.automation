@@ -1,0 +1,150 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= Schema und Referenz für Monitore
+:revdate: 2026-01-09
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+== Übersicht
+
+Auf dieser Seite werden die Schemata für eine `+Monitor+` beschrieben, zusammen mit ausführlichen Erläuterungen zu Konstrukten, Ausdruckssyntax und Semantik.
+
+== Schema für Monitor
+
+Ein Monitor gibt an, wie oft und mit welchen Argumenten eine Überwachungsfunktion laufen soll.
+
+[,yaml]
+----
+_type: "Monitor"
+name: string
+description?: string
+function: string
+arguments:
+  <dependent on monitor function>
+intervalSeconds: integer
+remediationHint?: string
+status?: "ENABLED" | "DISABLED"       # defaults to "DISABLED"
+tags:
+  <key>: <value>
+identifier?: string
+----
+
+* `+_type+`{stackstate-product-name} muss wissen, dass es sich um einen Monitor handelt, daher muss der Wert immer `+Monitor+`
+* `+name+`: Der Name des Monitors
+* `+description+`: Eine Beschreibung des Monitors.
+* `+function+`: Ein Verweis auf die Überwachungsfunktion, die die Überwachung ausführt.
+* `+intervalSeconds+`: Das Intervall, in dem der Monitor ausgeführt wird. Für regelmäßige Echtzeit-Messungen werden 30 Sekunden empfohlen. Für länger laufende analytische metrische Abfragen wird ein größeres Intervall empfohlen.
+* `+remediationHint+`: Eine Beschreibung, was der Benutzer tun kann, wenn der Monitor ausfällt. Das Format ist Markdown, mit optionaler Verwendung von Handlebars-Variablen zur Anpassung des Hinweises auf der Grundlage von Zeitreihen oder anderen Datenxref:use/alerting/k8s-add-monitors-cli.adoc#_write_the_remediation_hint[(weitere Erläuterungen weiter unten]).
+* `+status+`: Entweder `+"DISABLED"+` oder `+"ENABLED"+`. Bestimmt, ob der Monitor läuft oder nicht.
+* `+tags+`: Fügen Sie den Monitoren Tags hinzu, um sie in der Monitorübersicht Ihrer {stackstate-product-name} -Instanz zu organisieren, http://your-instance/#/monitors
+* `+identifier+`: Eine Kennung der Form `+urn:stackpack:<stackpack-name>:monitor:....+`, die den Monitor bei der Aktualisierung seiner Konfiguration eindeutig identifiziert.
+
+== Monitor-Funktionen
+
+=== Threshold
+
+Löst einen Gesundheitszustand aus, wenn ein bestimmter Schwellenwert für eine bestimmte Metrikabfrage überschritten wird. Mit xref:/use/alerting/k8s-override-monitor-arguments.adoc[Hilfe von Anmerkungen] können verschiedene Schwellenwerte für bestimmte Ressourcen festgelegt werden.
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:threshold" }}
+arguments:
+  metric:
+    query: string
+    unit: string
+    aliasTemplate: string
+  comparator: GTE | GT | LTE | LT     # how to compare metric value to threshold
+  threshold: double
+  failureState: CRITICAL | DEVIATING | UNKNOWN
+  urnTemplate: string
+  titleTemplate: string
+----
+
+* `+query+`: Eine PromQL-Abfrage. Verwenden Sie den xref:/use/metrics/k8sTs-explore-metrics.adoc[Metrik-Explorer] Ihrer Instanz {stackstate-product-name}, http://your-instance/#/metrics, und erstellen Sie damit eine Abfrage für die gewünschte Metrik.
+* `+unit+`: Die Einheit der Werte in der von der/den Abfrage(n) zurückgegebenen Zeitreihe, die für die Darstellung der Y-Achse des Diagramms verwendet wird. Alle Einheiten finden Sie in der Referenz der xref:/develop/reference/k8sTs-chart-units.adoc[unterstützten Einheiten].
+* `+aliasTemplate+`: Ein Alias für Zeitreihen im metrischen Diagramm. Hierbei handelt es sich um eine Vorlage, die Beschriftungen aus der Zeitreihe durch den Platzhalter `+${my_label}+` ersetzen kann.
+* `+comparator+`: Wählen Sie eine der Optionen LTE/LT/GTE/GT, um den Schwellenwert mit der Metrik zu vergleichen. Zeitreihen, für die `+<metric> <comparator> <threshold>+` gilt, ergeben den Fehlerzustand.
+* `+threshold+`: Ein numerischer Schwellenwert, mit dem verglichen wird.
+* `+failureState+`: Entweder "KRITISCH" oder "ABWEICHEND". "KRITISCH" wird auf {stackstate-product-name} angezeigt und "ABWEICHEND" in Orange, um den unterschiedlichen Schweregrad zu kennzeichnen.
+* `+urnTemplate+`: Eine Vorlage, um die Urne der Komponente zu konstruieren, xref:use/alerting/k8s-add-monitors-cli.adoc#_bind_the_results_of_the_monitor_to_the_correct_components[an die] ein Ergebnis des Monitors xref:use/alerting/k8s-add-monitors-cli.adoc#_bind_the_results_of_the_monitor_to_the_correct_components[gebunden] werden soll.
+* `+titleTemplate+`: Ein Titel für das Ergebnis eines Monitors. Da mehrere Monitorergebnisse an dieselbe Komponente gebunden werden können, ist es möglich, Zeitreihenbezeichnungen durch den Platzhalter `+${my_label}+` zu ersetzen.
+
+=== Abgeleiteter Zustand
+
+Leitet seinen Zustand aus den Abhängigkeiten der Komponenten ab, deren Gesundheitszustand auf Beobachtungen beruht. Sie erzeugt den kritischsten Zustand der obersten Abhängigkeiten.
+Weitere Informationen finden Sie auf der Seite xref:/setup/custom-integrations/monitors/derived-state-monitors.adoc[Abgeleitete Zustandsüberwachungen].
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:derived-state-monitor" }}
+arguments:
+  componentTypes: string
+----
+
+* `+componentTypes+`: Die Komponententypen, die zu abgeleiteten Zuständen beitragen.  Angegeben als eine einzelne Zeichenfolge von `+,+` (Komma) getrennten Werten
+
+=== Topologischer Schwellenwert
+
+Löst einen Gesundheitszustand aus, wenn ein bestimmter Schwellenwert für eine bestimmte Metrikabfrage überschritten wird. Die Metrikabfrage kann auf den Namen, die Tags und die Eigenschaften der Komponenten verweisen, die von der Topologieabfrage zurückgegeben werden. Mit xref:/use/alerting/k8s-override-monitor-arguments.adoc[Hilfe von Anmerkungen] können verschiedene Schwellenwerte für bestimmte Ressourcen festgelegt werden.
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:common:monitor-function:topological-threshold"  }}
+arguments:
+  queries:
+    topologyQuery: string
+    promqlQuery: string
+    aliasTemplate: string
+    unit: string
+  comparator: GTE | GT | LTE | LT     # how to compare metric value to threshold
+  threshold: double
+  failureState: CRITICAL | DEVIATING | UNKNOWN
+  titleTemplate: string
+----
+
+* `+queries+`: Die auszuführenden Abfragen
+** `+topologyQuery+`: STQL-Abfrage zur Auswahl von Komponenten
+** `+promqlQuery+`: PromQL-Abfrage, die Beschriftungen und Eigenschaften von Komponenten zur Auswahl von Zeitreihen verwenden kann
+** `+unit+`: Die Einheit der Werte in der von der/den Abfrage(n) zurückgegebenen Zeitreihe, die für die Darstellung der Y-Achse des Diagramms verwendet wird. Alle Einheiten finden Sie in der Referenz der xref:/develop/reference/k8sTs-chart-units.adoc[unterstützten Einheiten].
+** `+aliasTemplate+`: Ein Alias für Zeitreihen im metrischen Diagramm. Hierbei handelt es sich um eine Vorlage, die Beschriftungen aus der Zeitreihe durch den Platzhalter `+${my_label}+` ersetzen kann.
+* `+comparator+`: Wählen Sie eine der Optionen LTE/LT/GTE/GT, um den Schwellenwert mit der Metrik zu vergleichen. Zeitreihen, für die `+<metric> <comparator> <threshold>+` gilt, ergeben den Fehlerzustand.
+* `+threshold+`: Ein numerischer Schwellenwert, mit dem verglichen wird.
+* `+failureState+`: Entweder "KRITISCH" oder "ABWEICHEND". "KRITISCH" wird auf {stackstate-product-name} angezeigt und "ABWEICHEND" in Orange, um den unterschiedlichen Schweregrad zu kennzeichnen.
+* `+titleTemplate+`: Ein Titel für das Ergebnis eines Monitors. Da mehrere Monitorergebnisse an dieselbe Komponente gebunden werden können, ist es möglich, Zeitreihenbezeichnungen durch den Platzhalter `+${my_label}+` zu ersetzen.
+
+=== Dynamic Threshold
+
+Warnungen, wenn der aktuelle Wert außerhalb des prognostizierten Basisintervalls liegt, das dynamisch auf der Grundlage historischer Daten berechnet wird, wobei wöchentliche und tägliche saisonale Muster berücksichtigt werden.
+Diese Überwachungsfunktion ist nur verfügbar, wenn der Autonomous Anomaly Detector Stackpack installiert ist.
+
+Weitere Informationen finden Sie auf der Seite xref:/setup/custom-integrations/monitors/dynamic-threshold-monitors.adoc[Dynamische Schwellenwertmonitore].
+
+[,yaml]
+----
+function: {{ get "urn:stackpack:aad-v2:shared:monitor-function:dt" }}
+arguments:
+  telemetryQuery:
+    query: string
+    unit: string
+    aliasTemplate: string
+  topologyQuery: string
+  falsePositiveRate: float
+  checkWindowMinutes: integer
+  historicWindowMinutes: integer
+  historySizeWeeks: 1 | 2 | 3 (integer)
+  includePreviousDay: boolean
+  removeTrend: boolean
+----
+
+* `+telemetryQuery+`: Telemetrie zur Bewertung
+** `+query+`: PromQL-Abfrage, die für Baselining und Anomalieerkennung verwendet wird
+** `+unit+`: Die Einheit der Werte in der von der/den Abfrage(n) zurückgegebenen Zeitreihe, die für die Darstellung der Y-Achse des Diagramms verwendet wird. Alle Einheiten finden Sie in der Referenz der xref:/develop/reference/k8sTs-chart-units.adoc[unterstützten Einheiten].
+** `+aliasTemplate+`: Ein Alias für Zeitreihen im metrischen Diagramm. Hierbei handelt es sich um eine Vorlage, die Beschriftungen aus der Zeitreihe durch den Platzhalter `+${my_label}+` ersetzen kann.
+* `+topologyQuery+`: STQL-Abfrage zur Auswahl von Komponenten
+* `+falsePositiveRate+``+!!float 1e-8+` - die Empfindlichkeit des Überwachungsgeräts gegenüber abweichendem Verhalten.  Ein niedrigerer Wert unterdrückt mehr (falsch) positive Ergebnisse, kann aber auch zu falsch negativen Ergebnissen (unbemerkte Anomalien) führen.
+* `+checkWindowMinutes+`: z.B. `+10+` Minuten - das Kontrollfenster muss ausgewogen sein zwischen schneller Alarmierung (kleine Werte) und richtig erkannten Anomalien (hohe Werte).  Eine Handvoll Datenpunkte funktioniert in der Praxis gut.
+* `+historicWindowMinutes+``+120+` (2 Stunden) - um die aktuelle Zeit herum, aber dann vor einer oder mehreren Wochen - also von 1 Stunde vor der aktuellen Zeit bis 1 Stunde danach.  Auch die 2 Stunden vor dem Kontrollfenster werden genutzt.  Der dynamische Schwellenwertmonitor vergleicht die Verteilung dieser historischen Daten mit den Datenpunkten im Prüffenster.
+* `+historySizeWeeks+``+2+` - die Anzahl der Wochen, aus denen die Daten für den historischen Kontext genommen werden.  Kann `+1+`, `+2+` oder `+3+` sein.
+* `+removeTrend+`Bei Metriken, die einen Trend aufweisen (z. B. die Anzahl der Anfragen), so dass der absolute Wert von Woche zu Woche unterschiedlich ist, kann dieser Trend (der Durchschnittswert) berücksichtigt werden.
+* `+includePreviousDay+`Typischerweise `+false+` - für Messgrößen, die kein wöchentliches, sondern nur ein tägliches Muster aufweisen, ermöglicht dies die Verwendung aktuellerer Daten
+
+endif::[]
