@@ -1,32 +1,32 @@
 include::partial$variables.adoc[]
-= 使用 K3s 通过双向 TLS 保护 Webhook
+= 利用 K3s 的相互 TLS 确保网络钩子的安全
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:sidebar_label: 启用 K3s 的双向 TLS
-:description: 在您的 SUSE Kubernetes 发行版中，为 K3s 的安全 Webhook 实现双向传输层安全性 (mTLS) 协议。
+:sidebar_label: 使用 K3s 启用 mTLS
+:description: 在 SUSE Kubernetes 发行版中使用 K3s 实施相互传输层安全 (mTLS) 协议，以确保 webhooks 的安全。
 :keywords: ["{project-name}", kubewarden, kubernetes, security]
 :doc-persona: kubewarden-operator, kubewarden-integrator
-:doc-type: HOWTO
-:doc-topic: operator-manual, security
+:doc-type: 如何
+:doc-topic: 操作员手册，安全
 
-本指南向您展示如何在使用 https://k3s.io/[K3s] 作为 Kubernetes 发行版时，为 {project-name} 堆栈 Webhook 启用双向传输层安全性 (mTLS)。
+本指南将向您介绍在使用https://k3s.io/[] K3s 作为 Kubernetes 发布时，如何为{project-name} 栈 webhooks 启用相互传输层安全（mTLS）。
 
-有关如何加强 Webhook 的更多信息，请参阅 xref:/reference/security-hardening/webhooks-hardening.adoc[参考页面]。
+有关如何加固网络钩子的更多信息，请参阅xref:/reference/security-hardening/webhooks-hardening.adoc[参考页面]。
 
 == 先决条件
 
-在安装 K3s 之前，您需要创建一个证书颁发机构 (CA) 和一个客户端证书。您用来保护 {short-project-name} Webhook 与 Kubernetes API 服务器之间的通信。
+安装 K3s 之前，需要创建证书颁发机构（CA）和客户证书。用于确保{short-project-name} 网络钩子与 Kubernetes API 服务器之间的通信安全。
 
-第一步，创建 `/etc/rancher/k3s/admission/certs` 目录：
+第一步，创建`/etc/rancher/k3s/admission/certs` 目录：
 
 [source,console]
 ----
 sudo mkdir -p /etc/rancher/k3s/admission/certs
 ----
 
-=== 创建根 CA 和客户端证书
+=== 创建根 CA 和客户证书
 
-作为 `root` 用户，切换到 `/etc/rancher/k3s/admission/certs` 目录并创建所有所需的证书：
+以`root` 用户身份将目录更改为`/etc/rancher/k3s/admission/certs`目录，并创建所有需要的证书：
 
 [source,console]
 ----
@@ -83,7 +83,7 @@ openssl x509 -text -noout -in client.crt
 
 === 创建 Kubernetes 配置文件
 
-创建包含以下内容的 `/etc/rancher/k3s/admission/admission.yaml` 文件：
+创建`/etc/rancher/k3s/admission/admission.yaml` 文件，内容如下：
 
 [source,yaml]
 ----
@@ -103,7 +103,7 @@ plugins:
     kubeConfigFile: "/etc/rancher/k3s/admission/kubeconfig"
 ----
 
-最后，在 `/etc/rancher/k3s/admission/kubeconfig` 创建一个 `kubeconfig` 文件：
+最后，在`/etc/rancher/k3s/admission/kubeconfig` 创建`kubeconfig` 文件：
 
 [source,yaml]
 ----
@@ -119,7 +119,7 @@ users:
 
 === 创建 K3s 配置文件
 
-在 `/etc/rancher/k3s/config.yaml` 创建 K3s 配置文件：
+在`/etc/rancher/k3s/config.yaml` 上创建 K3s 配置文件：
 
 [source,yaml]
 ----
@@ -128,7 +128,7 @@ kube-apiserver-arg:
 - admission-control-config-file=/etc/rancher/k3s/admission/admission.yaml
 ----
 
-== 安装K3s
+== 安装 K3
 
 使用以下命令安装 K3s：
 
@@ -139,22 +139,22 @@ curl -sfL https://get.k3s.io | sh -
 
 等待安装完成。
 
-== 安装 {short-project-name} 堆栈
+== 安装{short-project-name} 堆栈
 
 === 先决条件
 
-颁发 Kubernetes 客户端证书的根 CA 证书需要在 {short-project-name} 堆栈中可用。
+{short-project-name} 协议栈需要获得签发 Kubernetes 客户端证书的根 CA 的证书。
 
-根 CA 可在 Kubernetes 节点的 `/etc/rancher/k3s/admission/certs/rootCA.crt` 处找到。您需要将其内容存放在 `ConfigMap` 命名空间下的 `kubewarden` 中。您将 `rootCA.crt` 文件的内容存储在名为 `client-ca.crt` 的密钥中。
+根 CA 位于 Kubernetes 节点上的`/etc/rancher/k3s/admission/certs/rootCA.crt` 。您需要将其内容放在`kubewarden` 命名空间下的`ConfigMap` 中。`rootCA.crt` 文件的内容存储在名为`client-ca.crt` 的密钥中。
 
-首先，创建 `kubewarden` 命名空间：
+首先，创建`kubewarden` 命名空间：
 
 [source,console]
 ----
 kubectl create namespace kubewarden
 ----
 
-然后在其中创建 `ConfigMap`。在 Kubernetes 节点上运行以下命令：
+然后在其中创建`ConfigMap` 。在 Kubernetes 节点上运行以下命令，就能做到这一点：
 
 [source,console]
 ----
@@ -162,16 +162,16 @@ kubectl create configmap -n kubewarden api-server-mtls \
     --from-file=client-ca.crt=/etc/rancher/k3s/admission/certs/rootCA.crt
 ----
 
-生成的 `ConfigMap` 名称为 `api-server-mtls`。
+生成的`ConfigMap` 的名称是`api-server-mtls` 。
 
-=== 安装 {short-project-name} 堆栈
+=== 安装{short-project-name} 堆栈
 
-按照 xref:/quick-start.adoc[快速入门指南] 中描述的方式安装 {short-project-name} 堆栈。遵循所有步骤，但在安装 `kubewarden-controller` Helm 图表时，请确保启用以下值：
+按照xref:/quick-start.adoc[快速入门指南]中的说明安装{short-project-name} 堆栈。按照所有步骤操作，但在安装`kubewarden-controller` Helm 图表时，确保启用以下值：
 
-* `mTLS.enable`：必须为 `true`。
-* `mTLS.configMapName`：必须是之前创建的 `ConfigMap` 的名称。
+* `mTLS.enable``true` 。
+* `mTLS.configMapName`：必须是先前创建的`ConfigMap` 的名称。
 
-`ConfigMap` 名称为 `api-server-mtls`。安装 `kubewarden-controller` 的 Helm 命令为：
+`ConfigMap` 的名称是`api-server-mtls` 。安装`kubewarden-controller` 的 Helm 命令是
 
 [source,console]
 ----
@@ -180,4 +180,4 @@ helm install --wait -n kubewarden kubewarden-controller kubewarden/kubewarden-co
     --set mTLS.configMapName=api-server-mtls
 ----
 
-一旦此命令完成，mTLS 将确保 {short-project-name} 堆栈及其 Webhook 的安装安全。
+该命令完成后，mTLS 将确保{short-project-name} 协议栈及其网络钩子的安装安全。
