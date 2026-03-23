@@ -1,0 +1,215 @@
+include::partial$variables.adoc[]
+= 端到端测试
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解如何使用 bats 和 kwctl 编写针对 TinyGo 生成的 WebAssembly 二进制文件的端到端测试并自动运行。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "golang", "end-to-end-testing"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"编写策略"、"端到端测试"、"golang"、"go"]
+:sidebar_label: 端到端测试
+:sidebar_position: 40
+:current-version: {page-origin-branch}
+
+到目前为止，您已经使用一组 Go 单元测试对策略进行了测试。
+本节将介绍如何编写针对 TinyGo 生成的实际 WebAssembly 二进制文件的端到端测试。
+
+== 先决条件
+
+请记住，您需要在开发机器上安装这些工具：
+
+* Docker 或其他容器引擎：用于构建 WebAssembly 策略。
+你将使用 TinyGo 官方容器镜像中的编译器。
+* https://github.com/bats-core/bats-core[蝙蝠]
+用于编写测试并自动执行。
+* https://github.com/kubewarden/kwctl/releases[`+kwctl+`]:
+{project-name} 提供的 CLI 工具，用于在 Kubernetes 外部运行其策略，以及其他操作。
+文档的xref:tutorials/testing-policies/index.adoc[这一部分]对此进行了介绍。
+
+== 写作测试
+
+您将使用https://github.com/bats-core/bats-core[] bats 编写测试并使其自动化。
+每项测试都有以下步骤：
+
+. 使用`+kwctl+` 运行策略。
+. 针对`+kwctl+` 生成的输出执行断言。
+
+所有端到端测试都放在一个名为`+e2e.bats+` 的文件中。
+项目脚手架项目已包含一个示例`+e2e.bats+` 。
+您需要更改其内容，以反映您的政策是如何执行的。
+在学习本教程时，您可以删除脚手架文件中的内容，代之以下面的内容。
+
+对于端到端测试，你可以使用与 Go 单元测试相同的测试夹具文件。
+
+第一项测试确保在没有提供任何设置的情况下批准申请：
+
+[,bash]
+----
+@test "accept when no settings are provided" {
+  run kwctl run -r test_data/pod.json policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request is accepted
+  [ $(expr "$output" : '.*"allowed":true.*') -ne 0 ]
+}
+----
+
+您可以使用此命令执行端到端测试：
+
+[subs="+attributes",console]
+----
+make e2e-tests
+----
+
+输出结果如下
+
+[subs="+attributes",console]
+----
+bats e2e.bats
+ ✓ accept when no settings are provided
+
+1 test, 0 failures
+----
+
+您应编写一个测试，确保在遵守用户定义的限制条件时，申请得到批准：
+
+[,bash]
+----
+@test "accept because label is satisfying a constraint" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+接下来，你可以编写一个测试，当拒绝列表中没有任何标签时，检查是否接受请求：
+
+[,bash]
+----
+@test "accept labels are not on deny list" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "bar"]}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ $(expr "$output" : '.*"allowed":true.*') -ne 0 ]
+}
+----
+
+您可以通过添加一个测试来提高测试覆盖率，该测试会因其中一个标签在拒绝列表中而拒绝请求：
+
+[,bash]
+----
+@test "reject because label is on deny list" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "owner"]}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Label owner is on the deny list.*") -ne 0 ]
+}
+----
+
+下面的测试确保当其中一个标签不符合用户提供的限制条件时，请求会被拒绝。
+
+[,bash]
+----
+@test "reject because label is not satisfying a constraint" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "team-\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*The value of cc-center doesn't pass user-defined constraint.*") -ne 0 ]
+}
+----
+
+现在，如果找不到其中一个受限标签，就可以确保验证失败：
+
+[,bash]
+----
+@test "reject because constrained label is missing" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"organization": "\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Constrained label organization not found inside of Pod.*") -ne 0 ]
+}
+----
+
+您要检查设置验证是否正常工作。
+您可以通过以下测试来实现这一目标：
+
+[,bash]
+----
+@test "fail settings validation because of conflicting labels" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "cc-center"], "constrained_labels": {"cc-center": "^cc-\\d+$"}}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation failed
+  [ $(expr "$output" : ".*Provided settings are not valid: These labels cannot be constrained and denied at the same time: Set{cc-center}.*") -ne 0 ]
+}
+
+@test "fail settings validation because of invalid constraint" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "^cc-[12$"}}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation failed
+  [ $(expr "$output" : ".*Provided settings are not valid: error parsing regexp.*") -ne 0 ]
+}
+----
+
+== 结论
+
+现在，八项端到端测试的覆盖率很高，可以全部运行：
+
+[subs="+attributes",shell]
+----
+$ make e2e-tests
+bats e2e.bats
+e2e.bats
+ ✓ accept when no settings are provided
+ ✓ accept because label is satisfying a constraint
+ ✓ accept labels are not on deny list
+ ✓ reject because label is on deny list
+ ✓ reject because label is not satisfying a constraint
+ ✓ reject because constrained label is missing
+ ✓ fail settings validation because of conflicting labels
+ ✓ fail settings validation because of invalid constraint
+
+8 tests, 0 failures
+----
