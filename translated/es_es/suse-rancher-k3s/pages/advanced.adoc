@@ -1,0 +1,584 @@
+= Opciones avanzadas / Configuración
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Esta sección contiene información avanzada que describe las diferentes formas en que puede ejecutar y administrar K3s, así como los pasos necesarios para preparar el SO anfitrión para el uso de K3s.
+
+== Gestión de certificados
+
+=== Certificados de autoridad de certificación
+
+K3s genera certificados de autoridad de certificación (CA) autofirmados durante el inicio del primer nodo servidor. Estos certificados CA tienen una validez de 10 años y no se renuevan automáticamente.
+
+Para obtener información sobre el uso de certificados de CA personalizados o la renovación de los certificados de CA autofirmados, consulte la xref:cli/certificate.adoc#_certificate_authority_ca_certificates[documentación del comando`+k3s certificate rotate-ca+` ].
+
+=== Certificados de cliente y servidor
+
+Los certificados de cliente y servidor de K3 tienen una validez de 365 días a partir de su fecha de emisión. Los certificados caducados o a 90 días de caducar se renuevan automáticamente cada vez que se inicia K3s.
+
+Para obtener información sobre la rotación manual de certificados de cliente y servidor, consulte la xref:cli/certificate.adoc#_client_and_server_certificates[documentación del comando`+k3s certificate rotate+` ].
+
+== Gestión de fichas
+
+Por defecto, K3s utiliza un único token estático tanto para los servidores como para los agentes. Con cuidado, esta ficha puede rotarse una vez creado el clúster.
+También es posible habilitar un segundo token estático que sólo pueda utilizarse para unirse a agentes, o crear tokens de unión temporales al estilo de `+kubeadm+` que caduquen automáticamente.
+Para más información, consulte la xref:cli/token.adoc#_k3s_token_1[documentación del comando`+k3s token+` ].
+
+== Configuración de la resolución DNS
+
+=== Comprobación de la viabilidad del servidor de nombres
+
+Al iniciarse, cada nodo comprueba los archivos en `+/etc/resolv.conf+` y `+/run/systemd/resolve/resolv.conf+` en busca de servidores de nombres loopback, multicast o link-local. 
+Si alguna de estas entradas está presente, el archivo de configuración no se utiliza, ya que dichas entradas no funcionarían correctamente dentro de los pods que https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy[heredan la configuración de resolución de nombres] de su nodo.
+Si no se encuentra ningún resolv.conf utilizable, K3s imprime un mensaje de advertencia en los registros y genera un stub resolv.conf que utiliza `+8.8.8.8+` y `+2001:4860:4860::8888+` como servidores de nombres.
+
+Si desea proporcionar a K3s una configuración de resolución alternativa sin modificar los archivos de configuración del sistema, puede utilizar la opción `+--resolv-conf+` para especificar la ruta a un archivo adecuado.
+Los archivos de configuración del resolver especificados manualmente no están sujetos a comprobaciones de viabilidad.
+
+=== Importación de configuraciones personalizadas de CoreDNS
+
+Para personalizar la configuración de CoreDNS, puede crear un ConfigMap llamado `+coredns-custom+` en el espacio de nombres `+kube-system+`.
+Las claves que coinciden con `+*.override+` se importan en el bloque del servidor `+:.53+`.
+Se pueden colocar Bloques de Servidor adicionales en claves que coincidan con `+*.server+`.
+También puede haber contenido adicional (archivos de zona, etc.), y se montan en `+/etc/coredns/custom+` en los pods de coredns.
+
+A continuación se muestra un ejemplo de ConfigMap que reenvía las búsquedas a `+example.com+` a un servidor de nombres en `+10.0.0.1+`, y sirve `+example.net+` desde un archivo de texto compatible con https://datatracker.ietf.org/doc/html/rfc1035#section-5[1035] RFC:
+
+[,yaml]
+----
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  example-com.override: |
+    forward example.com 10.0.0.1
+  example-net.server: |
+    example.net:53 {
+      log
+      errors
+      file /etc/coredns/custom/db.example.net
+    }
+  db.example.net: |
+    $ORIGIN example.net.
+    @       3600 IN SOA    sns.dns.icann.org. noc.dns.icann.org. 2017042745 7200 3600 1209600 3600
+            3600 IN NS     a.iana-servers.net.
+            3600 IN NS     b.iana-servers.net.
+    www          IN A      127.0.0.1
+                 IN AAAA   ::1
+----
+
+== Configuración de un proxy HTTP
+
+Si está ejecutando K3s en un entorno, que sólo tiene conectividad externa a través de un proxy HTTP, puede configurar sus ajustes de proxy en el servicio systemd de K3s. Estas configuraciones de proxy se utilizarán en K3s y se pasarán al containerd y kubelet incrustados. 
+
+[NOTE]
+====
+La configuración del proxy y otras variables de entorno del host NO se pasan a los Pods.
+====
+
+El script de instalación de K3s tomará automáticamente las variables `+HTTP_PROXY+`, `+HTTPS_PROXY+` y `+NO_PROXY+`, así como `+CONTAINERD_HTTP_PROXY+`, `+CONTAINERD_HTTPS_PROXY+` y `+CONTAINERD_NO_PROXY+` del shell actual, si están presentes, y las escribirá en el archivo de entorno de su servicio systemd, normalmente:
+
+* `+/etc/systemd/system/k3s.service.env+`
+* `+/etc/systemd/system/k3s-agent.service.env+`
+
+Por supuesto, también puede configurar el proxy editando estos archivos.
+
+K3s añadirá automáticamente los rangos de IP internas de Pod y Servicio del cluster y el dominio DNS del cluster a la lista de entradas `+NO_PROXY+`. Debe asegurarse de que los rangos de direcciones IP utilizados por los propios nodos Kubernetes (es decir, las IP públicas y privadas de los nodos) están incluidos en la lista `+NO_PROXY+`, o de que se puede acceder a los nodos a través del proxy.
+
+----
+HTTP_PROXY=http://your-proxy.example.com:8888
+HTTPS_PROXY=http://your-proxy.example.com:8888
+NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+----
+
+Si desea configurar los ajustes de proxy para containerd sin afectar a K3s y al Kubelet, puede anteponer a las variables `+CONTAINERD_+`:
+
+----
+CONTAINERD_HTTP_PROXY=http://your-proxy.example.com:8888
+CONTAINERD_HTTPS_PROXY=http://your-proxy.example.com:8888
+CONTAINERD_NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+----
+
+== Uso de Docker como tiempo de ejecución de contenedores
+
+K3s incluye y utiliza por defecto https://containerd.io/[containerd], un tiempo de ejecución de contenedores estándar del sector.
+A partir de Kubernetes 1.24, el kubelet ya no incluye dockershim, el componente que permite al kubelet comunicarse con dockerd.
+K3s 1.24 y superiores incluyen https://github.com/Mirantis/cri-dockerd[cri-dockerd], que permite la actualización sin problemas desde versiones anteriores de K3s sin dejar de utilizar el tiempo de ejecución de contenedores Docker.
+
+Para utilizar Docker en lugar de containerd:
+
+. Instale Docker en el nodo K3s. Se puede utilizar uno de los Docker de Rancher https://github.com/rancher/install-docker[scripts de instalación de] para instalar Docker:
++
+[,bash]
+----
+curl https://releases.rancher.com/install-docker/20.10.sh | sh
+----
+
+. Instale los K3 utilizando la opción `+--docker+`:
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - --docker
+----
+
+. Confirme que el clúster está disponible:
++
+[,bash]
+----
+$ sudo k3s kubectl get pods --all-namespaces
+NAMESPACE     NAME                                     READY   STATUS      RESTARTS   AGE
+kube-system   local-path-provisioner-6d59f47c7-lncxn   1/1     Running     0          51s
+kube-system   metrics-server-7566d596c8-9tnck          1/1     Running     0          51s
+kube-system   helm-install-traefik-mbkn9               0/1     Completed   1          51s
+kube-system   coredns-8655855d6-rtbnb                  1/1     Running     0          51s
+kube-system   svclb-traefik-jbmvl                      2/2     Running     0          43s
+kube-system   traefik-758cd5fc85-2wz97                 1/1     Running     0          43s
+----
+
+. Confirme que los contenedores Docker se están ejecutando:
++
+[,bash]
+----
+$ sudo docker ps
+CONTAINER ID        IMAGE                     COMMAND                  CREATED              STATUS              PORTS               NAMES
+3e4d34729602        897ce3c5fc8f              "entry"                  About a minute ago   Up About a minute                       k8s_lb-port-443_svclb-traefik-jbmvl_kube-system_d46f10c6-073f-4c7e-8d7a-8e7ac18f9cb0_0
+bffdc9d7a65f        rancher/klipper-lb        "entry"                  About a minute ago   Up About a minute                       k8s_lb-port-80_svclb-traefik-jbmvl_kube-system_d46f10c6-073f-4c7e-8d7a-8e7ac18f9cb0_0
+436b85c5e38d        rancher/library-traefik   "/traefik --configfi…"   About a minute ago   Up About a minute                       k8s_traefik_traefik-758cd5fc85-2wz97_kube-system_07abe831-ffd6-4206-bfa1-7c9ca4fb39e7_0
+de8fded06188        rancher/pause:3.1         "/pause"                 About a minute ago   Up About a minute                       k8s_POD_svclb-traefik-jbmvl_kube-system_d46f10c6-073f-4c7e-8d7a-8e7ac18f9cb0_0
+7c6a30aeeb2f        rancher/pause:3.1         "/pause"                 About a minute ago   Up About a minute                       k8s_POD_traefik-758cd5fc85-2wz97_kube-system_07abe831-ffd6-4206-bfa1-7c9ca4fb39e7_0
+ae6c58cab4a7        9d12f9848b99              "local-path-provisio…"   About a minute ago   Up About a minute                       k8s_local-path-provisioner_local-path-provisioner-6d59f47c7-lncxn_kube-system_2dbd22bf-6ad9-4bea-a73d-620c90a6c1c1_0
+be1450e1a11e        9dd718864ce6              "/metrics-server"        About a minute ago   Up About a minute                       k8s_metrics-server_metrics-server-7566d596c8-9tnck_kube-system_031e74b5-e9ef-47ef-a88d-fbf3f726cbc6_0
+4454d14e4d3f        c4d3d16fe508              "/coredns -conf /etc…"   About a minute ago   Up About a minute                       k8s_coredns_coredns-8655855d6-rtbnb_kube-system_d05725df-4fb1-410a-8e82-2b1c8278a6a1_0
+c3675b87f96c        rancher/pause:3.1         "/pause"                 About a minute ago   Up About a minute                       k8s_POD_coredns-8655855d6-rtbnb_kube-system_d05725df-4fb1-410a-8e82-2b1c8278a6a1_0
+4b1fddbe6ca6        rancher/pause:3.1         "/pause"                 About a minute ago   Up About a minute                       k8s_POD_local-path-provisioner-6d59f47c7-lncxn_kube-system_2dbd22bf-6ad9-4bea-a73d-620c90a6c1c1_0
+64d3517d4a95        rancher/pause:3.1         "/pause"
+----
+
+== Uso de etcdctl
+
+etcdctl proporciona una CLI para interactuar con los servidores etcd. K3s no incluye etcdctl.
+
+Si desea utilizar etcdctl para interactuar con el etcd integrado de K3s, instale etcdctl utilizando la https://etcd.io/docs/latest/install/[documentación oficial de].
+
+[,bash]
+----
+ETCD_VERSION="v3.5.5"
+ETCD_URL="https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+curl -sL ${ETCD_URL} | sudo tar -zxv --strip-components=1 -C /usr/local/bin
+----
+
+A continuación, puede utilizar etcdctl configurándolo para que utilice los certificados y claves gestionados por K3s para la autenticación:
+
+[,bash]
+----
+sudo etcdctl version \
+  --cacert=/var/lib/rancher/k3s/server/tls/etcd/server-ca.crt \
+  --cert=/var/lib/rancher/k3s/server/tls/etcd/client.crt \
+  --key=/var/lib/rancher/k3s/server/tls/etcd/client.key
+----
+
+== Configuración de containerd
+
+[IMPORTANT]
+.Versión Puerta
+====
+K3s incluye containerd 2.0 a partir de las versiones de febrero de 2025: v1.31.6+k3s1 y v1.32.2+k3s1.
+Ten en cuenta que containerd 2.0 prefiere config versión 3, mientras que containerd 1.7 prefiere config versión 2.
+====
+
+K3s generará un archivo de configuración para containerd en `+/var/lib/rancher/k3s/agent/etc/containerd/config.toml+`, utilizando valores específicos para el cluster actual y la configuración de nodos.
+
+Para una personalización avanzada, puede crear una plantilla containerd config en el mismo directorio:
+
+* Para containerd 2.0, coloque una plantilla de configuración de la versión 3 en `+config-v3.toml.tmpl+`.
++
+Consulte la https://github.com/containerd/containerd/blob/release/2.0/docs/cri/config.md[documentación de] para obtener más información.
+* Para containerd 1.7 y anteriores, coloque una plantilla de configuración de la versión 2 en `+config.toml.tmpl+`.
++
+Consulte la https://github.com/containerd/containerd/blob/release/1.7/docs/cri/config.md[documentación de] para obtener más información.
+
+Containerd 2.0 es compatible con versiones anteriores de configuración, y k3s continuará renderizando la configuración heredada de la versión 2 desde `+config.toml.tmpl+` si no se encuentra `+config-v3.toml.tmpl+`.
+
+El archivo de plantilla se convierte en la configuración de containerd mediante la biblioteca https://pkg.go.dev/text/template[`+text/template+`] biblioteca.
+Consulte `+ContainerdConfigTemplateV3+` y `+ContainerdConfigTemplate+` en https://github.com/k3s-io/k3s/blob/main/pkg/agent/templates/templates.go[`+templates.go+`] para el contenido por defecto de la plantilla.
+La plantilla se ejecuta con un https://github.com/k3s-io/k3s/blob/main/pkg/agent/templates/templates.go#L22-L33[`+ContainerdConfig+`] struct como valor de punto (argumento de datos).
+
+### Plantilla base
+
+Puede ampliar la plantilla base de K3s en lugar de copiar y pegar la plantilla completa del código fuente de K3s. Esto es útil si sólo necesita basarse en la configuración existente añadiendo algunas líneas adicionales antes o después de las predeterminadas.
+
+[,toml]
+./var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
+----
+{{ template "base" . }}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'custom']
+  runtime_type = "io.containerd.runc.v2"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'custom'.options]
+  BinaryName = "/usr/bin/custom-container-runtime"
+  SystemdCgroup = true
+----
+
+[WARNING]
+====
+Para obtener los mejores resultados, NO se limite a copiar un `+config.toml+` prerrenderizado en la plantilla y realice los cambios que desee. Utilice la plantilla base o proporcione una plantilla completa basada en los valores predeterminados de k3s enlazados anteriormente.
+====
+
+== Soporte alternativo de tiempo de ejecución de contenedores
+
+K3s detectará automáticamente los tiempos de ejecución de contenedores alternativos si están presentes cuando se inicie K3s. Los tiempos de ejecución de contenedor soportados son:
+
+----
+crun, lunatic, nvidia, nvidia-cdi, nvidia-experimental, slight, spin, wasmedge, wasmer, wasmtime, wws
+----
+
+K3s utiliza la variable de entorno `+PATH+` del servicio para buscar los ejecutables de tiempo de ejecución del contenedor.
+Si K3s no detecta un tiempo de ejecución de contenedor instalado, asegúrese de que está presente en una ruta del sistema, que generalmente incluye:
+`+/usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin+`
+
+=== Tiempo de ejecución de contenedores NVIDIA
+
+Las GPUs NVIDIA requieren la instalación de NVIDIA Container Runtime para poder programar y ejecutar cargas de trabajo aceleradas en Pods. Para utilizar GPUs NVIDIA con K3s, realiza los siguientes pasos:
+
+. Instala el repositorio de paquetes nvidia-container en el nodo siguiendo las instrucciones de:
+ https://nvidia.github.io/libnvidia-container/
+. Instala los paquetes de ejecución del contenedor nvidia. Por ejemplo:
+`+apt install -y nvidia-container-runtime cuda-drivers-fabricmanager-515 nvidia-headless-515-server+`
+. xref:installation/installation.adoc[Instale K3s], o reinícielo si ya está instalado.
+. Confirmar que el contenedor nvidia runtime ha sido encontrado por k3s:
+ `+grep nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml+`
+
+Si estos pasos se siguen correctamente, K3s añadirá automáticamente los tiempos de ejecución de NVIDIA a la configuración de containerd, en función de los ejecutables de tiempo de ejecución que se encuentren.
+2 K3s incluye definiciones de Kubernetes RuntimeClass para todos los tiempos de ejecución alternativos compatibles. Puede seleccionar uno de ellos para sustituir a `+runc+` como tiempo de ejecución predeterminado en un nodo estableciendo el valor `+--default-runtime+` a través de la CLI o el archivo de configuración de k3s.
+
+Si no has cambiado el tiempo de ejecución predeterminado en tus nodos de GPU, debes solicitar explícitamente el tiempo de ejecución de NVIDIA configurando `+runtimeClassName: nvidia+` en las especificaciones de Pod:
+
+[,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nbody-gpu-benchmark
+  namespace: default
+spec:
+  restartPolicy: OnFailure
+  runtimeClassName: nvidia
+  containers:
+  - name: cuda-container
+    image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+    args: ["nbody", "-gpu", "-benchmark"]
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+    env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: all
+    - name: NVIDIA_DRIVER_CAPABILITIES
+      value: all
+----
+
+Tenga en cuenta que NVIDIA Container Runtime también se utiliza con frecuencia con https://github.com/NVIDIA/k8s-device-plugin/[Device Plugin] NVIDIA, con modificaciones para garantizar que las especificaciones del pod incluyan `+runtimeClassName: nvidia+`, como se mencionó anteriormente.
+
+[#_running_agentless_servers_experimental]
+== Ejecución de servidores sin agente (experimental)
+
+WARNING: Esta función es experimental.
+
+Cuando se inician con la bandera `+--disable-agent+`, los servidores no ejecutan el kubelet, el tiempo de ejecución del contenedor o CNI. No registran un recurso Nodo en el clúster y no aparecerán en la salida de `+kubectl get nodes+`.
+Dado que no alojan un kubelet, no pueden ejecutar pods ni ser gestionados por operadores que dependen de la enumeración de nodos de clúster, incluido el controlador etcd integrado y el controlador de actualización del sistema.
+
+Ejecutar servidores sin agentes puede ser ventajoso si desea ocultar sus nodos de plano de control del descubrimiento por parte de agentes y cargas de trabajo, a costa de una mayor sobrecarga administrativa causada por la falta de soporte de operadores de clúster.
+
+Por defecto, el apiserver en servidores sin agente no podrá realizar conexiones salientes a webhooks de admisión o apiservicios agregados que se ejecuten dentro del cluster. Para solucionarlo, establezca el indicador de servidor `+--egress-selector-mode+` en `+pod+` o `+cluster+`. Si cambia este indicador en un clúster existente, deberá reiniciar todos los nodos del clúster para que la opción surta efecto.
+
+== Ejecución de servidores sin raíz (experimental)
+
+WARNING: Esta función es experimental.
+
+El modo sin raíz permite ejecutar servidores K3s como usuario sin privilegios, para proteger la raíz real en el host de posibles ataques de fuga de contenedores.
+
+Consulte https://rootlesscontaine.rs/ para obtener más información sobre Kubernetes sin raíz.
+
+[#_known_issues_with_rootless_mode]
+=== Problemas conocidos con el modo Rootless
+
+* *Puertos*
++
+Cuando se ejecuta sin raíz se crea un nuevo espacio de nombres de red.  Esto significa que la instancia K3s se ejecuta con la red bastante separada del host.
+La única forma de acceder a los servicios que se ejecutan en K3s desde el host es configurar puertos de reenvío al espacio de nombres de red de K3s.
+Rootless K3s incluye un controlador que automáticamente enlazará 6443 y puertos de servicio por debajo de 1024 al host con un offset de 10000.
++
+Por ejemplo, un servicio en el puerto 80 se convertirá en 10080 en el host, pero 8080 se convertirá en 8080 sin ningún desplazamiento. Actualmente, sólo los servicios del LoadBalancer se vinculan automáticamente.
+
+* *Cgroups*
++
+No se admiten Cgroup v1 ni Hybrid v1/v2; sólo se admite Cgroup v2 puro. Si K3s no se inicia debido a la falta de cgroups cuando se ejecuta sin raíz, es probable que su nodo esté en modo híbrido, y los cgroups "que faltan" todavía están vinculados a un controlador v1.
+
+* *Clúster multinodo/multiproceso*
++
+Los clusters multinodo sin raíz, o múltiples procesos k3s sin raíz en el mismo nodo, no están soportados actualmente. Consulte https://github.com/k3s-io/k3s/issues/6488#issuecomment-1314998091[] #6488 para más detalles.
+
+=== Inicio de servidores sin raíz
+
+* Active la delegación cgroup v2, consulte https://rootlesscontaine.rs/getting-started/common/cgroup2/.
+Este paso es necesario; el kubelet rootless fallará al iniciarse sin los cgroups apropiados delegados.
+* Descargue `+k3s-rootless.service+` desde https://github.com/k3s-io/k3s/blob/main/k3s-rootless.service[`+https://github.com/k3s-io/k3s/blob/<VERSION>/k3s-rootless.service+`].
+Asegúrese de utilizar la misma versión de `+k3s-rootless.service+` y `+k3s+`.
+* Instale `+k3s-rootless.service+` en `+~/.config/systemd/user/k3s-rootless.service+`.
+No se admite la instalación de este archivo como servicio para todo el sistema (`+/etc/systemd/...+`).
+Dependiendo de la ruta del binario `+k3s+`, es posible que tenga que modificar la línea `+ExecStart=/usr/local/bin/k3s ...+` del archivo.
+* Ejecutar `+systemctl --user daemon-reload+`
+* Ejecutar `+systemctl --user enable --now k3s-rootless+`
+* Ejecute `+KUBECONFIG=~/.kube/k3s.yaml kubectl get pods -A+`, y asegúrese de que los pods están funcionando.
+
+NOTE: No intentes ejecutar `+k3s server --rootless+` en un terminal, ya que las sesiones de terminal no permiten la delegación cgroup v2.
+Si realmente necesitas probarlo en un terminal, utiliza `+systemd-run --user -p Delegate=yes --tty k3s server --rootless+` para envolverlo en un ámbito systemd.
+
+=== Configuración avanzada sin raíz
+
+Rootless K3s utiliza https://github.com/rootless-containers/rootlesskit[rootlesskit] y https://github.com/rootless-containers/slirp4netns[slirp4netns] para comunicarse entre los espacios de nombres de red del host y del usuario.
+Parte de la configuración utilizada por rootlesskit y slirp4nets puede establecerse mediante variables de entorno. La mejor forma de configurarlos es añadirlos al campo `+Environment+` de la unidad systemd k3s-rootless.
+
+|===
+| Variable | Por defecto | Descripción
+
+| `+K3S_ROOTLESS_MTU+`
+| 1500
+| Establece la MTU para las interfaces virtuales slirp4netns.
+
+| `+K3S_ROOTLESS_CIDR+`
+| 10.41.0.0/16
+| Establece el CIDR utilizado por las interfaces virtuales slirp4netns.
+
+| `+K3S_ROOTLESS_ENABLE_IPV6+`
+| autodetectado
+| Activa el soporte IPv6 de slirp4netns. Si no se especifica, se habilita automáticamente si K3s está configurado para funcionamiento en doble pila.
+
+| `+K3S_ROOTLESS_PORT_DRIVER+`
+| incorporado
+| Selecciona el controlador de puerto sin raíz; `+builtin+` o `+slirp4netns+`. Builtin es más rápido, pero enmascara la dirección de origen original de los paquetes entrantes.
+
+| `+K3S_ROOTLESS_DISABLE_HOST_LOOPBACK+`
+| verdadero
+| Controla si se habilita o no el acceso a la dirección loopback del host a través de la interfaz de puerta de enlace. Por razones de seguridad, se recomienda no modificarlo.
+|===
+
+=== Solución de problemas Rootless
+
+* Ejecute `+systemctl --user status k3s-rootless+` para comprobar el estado del demonio
+* Ejecute `+journalctl --user -f -u k3s-rootless+` para ver el registro del demonio
+* Ver también https://rootlesscontaine.rs/
+
+== Etiquetas de nodos y manchas
+
+Los agentes K3s pueden configurarse con las opciones `+--node-label+` y `+--node-taint+` que añaden una etiqueta y una mancha al kubelet. Las dos opciones sólo añaden etiquetas y/o taints xref:cli/agent.adoc#_node_labels_and_taints_for_agents[en el momento del registro], por lo que sólo pueden establecerse cuando el nodo se une por primera vez al clúster.
+
+Todas las versiones actuales de Kubernetes restringen el registro de nodos con la mayoría de las etiquetas con prefijos `+kubernetes.io+` y `+k8s.io+`, incluyendo específicamente la etiqueta `+kubernetes.io/role+`. Si intenta iniciar un nodo con una etiqueta no permitida, los K3 no se iniciarán. Como afirman los autores de Kubernetes:
+
+____
+Los nodos no pueden afirmar sus propias etiquetas de función. Los roles de nodo se utilizan normalmente para identificar tipos de nodos privilegiados o de plano de control, y permitir que los nodos se etiqueten a sí mismos en ese grupo permite que un nodo comprometido atraiga trivialmente cargas de trabajo (como conjuntos de demonios de plano de control) que confieren acceso a credenciales con mayores privilegios.
+____
+
+Consulte https://github.com/kubernetes/enhancements/blob/master/keps/sig-auth/279-limit-node-access/README.md#proposal[SIG-Auth KEP 279] para obtener más información.
+
+Si desea cambiar las etiquetas y tintas de los nodos después de registrarlos, o añadir etiquetas reservadas, debe utilizar `+kubectl+`. Consulte la documentación oficial de Kubernetes para obtener información detallada sobre cómo añadir https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/[labels.] taints y https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/#add-a-label-to-a-node[] node
+
+== Iniciar el servicio con el script de instalación
+
+El script de instalación detectará automáticamente si su sistema operativo utiliza systemd u openrc y activará e iniciará el servicio como parte del proceso de instalación.
+
+* Si se ejecuta con openrc, los registros se crearán en `+/var/log/k3s.log+`.
+* Cuando se ejecuta con systemd, los registros se crearán en `+/var/log/syslog+` y se visualizarán utilizando `+journalctl -u k3s+` (o `+journalctl -u k3s-agent+` en los agentes).
+
+Un ejemplo de deshabilitar el autoarranque y la habilitación de servicios con el script de instalación:
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_SKIP_START=true INSTALL_K3S_SKIP_ENABLE=true sh -
+----
+
+[#_running_k3s_in_docker]
+== Ejecución de K3s en Docker
+
+Hay varias formas de ejecutar K3 en Docker:
+
+[tabs]
+======
+K3d::
++
+--
+https://github.com/k3d-io/k3d[k3d] es una utilidad diseñada para ejecutar fácilmente clusters K3s multinodo en Docker.
+
+k3d hace que sea muy fácil crear clusters k3s de uno o varios nodos en docker, por ejemplo, para el desarrollo local en Kubernetes.
+
+Consulte la documentación de https://k3d.io/#installation[instalación de] para obtener más información sobre cómo instalar y utilizar k3d.
+--
+
+Docker::
++
+--
+Para utilizar Docker, también están disponibles las imágenes `+rancher/k3s+` para ejecutar el servidor y el agente K3s.
+Utilizando el comando `+docker run+`:
+
+[,bash]
+----
+sudo docker run \
+  --privileged \
+  --name k3s-server-1 \
+  --hostname k3s-server-1 \
+  -p 6443:6443 \
+  -d rancher/k3s:v1.24.10-k3s1 \
+  server
+----
+
+[NOTE]
+=====
+Debe especificar una versión válida de K3s como etiqueta; la etiqueta `+latest+` no se mantiene. +
+Las imágenes Docker no permiten un signo `+++` en las etiquetas, utilice en su lugar un `+-+` en la etiqueta.
+=====
+
+Una vez que K3s está en marcha, puede copiar el kubeconfig admin fuera del contenedor Docker para su uso:
+
+[,bash]
+----
+sudo docker cp k3s-server-1:/etc/rancher/k3s/k3s.yaml ~/.kube/config
+----
+--
+======
+
+[#_selinux_support]
+== Soporte SELinux
+
+Si está instalando K3s en un sistema en el que SELinux está habilitado por defecto (como CentOS), debe asegurarse de que se han instalado las políticas SELinux adecuadas.
+
+[tabs]
+======
+Instalación automática::
++
+El xref:installation/configuration.adoc#_configuration_with_install_script[script de instalación] instalará automáticamente el RPM de SELinux desde el repositorio RPM de Rancher si se encuentra en un sistema compatible si no se está realizando una instalación air-gapped. La instalación automática puede omitirse configurando `+INSTALL_K3S_SKIP_SELINUX_RPM=true+`.
+
+Instalación manual::
++
+--
+Las políticas necesarias pueden instalarse con los siguientes comandos:
+
+[,bash]
+----
+yum install -y container-selinux selinux-policy-base
+yum install -y https://rpm.rancher.io/k3s/latest/common/centos/9/noarch/k3s-selinux-1.6-1.el9.noarch.rpm
+----
+
+Para forzar que el script de instalación registre una advertencia en lugar de un fallo, puede establecer la siguiente variable de entorno: `+INSTALL_K3S_SELINUX_WARN=true+`.
+--
+======
+
+=== Activar la aplicación de SELinux
+
+Para aprovechar SELinux, especifique la bandera `+--selinux+` cuando inicie los servidores y agentes K3s o establezca la variable de entorno `+K3S_SELINUX=true+`..
+
+Esta opción también puede especificarse en el xref:installation/configuration.adoc#_configuration_file[archivo de configuración de] K3s.
+
+----
+selinux: true
+----
+
+El uso de un `+--data-dir+` personalizado bajo SELinux no está soportado. Para personalizarla, lo más probable es que tenga que redactar su propia póliza personalizada. Como orientación, puede consultar el repositorio https://github.com/containers/container-selinux[containers/container-selinux], que contiene los archivos de política SELinux para Container Runtimes, y el repositorio https://github.com/k3s-io/k3s-selinux[] k3s-io/k3s-selinux, que contiene la política SELinux para K3s.
+
+== Activación del Lazy Pulling de eStargz (Experimental)
+
+=== ¿Qué es tirar perezoso y eStargz?
+
+La extracción de imágenes es uno de los pasos del ciclo de vida de los contenedores que más tiempo consume.
+Según https://www.usenix.org/conference/fast16/technical-sessions/presentation/harter[Harteret, al.],
+
+____
+la extracción de paquetes representa el 76% del tiempo de arranque del contenedor, pero sólo se lee el 6,4% de esos datos
+____
+
+Para solucionar este problema, k3s admite experimentalmente _la extracción perezosa_ del contenido de las imágenes.
+Esto permite a k3s iniciar un contenedor antes de que se haya extraído toda la imagen.
+En lugar de ello, los fragmentos de contenido necesarios (por ejemplo, archivos individuales) se obtienen bajo demanda.
+Especialmente para imágenes de gran tamaño, esta técnica puede acortar la latencia de arranque del contenedor.
+
+Para activar la función lazy pulling, la imagen de destino debe estar formateada como https://github.com/containerd/stargz-snapshotter/blob/main/docs/stargz-estargz.md[_eStargz_].
+Se trata de un formato de imagen alternativo a OCI pero 100% compatible con OCI para tiradas perezosas.
+Debido a la compatibilidad, eStargz puede ser empujado a los registros de contenedores estándar (por ejemplo, ghcr.io), así como esto _sigue siendo ejecutable_ incluso en tiempos de ejecución eStargz-agnóstico.
+
+eStargz se ha desarrollado a partir del https://github.com/google/crfs[formato], pero incorpora funciones prácticas como la verificación de contenidos y la optimización del rendimiento.
+Para más detalles sobre el lazy pulling y eStargz, consulte el https://github.com/containerd/stargz-snapshotter[repositorio del proyecto].
+
+=== Configurar k3s para lazy pulling de eStargz
+
+Como se muestra a continuación, la opción `+--snapshotter=stargz+` es necesaria para el servidor y el agente k3s.
+
+[,bash]
+----
+k3s server --snapshotter=stargz
+----
+
+Con esta configuración, puede realizar un "lazy pulling" para imágenes con formato eStargz.
+El siguiente ejemplo de manifiesto Pod utiliza la imagen `+node:13.13.0+` con formato eStargz (`+ghcr.io/stargz-containers/node:13.13.0-esgz+`).
+Cuando el stargz snapshotter está activado, K3s realiza lazy pulling para esta imagen.
+
+[,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nodejs
+spec:
+  containers:
+  - name: nodejs-estargz
+    image: ghcr.io/stargz-containers/node:13.13.0-esgz
+    command: ["node"]
+    args:
+    - -e
+    - var http = require('http');
+      http.createServer(function(req, res) {
+        res.writeHead(200);
+        res.end('Hello World!\n');
+      }).listen(80);
+    ports:
+    - containerPort: 80
+----
+
+[#_additional_logging_sources]
+== Fuentes de registro adicionales
+
+https://documentation.suse.com/cloudnative/rancher-manager/latest/en/observability/logging/logging-helm-chart-options.html[Rancher logging] para K3s puede ser instalado sin usar Rancher. Para ello, deben ejecutarse las siguientes instrucciones:
+
+[,bash]
+----
+helm repo add rancher-charts https://charts.rancher.io
+helm repo update
+helm install --create-namespace -n cattle-logging-system rancher-logging-crd rancher-charts/rancher-logging-crd
+helm install --create-namespace -n cattle-logging-system rancher-logging --set additionalLoggingSources.k3s.enabled=true rancher-charts/rancher-logging
+----
+
+== Registro adicional de políticas de red
+
+Se pueden registrar los paquetes descartados por las políticas de red. El paquete se envía a la acción iptables NFLOG, que muestra los detalles del paquete, incluida la política de red que lo bloqueó.
+
+Si hay mucho tráfico, el número de mensajes de registro puede ser muy elevado. Para controlar la tasa de registro por política, configure los parámetros de iptables `+limit+` y `+limit-burst+` añadiendo las siguientes anotaciones a la política de red en cuestión:
+
+* `+kube-router.io/netpol-nflog-limit=<LIMIT-VALUE>+`
+* `+kube-router.io/netpol-nflog-limit-burst=<LIMIT-BURST-VALUE>+`
+
+Los valores por defecto son `+limit=10/minute+` y `+limit-burst=10+`. Consulte el https://www.netfilter.org/documentation/HOWTO/packet-filtering-HOWTO-7.html#:~:text=restrict%20the%20rate%20of%20matches[manual de] para obtener más información sobre el formato y los posibles valores de estos campos.
+
+Para convertir paquetes NFLOG en entradas de registro, instale ulogd2 y configure `+[log1]+` para leer en `+group=100+`. A continuación, reinicie el servicio ulogd2 para que se confirme la nueva configuración.
+Cuando un paquete es bloqueado por las reglas de la política de red, aparecerá un mensaje de registro en `+/var/log/ulog/syslogemu.log+`.
+
+Los paquetes enviados al socket netlink de NFLOG también pueden leerse utilizando herramientas de línea de comandos como tcpdump o tshark:
+
+[,bash]
+----
+tcpdump -ni nflog:100
+----
+
+Aunque es más fácil de obtener, tcpdump no mostrará el nombre de la política de red que bloqueó el paquete. En su lugar, utilice el comando tshark de wireshark para mostrar la cabecera completa del paquete NFLOG, incluido el campo `+nflog.prefix+` que contiene el nombre de la política.
+
+El registro de paquetes perdidos de la política de red no es compatible con https://github.com/k3s-io/k3s/issues/8008[las políticas de]. Si confía en el registro de paquetes perdidos con fines de diagnóstico o auditoría, asegúrese de que sus políticas incluyen un selector de pods que coincida con los pods afectados.
