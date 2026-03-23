@@ -1,7 +1,7 @@
 include::partial$variables.adoc[]
 
 = Konfigurieren von PolicyServern zur Verwendung einer privaten Sigstore-Instanz
-:description: Konfigurieren von PolicyServern zur Verwendung einer privaten oder selbst gehosteten Sigstore-Instanz zur Überprüfung von Richtlinienunterschriften in {project-name}.
+:description: Konfigurieren von PolicyServern zur Verwendung einer privaten oder selbst gehosteten Sigstore-Instanz für die Überprüfung von Richtliniensignaturen in {project-name}.
 :keywords: ["kubewarden", "kubernetes", "policyservers", "sigstore", "private sigstore", "policy signing"]
 :doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
 :doc-type: ["howto"]
@@ -9,26 +9,26 @@ include::partial$variables.adoc[]
 :sidebar_label: Verwendung einer privaten Sigstore-Instanz
 :sidebar_position: 5
 
-Sie können einen PolicyServer so konfigurieren, dass er eine private oder selbst gehostete Sigstore-Instanz zur Überprüfung von Richtlinienunterschriften verwendet, anstelle der standardmäßigen öffentlichen Sigstore-Infrastruktur. Dies ist nützlich in Air-Gapped-Umgebungen oder wenn Sie Ihre eigene Sigstore-Implementierung betreiben.
+Sie können einen PolicyServer so konfigurieren, dass er anstelle der standardmäßigen öffentlichen Sigstore-Infrastruktur eine private oder selbst gehostete Sigstore-Instanz für die Überprüfung von Richtliniensignaturen verwendet. Dies ist nützlich in Umgebungen mit Luftschleusen oder wenn Sie Ihren eigenen Sigstore-Einsatz betreiben.
 
 == Voraussetzungen
 
-* Eine laufende private Sigstore-Instanz mit zugänglichem Fulcio, Rekor, TSA und CT-Log-Diensten
-* `kubectl` Zugriff auf den `kubewarden` Namespace
-* Die https://docs.sigstore.dev/cosign/system_config/installation/[`cosign`] CLI lokal installiert.
+* Eine laufende private Sigstore-Instanz mit Zugriff auf Fulcio-, Rekor-, TSA- und CT-Log-Dienste
+* `kubectl` Zugriff auf den Namensraum `kubewarden` 
+* Die https://docs.sigstore.dev/cosign/system_config/installation/[`cosign`]lokal installierte CLI.
 * https://jqlang.org/[`jq`] lokal installiert
 
-== Schritt 1 - Generieren Sie das `ClientTrustConfig` JSON
+== Schritt 1 - Generieren Sie die `ClientTrustConfig` JSON
 
-Der PolicyServer erwartet ein `ClientTrustConfig` JSON, das die Vertrauensanker und die Signaturkonfiguration Ihrer privaten Sigstore-Instanz beschreibt.
+Der PolicyServer erwartet ein `ClientTrustConfig` JSON, das die Vertrauensanker und die Signierkonfiguration Ihrer privaten Sigstore-Instanz beschreibt.
 
-=== Zertifikate und öffentliche Schlüssel beschaffen
+=== Beschaffung von Zertifikaten und öffentlichen Schlüsseln
 
-Holen Sie Folgendes von Ihrer privaten Sigstore-Instanz ab:
+Rufen Sie die folgenden Informationen von Ihrer privaten Sigstore-Instanz ab:
 
-* `fulcio.pem` - Fulcio CA-Zertifikatkette (PEM)
-* `rekor.pub` - Rekor-Transparenzprotokoll öffentlicher Schlüssel
-* `tsa.pem` - Timestamp Authority-Zertifikatkette (PEM)
+* `fulcio.pem` - Fulcio CA-Zertifikatskette (PEM)
+* `rekor.pub` - Öffentlicher Schlüssel des Rekor-Transparenzprotokolls
+* `tsa.pem` - Zeitstempel Authority-Zertifikatskette (PEM)
 * `ctfe.pub` - CT-Log öffentlicher Schlüssel
 
 [source,shell]
@@ -48,19 +48,19 @@ kubectl get secret -o json -n tuf-system ctlog-public-key \
 ----
 
 [WARNING]
-.Sicherheitsüberlegung
+.Berücksichtigung der Sicherheit
 ====
 
-Stellen Sie sicher, dass Sie die Zertifikate und Schlüssel sicher von Ihrer Sigstore-Instanz herunterladen. Andernfalls könnten Sie {project-name} mit kompromittierten Daten konfigurieren.
+Stellen Sie sicher, dass Sie die Zertifikate und Schlüssel sicher von Ihrer Sigstore-Instanz herunterladen. Andernfalls kann es passieren, dass Sie {project-name}mit kompromittierten Daten konfigurieren.
 
-Die obigen Befehle sind Beispiele dafür, wie man das in einer Testumgebung macht.
-Konsultieren Sie das entsprechende Team in Ihrer Organisation, um zu erfahren, wie Sie diese Informationen ordnungsgemäß erhalten.
+Die obigen Befehle sind Beispiele dafür, wie man dies in einer Testumgebung tun kann.
+Wenden Sie sich an das zuständige Team in Ihrem Unternehmen, um zu erfahren, wie Sie diese Informationen ordnungsgemäß erhalten können.
 
 ====
 
-=== Generieren Sie die vertrauenswürdigen Root-Anker und die Signaturkonfiguration.
+=== Erzeugen Sie die vertrauenswürdige Root- und Signierkonfiguration
 
-Setzen Sie Umgebungsvariablen, die auf die URLs Ihres privaten Sigstore-Dienstes verweisen:
+Setzen Sie Umgebungsvariablen, die auf Ihre privaten Sigstore-Service-URLs verweisen:
 
 [source,shell]
 ----
@@ -71,7 +71,7 @@ export CTLOG_URL=https://ctlog.example.com
 export ISSUER_URL=https://oidc.example.com
 ----
 
-Führen Sie `cosign` aus, um die vertrauenswürdige Root zu generieren:
+Führen Sie `cosign` aus, um die vertrauenswürdige Wurzel zu erzeugen:
 
 [source,shell]
 ----
@@ -83,7 +83,7 @@ cosign trusted-root create \
   --out trusted_root.json
 ----
 
-Führen Sie `cosign` aus, um die Signaturkonfiguration zu generieren:
+Führen Sie `cosign` aus, um die Signierungskonfiguration zu erstellen:
 
 [source,shell]
 ----
@@ -99,12 +99,12 @@ cosign signing-config create \
 
 [NOTE]
 ====
-`--oidc-provider` ist optional. Fügen Sie es nur hinzu, wenn Ihre private Sigstore-Instanz einen dedizierten OIDC-Anbieter hat. Wenn Ihre Richtlinien mit Kubernetes-Dienstkontotoken (über `kubectl create token`) signiert sind, lassen Sie dieses Flag weg.
+`--oidc-provider` ist fakultativ. Fügen Sie ihn nur ein, wenn Ihre private Sigstore-Instanz einen eigenen OIDC-Anbieter hat. Wenn Ihre Richtlinien mit Kubernetes-Service-Kontotoken signiert werden (über `kubectl create token`), lassen Sie dieses Flag weg.
 
-Der Wert von `start-time` sollte auf ein Datum vor der Ausstellung Ihrer Zertifikate (oder dem Implementierungsdatum Ihrer Sigstore-Instanz) gesetzt werden.
+Der Wert `start-time` sollte auf ein Datum vor der Ausstellung Ihrer Zertifikate (oder das Bereitstellungsdatum Ihrer Sigstore-Instanz) gesetzt werden.
 ====
 
-Für eine vollständige Beschreibung aller verfügbaren Flags und JSON-Felddefinitionen für beide Befehle, siehe die https://docs.sigstore.dev/cosign/system_config/installation/[cosign CLI-Referenz] und die https://github.com/sigstore/protobuf-specs[Sigstore-Client-Vertrauenskonfigurationsspezifikation].
+Eine vollständige Beschreibung aller verfügbaren Flags und JSON-Felddefinitionen für beide Befehle finden Sie in derhttps://docs.sigstore.dev/cosign/system_config/installation/[cosign CLI-Referenz]und in derhttps://github.com/sigstore/protobuf-specs[Sigstore client trust config specification].
 
 === Kombinieren Sie in `trust_config.json`
 
@@ -119,9 +119,9 @@ cat << EOF > trust_config.json
 EOF
 ----
 
-== Schritt 2 - Erstellen Sie eine ConfigMap im `kubewarden` Namespace
+== Schritt 2 - Erstellen einer ConfigMap im Namespace `kubewarden` 
 
-Speichern Sie das `ClientTrustConfig` JSON in einer ConfigMap mit dem Schlüssel `sigstore-trust-config`. Die ConfigMap **muss** im Namespace des Admission Controllers sein. In diesem Beispiel ist `kubewarden`:
+Speichern Sie die `ClientTrustConfig` JSON in einer ConfigMap mit dem Schlüssel`sigstore-trust-config`. Die ConfigMap **muss** im Namensraum des Zulassungssteuerers liegen. In diesem Beispiel ist `kubewarden`:
 
 [source,shell]
 ----
@@ -129,9 +129,9 @@ kubectl --namespace kubewarden create configmap my-sigstore-trust-config \
   --from-file=sigstore-trust-config=trust_config.json
 ----
 
-== Schritt 3 - Erstellen Sie eine Verifikations-ConfigMap
+== Schritt 3 - Erstellen einer Verifizierungskonfiguration ConfigMap
 
-Erstellen Sie eine `verification_config.yaml` Datei, die die Identitätsbeschränkungen für Ihre signierten Richtlinien angibt. Zum Beispiel, wenn Sie ein Kubernetes-Service-Account-Token verwenden:
+Erstellen Sie eine Datei `verification_config.yaml`, in der die Zertifikatsidentitätseinschränkungen für Ihre signierten Richtlinien angegeben sind. Zum Beispiel bei der Verwendung eines Kubernetes-Dienstkonto-Tokens:
 
 [source,yaml]
 ----
@@ -143,7 +143,7 @@ allOf:
 anyOf: null
 ----
 
-Ersetzen Sie `<namespace>` und `<serviceaccount>` durch den Namespace und den Service-Account, die beim Signieren der Richtlinie verwendet werden.
+Ersetzen Sie `<namespace>` und `<serviceaccount>` durch den Namespace und das Dienstkonto, die beim Signieren der Richtlinie verwendet wurden.
 
 Erstellen Sie die ConfigMap:
 
@@ -155,12 +155,12 @@ kubectl --namespace kubewarden create configmap my-verification-config \
 
 [NOTE]
 ====
-Der ConfigMap-Schlüssel **muss** `verification-config` sein (nicht der Dateiname). {short-project-name} sucht nach diesem genauen Schlüssel.
+Der ConfigMap-Schlüssel **muss** `verification-config` sein (nicht der Dateiname).{short-project-name} sucht nach genau diesem Schlüssel.
 ====
 
 == Schritt 4 - Konfigurieren Sie den PolicyServer
 
-Setzen Sie `spec.sigstoreTrustConfig` und `spec.verificationConfig` auf Ihrem PolicyServer auf die Namen der ConfigMaps, die Sie erstellt haben:
+Setzen Sie `spec.sigstoreTrustConfig` und `spec.verificationConfig` auf Ihrem PolicyServer auf die Namen der von Ihnen erstellten ConfigMaps:
 
 [source,yaml]
 ----
@@ -175,14 +175,14 @@ spec:
   verificationConfig: my-verification-config
 ----
 
-Der Controller bindet die ConfigMaps in den Policy-Server-Pod ein und konfiguriert ihn so, dass er Ihre private Sigstore-Instanz zur Signaturüberprüfung verwendet und die Identitätsbeschränkungen durchsetzt, die in der Überprüfungs-Konfiguration angegeben sind.
+Der Controller bindet die ConfigMaps in den Policy-Server-Pod ein und konfiguriert ihn so, dass er Ihre private Sigstore-Instanz für die Signaturprüfung verwendet und die in der Verifizierungskonfiguration angegebenen Identitätsbeschränkungen durchsetzt.
 
 [WARNING]
-.Sicherheitsüberlegung
+.Berücksichtigung der Sicherheit
 ====
 
-Jeder Benutzer mit Schreibzugriff auf die ConfigMap, auf die in `sigstoreTrustConfig` verwiesen wird, kann die Überprüfung der Richtlinien-Signatur beeinflussen. Dies könnte es ihnen ermöglichen, eine andere Sigstore-Vertrauenswurzel zu ersetzen und die Signaturprüfungen zu umgehen.
+Jeder Benutzer mit Schreibzugriff auf die ConfigMap, die von `sigstoreTrustConfig`referenziert wird, kann die Überprüfung der Richtliniensignatur beeinflussen. Dies könnte es ihnen ermöglichen, eine andere Sigstore-Vertrauenswurzel zu ersetzen und die Signaturprüfung zu umgehen.
 
-Beschränken Sie den Zugriff auf diese ConfigMap mithilfe von Kubernetes RBAC, gemäß dem Prinzip der minimalen Berechtigung.
+Schränken Sie den Zugriff auf diese ConfigMap mit Kubernetes RBAC nach dem Prinzip der geringsten Berechtigung ein.
 
 ====
