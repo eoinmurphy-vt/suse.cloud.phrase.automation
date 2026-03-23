@@ -1,0 +1,184 @@
+include::partial$variables.adoc[]
+= Richtlinien konfigurieren
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren Sie Richtlinien, indem Sie bestimmte Namespaces auswählen oder benutzerdefinierte Ablehnungsmeldungen festlegen, und negieren Sie die Ergebnisse mit AdmissionPolicyGroup.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "policies"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "policies", "ClusterAdmissionPolicies", "AdmissionPolicies", "configuration", "namespaces"]
+:sidebar_label: Richtlinien konfigurieren
+:sidebar_position: 90
+:current-version: {page-origin-branch}
+
+== Überspringen von Namespaces für eine bestimmte Richtlinie
+
+Standardmäßig gelten die Richtlinien für alle Namespaces, für die `+PolicyServer+` konfiguriert ist.
+Wenn eine Richtlinie nur für bestimmte Namespaces gelten soll, können Sie mehrere `+AdmissionPolicies+` in jedem Namespace einrichten.
+
+Eine weitere Möglichkeit ist die Konfiguration von `+ClusterAdmissionPolicies+` durch Einstellung von`+spec.namespaceSelector+` (siehe xref:reference/CRDs.adoc#clusteradmissionpolicy[CRD-Dokumente]). Die`+spec.namespaceSelector+` entscheidet, ob die Richtlinie für ein Objekt ausgeführt wird, je nachdem, ob der Namespace für dieses Objekt mit dem Selektor übereinstimmt.
+
+Hier ist zum Beispiel eine Richtlinie, die nur auf die Namensräume `+kube-system+` und `+my-namespace+` abzielt:
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psa-enforcer-privileged-namespaces
+spec:
+  module: registry://ghcr.io/kubewarden/policies/psa-label-enforcer:v1.0.3
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["namespaces"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  namespaceSelector:
+    matchExpressions:
+      - key: "kubernetes.io/metadata.name"
+        operator: In
+        values: [kube-system, my-namespace]
+  settings:
+    modes:
+      enforce: "privileged"
+----
+
+Hier ist eine Richtlinie, die auf alle Namespaces außer `+kube-system+` und `+my-namespace+` abzielt:
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psa-enforcer-default-mode
+spec:
+  module: registry://ghcr.io/kubewarden/policies/psa-label-enforcer:v1.0.3
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["namespaces"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  namespaceSelector:
+    matchExpressions:
+      - key: "kubernetes.io/metadata.name"
+        operator: NotIn
+        values: [kube-system, my-namespace]
+  settings:
+    modes:
+      enforce: "restricted"
+----
+
+== Benutzerdefinierte Ablehnungsnachricht
+
+Wenn eine Richtlinie eine Ressource ablehnt, wird dem Benutzer die vom Richtlinienautor verfasste Meldung angezeigt. Manchmal möchten Clusterbetreiber eine benutzerdefinierte Ablehnungsmeldung einstellen. Dies kann z. B. verwendet werden, um auf ein internes Wiki zu verweisen oder um einen genaueren Fehlercode anzugeben.
+
+Dazu kann das Feld `+message+` in den Typen `+ClusterAdmissionPolicy+` und `+AdmissionPolicy+` verwendet werden.
+
+[NOTE]
+====
+`+ClusterAdmissionPolicyGroup+` und `+AdmissionPolicyGroup+` haben bereits ein`+message+` Feld, das sich auf die gleiche Weise verhält.
+====
+
+Das Feld `+message+` ermöglicht es Cluster-Betreibern, eine benutzerdefinierte Ablehnungsnachricht zu definieren, die die von der Richtlinie zurückgegebene Nachricht überschreibt. Bei dieser Konfiguration ist die ursprüngliche Ablehnungsmeldung im Feld `+causes+` der Antwort zu finden.
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: pod-privileged-with-message
+spec:
+  module: registry://ghcr.io/kubewarden/policies/pod-privileged:1.0.2
+  policyServer: default
+  mode: protect
+  message: "Nops! You cannot do that"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+Sie können die vollständigen Details einer abgelehnten Zulassungsanfrage erhalten, indem Sie die Ausführlichkeitsstufe von kubectl erhöhen:
+
+[subs="verbatim,attributes"]
+----
+$ kubectl -v4 run pod-privileged2 --image=registry.k8s.io/pause --privileged
+I0612 16:32:43.647601   48424 cert_rotation.go:137] Starting client certificate rotation controller
+I0612 16:32:43.662550   48424 helpers.go:246] server response object: [{
+  "metadata": {},
+  "status": "Failure",
+  "message": "admission webhook \"clusterwide-pod-privileged-with-message.kubewarden.admission\" denied the request: Nops! You cannot do that",
+  "details": {
+    "causes": [
+      {
+        "message": "Privileged container is not allowed"
+      }
+    ]
+  },
+  "code": 400
+}]
+----
+
+== Negieren eines Richtlinienergebnisses durch Einpacken in eine PolicyGroup
+
+Manchmal wird bei der Verwendung einer Richtlinie die umgekehrte Logik dessen, was Sie benötigen, noch nicht implementiert.
+
+Sie möchten zum Beispiel den Link:https://artifacthub.io/packages/kubewarden/priority-class-policy/priority-class-policy[`+priority-class+`policy] verwenden, um eine Reihe von Prioritätsklassen abzulehnen. Zum Zeitpunkt der Erstellung dieses Dokuments unterstützt die Richtlinie`+priority-class+` jedoch nur allowlists, nicht denylist.
+
+Ein gängiges Muster ist dann, die Richtlinie in eine `+AdmissionPolicyGroup+` oder `+ClusterAdmissionPolicyGroup+` zu verpacken und das Ergebnis der Richtlinie in ihrer `+spec.expression+` zu negieren.
+
+Nehmen wir zum Beispiel an, dass die Benutzer alle innerhalb des Clusters definierten Prioritätsklassen verwenden sollen, mit Ausnahme einer der folgenden Klassen: `+low-priority+`,`+med-priority+` und `+high-priority+`.
+
+Derzeit kann in den Richtlinieneinstellungen nur die Liste der zulässigen Prioritätsklassen angegeben werden. Mit der folgenden Gruppenrichtlinie wird diese Einschränkung überwunden.
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: AdmissionPolicyGroup
+metadata:
+  name: priority-class-denylist
+  namespace: your-namespace # or use a CLusterAdmissionPolicyGroup and set spec.namespaceSelector
+spec:
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["replicationcontrollers"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      resources: ["jobs", "cronjobs"]
+      operations: ["CREATE", "UPDATE"]
+  policies:
+    is_a_denied_priority_class:
+      module: ghcr.io/kubewarden/policies/priority-class-policy:v1.0.4
+      settings:
+        allowed_priority_classes:
+          - low-priority
+          - med-priority
+          - high-priority
+  expression: "!is_a_denied_priority_class()" # negated result
+  message: "the Pod is using a priorityClass that is not allowed"
+----
