@@ -1,0 +1,75 @@
+= Gestion des composants emballés
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+
+== Manifeste de déploiement automatique (AddOns)
+
+Sur les nœuds de serveur, tout fichier trouvé dans `+/var/lib/rancher/k3s/server/manifests+` sera automatiquement déployé sur Kubernetes d'une manière similaire à `+kubectl apply+`, à la fois au démarrage et lorsque le fichier est modifié sur le disque. La suppression des fichiers de ce répertoire n'entraîne pas la suppression des ressources correspondantes du cluster.
+
+Les manifestes sont suivis en tant que ressources personnalisées `+AddOn+` dans l'espace de noms `+kube-system+`. Les erreurs ou avertissements rencontrés lors de l'application du fichier manifeste peuvent être visualisés en utilisant `+kubectl describe+` sur le site `+AddOn+` correspondant, ou en utilisant `+kubectl get event -n kube-system+` pour visualiser tous les événements de cet espace de noms, y compris ceux provenant du contrôleur de déploiement.
+
+=== Composants emballés
+
+K3s est livré avec un certain nombre de composants packagés qui sont déployés comme AddOns via le répertoire manifests : `+coredns+`, `+traefik+`, `+local-storage+`, et `+metrics-server+`. Le contrôleur intégré `+servicelb+` LoadBalancer n'a pas de fichier manifeste, mais il peut être désactivé comme s'il s'agissait de `+AddOn+` pour des raisons historiques.
+
+Les manifestes pour les composants emballés sont gérés par les K3 et ne doivent pas être modifiés. Les fichiers sont réécrits sur le disque à chaque démarrage de K3s, afin de garantir leur intégrité.
+
+=== Compléments d'utilisateur
+
+Vous pouvez placer des fichiers supplémentaires dans le répertoire manifests pour le déploiement en tant que `+AddOn+`. Chaque fichier peut contenir plusieurs ressources Kubernetes, délimitées par le séparateur de document YAML `+---+`. Pour plus d'informations sur l'organisation des ressources dans les manifestes, voir la section https://kubernetes.io/docs/concepts/cluster-administration/manage-deployment/[Managing Resources] de la documentation Kubernetes.
+
+==== Exigences en matière de dénomination des fichiers
+
+Le nom `+AddOn+` de chaque fichier du répertoire manifest est dérivé du nom de base du fichier.
+Assurez-vous que tous les fichiers du répertoire manifests (ou de tout sous-répertoire) ont des noms uniques et respectent les Kubernetes https://kubernetes.io/docs/concepts/overview/working-with-objects/names/[restrictions de nommage des objets].
+Il faut également veiller à ne pas entrer en conflit avec les noms utilisés par les composants par défaut de K3s, même si ces composants sont désactivés.
+
+Voici un exemple d'erreur qui serait signalée si le nom du fichier contenait des traits de soulignement :
+
+____
+`Échec du traitement de la configuration : échec du traitement de /var/lib/rancher/k3s/server/manifests/example_manifest.yaml :
+   Addon.k3s.cattle.io "example_manifest" est invalide : metadata.name : Valeur non valide : "example_manifest" : un sous-domaine RFC 1123 en minuscules doit être composé de caractères alphanumériques en minuscules, de "-" ou de ".et doit commencer et se terminer par un caractère alphanumérique (par exemple, "exemple.com", l'expression rationnelle utilisée pour la validation est "[a-z0-9]([-a-z0-9]*[a-z0-9]) ?(\.[a-z0-9]([-a-z0-9]*[a-z0-9*]) ?)").`
+____
+
+[WARNING]
+====
+Si vous avez plusieurs nœuds de serveur et que vous placez des manifestes AddOn supplémentaires sur plusieurs serveurs, il vous incombe de veiller à ce que les fichiers restent synchronisés entre ces nœuds. K3s ne synchronise pas le contenu des modules complémentaires entre les nœuds et ne peut garantir un comportement correct si différents serveurs tentent de déployer des manifestes contradictoires.
+====
+
+
+== Désactivation des manifestes
+
+Il existe deux façons de désactiver le déploiement d'un contenu spécifique à partir du répertoire manifests.
+
+[#_using_the_disable_flag]
+=== Utilisation du drapeau `+--disable+` 
+
+Les AddOns pour les composants packagés énumérés ci-dessus, ainsi que les AddOns pour tout manifeste supplémentaire placé dans le répertoire `+manifests+`, peuvent être désactivés à l'aide de l'option `+--disable+`. Les modules d'extension désactivés sont activement désinstallés du cluster et les fichiers sources sont supprimés du répertoire `+manifests+`.
+
+Par exemple, pour empêcher l'installation de traefik sur un nouveau cluster, ou pour le désinstaller et supprimer le manifeste d'un cluster existant, vous pouvez démarrer K3s avec `+--disable=traefik+`. Plusieurs éléments peuvent être désactivés en séparant leurs noms par des virgules ou en répétant l'indicateur.
+
+=== Utilisation des fichiers .skip
+
+Pour tout fichier sous `+/var/lib/rancher/k3s/server/manifests+`, vous pouvez créer un fichier `+.skip+` qui fera en sorte que K3s ignore le manifeste correspondant. Le contenu du fichier `+.skip+` n'a pas d'importance, seule son existence est vérifiée. Notez que la création d'un fichier `+.skip+` après la création d'un AddOn ne supprime ni ne modifie ce dernier ou les ressources qu'il a créées ; le fichier est simplement traité comme s'il n'existait pas.
+
+Par exemple, la création d'un fichier `+traefik.yaml.skip+` vide dans le répertoire manifests avant le premier démarrage de K3s fera en sorte que K3s ne déploie pas `+traefik.yaml+`:
+
+[,bash]
+----
+$ ls /var/lib/rancher/k3s/server/manifests
+ccm.yaml      local-storage.yaml  rolebindings.yaml  traefik.yaml.skip
+coredns.yaml  traefik.yaml
+
+$ kubectl get pods -A
+NAMESPACE     NAME                                     READY   STATUS    RESTARTS   AGE
+kube-system   local-path-provisioner-64ffb68fd-xx98j   1/1     Running   0          74s
+kube-system   metrics-server-5489f84d5d-7zwkt          1/1     Running   0          74s
+kube-system   coredns-85cb69466-vcq7j                  1/1     Running   0          74s
+----
+
+Si Traefik a déjà été déployé avant la création du fichier `+traefik.skip+`, Traefik restera tel quel et ne sera pas affecté par les futures mises à jour lors de la mise à niveau de K3s.
+
+== Compléments de Helm
+
+Pour plus d'informations sur la gestion des cartes Helm via le déploiement automatique des manifestes, reportez-vous à la section consacrée à xref:add-ons/helm.adoc[Helm].
