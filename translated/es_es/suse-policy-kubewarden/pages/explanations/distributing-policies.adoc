@@ -1,0 +1,157 @@
+include::partial$variables.adoc[]
+= Distribuir políticas
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Distribuya políticas de forma segura a través de un registro compatible con OCI mediante herramientas como kwctl, y garantice la seguridad del clúster a través de la gestión de políticas de {project-name}.
+:doc-persona: ["kubewarden-operator", "kubewarden-policy-developer", "kubewarden-distributor", "kubewarden-integrator"].
+:doc-topic: ["distributing-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "oci", "kubewarden", "policy", "wasm", "webassembly"]
+:current-version: {page-origin-branch}
+
+{project-name} son binarios WebAssembly (Wasm) evaluados por el servidor de políticas {short-project-name}.
+
+El servidor de políticas {short-project-name} carga las políticas desde estas fuentes:
+
+* Sistema de archivos local
+* Servidor HTTP(s)
+* Registros conformes con la OCI:
+ ** https://github.com/distribution/distribution[Distribución]
+ ** https://ghcr.io[Registro de contenedores de GitHub]
+ ** https://azure.microsoft.com/en-us/products/container-registry/[Registro de contenedores Azure]
+ ** https://aws.amazon.com/ecr/[Amazon ECR]
+ ** https://cloud.google.com/artifact-registry/[Registro de contenedores de Google]
+
+{short-project-name} recomienda distribuir las políticas de {short-project-name} a través de un registro normal compatible con OCI. Los registros de contenedores son un requisito obligatorio para cualquier clúster Kubernetes. Disponer de un único lugar para almacenar, y proteger, todos los artefactos necesarios para un clúster es beneficioso.
+
+== Envío de políticas a un registro compatible con OCI
+
+La especificación https://github.com/opencontainers/image-spec[del formato de imagen]OCI permite almacenar cualquier blob binario dentro de un registro de contenedor normal compatible con OCI.
+
+El registro de destino compatible con OCI *debe admitir artefactos* para poder enviarle correctamente una política de {short-project-name}.
+
+Puede utilizar la https://github.com/kubewarden/kwctl[`+kwctl+`] CLI para enviar una política{short-project-name} a un registro compatible con OCI.
+
+== Anotar la política
+
+También puede anotar una política con `+kwctl+`. La anotación de una política {short-project-name}se realiza añadiendo secciones personalizadas Wasm al binario de la política. Esto significa que la política empaqueta sus propios metadatos.
+
+El comando `+kwctl annotate+` requiere dos entradas:
+
+* la política {short-project-name} a anotar, un archivo local en el sistema de archivos.
+* el archivo de anotaciones, un archivo que contiene una descripción YAML de los metadatos de la política.
+Este archivo se encuentra normalmente en la carpeta raíz del proyecto de su política.
+
+Por ejemplo, puede guardar este archivo como `+metadata.yml+` en el directorio actual:
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: ["*"]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["*"]
+mutating: false
+annotations:
+  io.kubewarden.policy.title: palindromify
+  io.kubewarden.policy.version: 0.1.0
+  io.kubewarden.policy.description: Allows you to reject palindrome names in resources and namespace names, or to only accept palindrome names
+  io.kubewarden.policy.author: Name Surname <name.surname@example.com>
+  io.kubewarden.policy.url: https://github.com/<org>/palindromify
+  io.kubewarden.policy.source: https://github.com/<org>/palindromify
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+    This is markdown text and as such allows you to define a free form usage text.
+
+    This policy allows you to reject requests if:
+    - The name of the resource is a palindrome name.
+    - The namespace name where this resource is created has a palindrome name.
+
+    This policy accepts the following settings:
+
+    - `+invert_behavior+`: bool that inverts the policy behavior. If enabled, only palindrome names will be accepted.
+----
+
+Ahora, vamos a anotar la política:
+
+[subs="+attributes",shell]
+----
+$ kwctl annotate policy.wasm \
+    --metadata-path metadata.yml \
+    --output-path annotated-policy.wasm
+----
+
+El proceso de anotación realiza ciertas optimizaciones en la política, por lo que a menudo la política anotada es más pequeña que la original. Esto depende considerablemente de la cadena de herramientas utilizada para producir el objeto Wasm original.
+
+[IMPORTANT]
+====
+
+.Utilice kwctl inspect para comprobar su política
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+$ kwctl inspect annotated-policy.wasm
+2023-08-24T12:06:27.986401Z  INFO sigstore::cosign::client_builder: Rekor public key not provided. Rekor integration disabled
+2023-08-24T12:06:27.986449Z  INFO sigstore::cosign::client_builder: No Fulcio cert has been provided. Fulcio integration disabled
+Details
+title:                    palindromify
+description:              Allows you to reject palindrome names in resources and namespace names, or to only accept palindrome names
+author:                   Name Surname <name.surname@example.com>
+url:                      https://github.com/<org>/palindromify
+source:                   https://github.com/<org>/palindromify
+license:                  Apache-2.0
+mutating:                 false
+background audit support: true
+context aware:            false
+execution mode:           kubewarden-wapc
+protocol version:         1
+
+Annotations
+io.kubewarden.kwctl       1.7.0-rc2
+
+Rules
+────────────────────
+- apiGroups:
+  - '*'
+  apiVersions:
+  - '*'
+  resources:
+  - '*'
+  operations:
+  - '*'
+────────────────────
+
+Usage
+This is markdown text and as such allows you to define a free form usage text.
+
+This policy allows you to reject requests if:
+
+• The name of the resource is a palindrome name.
+• The namespace name where this resource is created has a palindrome name.
+
+This policy accepts the following settings:
+
+• invert_behavior: bool that inverts the policy behavior. If enabled, only palindrome names will be accepted.
+
+Cannot determine if the policy has been signed. There was an error while attempting to fetch its signatures from the remote registry: invalid uri
+----
+
+======
+====
+
+
+== Impulsar la política
+
+Puede enviar una política anotada de la siguiente manera:
+
+[subs="+attributes",shell]
+----
+$ kwctl push annotated-policy.wasm \
+     <oci-registry>/kubewarden-policies/palindromify-policy:v0.0.1
+----
+
+Se desaconseja impulsar políticas no anotadas. El servidor de políticas utiliza los metadatos proporcionados por las anotaciones para ejecutar correctamente una política. Por defecto,`+kwctl push+` se niega a enviar una política de este tipo a un registro OCI. Si necesita una política no anotada, utilice el indicador `+-&#x200D;-&#x200D;force+` de `+kwctl push+`.
+
+Puede hacer referencia a una política desde el servidor de políticas {short-project-name} o `+kwctl+` como`+registry://<oci-registry>/kubewarden-policies/palindromify-policy:v0.0.1+`.
