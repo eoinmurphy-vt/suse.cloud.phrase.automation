@@ -1,0 +1,184 @@
+include::partial$variables.adoc[]
+= Mutierende Politik
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Wiederherstellen von Anfragen durch Konfigurieren und Verwalten von Änderungsrichtlinien innerhalb von ClusterAdmissionPolicy entsprechend den vordefinierten Einstellungen.
+:doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["mutating-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "policy mutating", "kubernetes", "clusteradmissionpolicy", "admissionpolicy"]
+:sidebar_label: Mutierende Politik
+:sidebar_position: 10
+:current-version: {page-origin-branch}
+
+Mutating Policies empfangen eine Objektanforderung und bauen sie um (mutieren sie) in eine neue Anforderung. Dies entspricht den in den Einstellungen der Richtlinie festgelegten Werten. Die Anfrage durchläuft die Kubernetes-API und wird möglicherweise von anderen Richtlinien bewertet.
+
+Um ein verändertes Anfrageverhalten zu ermöglichen, setzen Sie das Feld `+ClusterAdmissionPolicy.mutating+`auf `+true+`.
+
+Wenn Sie jedoch das Feld `+ClusterAdmissionPolicy.mutating+` auf `+false+` setzen, werden die mutierten Anträge abgelehnt.
+
+== Warum mutierende Politik gefährlich sein kann
+
+=== Ungeprüfte mutierende Richtlinien können Schwachstellen verursachen
+
+[WARNING]
+====
+
+Um einen Missbrauch des Systems zu verhindern, sollten die Administratoren von {project-name} die Mutationsrichtlinien überprüfen. Die Änderung von Richtlinien könnte zum Beispiel einen Workload so verändern, dass er die Erstellung von privilegierten Containern erlaubt.
+
+====
+
+
+==== Lösung
+
+Im Zweifelsfall sollten Sie Richtlinien in mutierende und validierende Richtlinien aufteilen, anstatt Richtlinien zu schreiben oder zu verteilen, die sowohl validieren als auch mutieren. Dies ist besonders wichtig, wenn eine DSL (wie Rego) zur Erstellung komplexer Richtlinien verwendet wird.
+
+=== Falsch konfigurierte Mutating Policies können in Verbindung mit Kubernetes-Controllern von Drittanbietern in einer Endlosschleife stecken bleiben
+
+[WARNING]
+====
+
+Bei der Mutation von Richtlinien werden Anfragen zurückgegeben, die über die Kubernetes-API laufen. Wenn es andere Kubernetes-Controller gibt, die auf dieselben Ressourcen warten, können sie diese in einer Folgeanforderung zurückverwandeln. Dies könnte zu einer unendlichen Rückkopplungsschleife von Mutationen führen.
+
+====
+
+
+==== Lösung
+
+Führen Sie die Mutation gegen:
+
+. Die untere Art der Ressource (z. B: Pod).
+. Die höchste Art von Ressource (z. B: Einsatz). Hinweis: Dies kann immer noch zu Schleifen führen, wenn ein Controller diese Ressourcen verwaltet. Zum Beispiel Controller von GitOps-Lösungen (wie fleet, flux, argo, ...) oder andere Controller von Drittanbietern, die ihre eigenen CRDs in Deployment-Objekte übersetzen.
+
+== Beispiele
+
+Sie können sehen, wie eine sich wandelnde Politik am Werk ist. Erstellen Sie die folgende`+ClusterAdmissionPolicy+`, wobei das Feld `+mutating+` auf `+true+` gesetzt wird:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group created
+----
+
+Sie verwenden diehttps://github.com/kubewarden/user-group-psp-policy[`+psp-user-group+`] Richtlinie zur Kontrolle von Benutzern und Gruppen in Containern und können die Anforderungen ändern. Im vorangegangenen Beispiel haben Sie das Feld `+runAsUser+` festgelegt und es dem Abschnitt `+securityContext+` des Behälters hinzugefügt.
+
+Da das Feld `+mutating+` `+true+` lautet, ist die folgende Anfrage erfolgreich:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+pod/pause-user-group created
+----
+
+Sie können die Ergebnisse des Containers unter `+securityContext+` einsehen:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl get pods pause-user-group -o jsonpath='{ .spec.containers[].securityContext }'
+
+# Output
+{"runAsUser":1000}
+----
+
+Ändern Sie nun `+ClusterAdmissionPolicy+`, indem Sie das Feld `+mutating+` auf `+false+` setzen:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group configured
+----
+
+Da das Feld `+mutating+` `+false+` lautet, schlägt die folgende Anfrage fehl:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+Error from server: error when creating ".\\pause-user-group.yaml": admission webhook "psp-user-group.kubewarden.admission" denied the request: Request rejected by policy psp-user-group. The policy attempted to mutate the request, but it is currently configured to not allow mutations.
+----
+
+Zusammenfassend lässt sich sagen, dass {short-project-name} das gleiche Verhalten wie die veralteten Kubernetes Pod Security Policies (PSP) nachbildet.
