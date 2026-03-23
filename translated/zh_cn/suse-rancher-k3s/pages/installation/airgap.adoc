@@ -1,0 +1,255 @@
+= 气隙安装
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+本指南通过三个步骤指导您在气隙环境中安装 K3。
+
+[IMPORTANT]
+====
+您可以将 Prime Artifacts URL 上列出的任何 K3s Prime 版本用于这些步骤中提到的资产。要了解有关 Prime 工件 URL 的更多信息，请参阅我们的https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime 专用文档]。需要进行身份验证。使用https://scc.suse.com/home[Customer Center (SCC)] SUSE凭据登录。
+====
+
+== 加载图片
+
+每种图像加载方法都有不同的要求，适用于不同的气隙场景。选择最适合您的基础设施和安全要求的方法。
+
+[tabs,sync-group-id=airgap-load-images]
+======
+私人登记方法::
++
+--
+这些步骤假定你已经在 air-gap 环境中创建了节点，使用捆绑的 containerd 作为容器运行时，并且在环境中拥有符合 OCI 标准的私有注册表。
+
+如果尚未建立私有 Docker 注册表，请参阅https://docs.docker.com/registry/deploying/#run-an-externally-accessible-registry[官方注册表文档]。
+
+[#_create_the_registry_yaml_and_push_images]
+[pass]
+<h3><a class="anchor" id="_create_the_registry_yaml_and_push_images" href="#_create_the_registry_yaml_and_push_images"></a>创建注册表 YAML 和推送映像</h3>
+
+
+. 从https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]页面获取您所运行 K3s 版本的架构图像存档。
+. 使用`+docker image load k3s-airgap-images-amd64.tar.zst+` 将 tar 文件中的映像导入 docker。
+. 使用`+docker tag+` 和`+docker push+` 重新标记已加载的图像，并将其推送到您的私人注册表。
+. 按照xref:installation/private-registry.adoc[专用注册表配置]指南创建和配置`+registries.yaml+` 文件。
+. 继续下面的<<_install_k3s,安装 K3>>部分。
+--
+
+手动部署图像方法::
++
+--
+这些步骤假定你已经在 air-gap 环境中创建了节点，正在使用捆绑的 containerd 作为容器运行时，并且不能或不想使用私有注册表。
+
+这种方法需要将必要的映像手动部署到每个节点，适用于运行私有注册表不现实的边缘部署。
+
+[#_prepare_the_images_directory_and_airgap_image_tarball]
+[pass]
+<h3><a class="anchor" id="_prepare_the_images_directory_and_airgap_image_tarball" href="#_prepare_the_images_directory_and_airgap_image_tarball"></a>准备图像目录和 Airgap 图像压缩包</h3>
+
+. 在一台可上网的机器上，从https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]页面为您计划安装的 K3s 版本下载架构的图像存档。例如
++
+[,bash]
+----
+curl -L -o k3s-airgap-images-amd64.tar.zst "<PRIME-ARTIFACTS-URL>/k3s/v1.35.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+----
+
+. 将图像存档转移到气隙节点。例如，将它们放在代理的图像目录中：
++
+[,bash]
+----
+sudo mkdir -p /var/lib/rancher/k3s/agent/images/
+sudo curl -L -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst ""https://github.com/k3s-io/k3s/releases/download/v1.33.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+sudo cp k3s-airgap-images-amd64.tar.zst /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+----
+
+. 继续下面的<<_install_k3s,安装 K3>>部分。
+ 
+[#_enable_conditional_image_imports]
+[pass]
+<h3><a class="anchor" id="_enable_conditional_image_imports" href="#_enable_conditional_image_imports"></a>启用条件图像导入</h3>
+
+[IMPORTANT]
+.版本闸门
+====
+从 2025 年 5 月发布的以下版本开始提供条件图像导入功能：v1.33.1+k3s1、v1.32.5+k3s1、v1.31.9+k3s1、v1.30.13+k3s1。
+====
+
+每次启动 k3s 时都会导入图像存档。这样做是为了确保所有图像始终可用，即使有些图像在上次启动后已被删除或修剪。不过，这会延迟启动时间，因为 kubelet 要等到处理完所有存档后才会启动。为了减少这种延迟，可以选择只导入上次导入后发生变化的压缩包，即使在重新启动时也是如此。
+
+要启用此功能，请在图像目录下创建`+.cache.json+` 文件：
+
+[,bash]
+----
+touch /var/lib/rancher/k3s/agent/images/.cache.json
+----
+
+缓存文件将在处理文件时存储存档元数据。只要存档的大小和修改时间保持不变，随后重新启动 K3s 将不会导入图像。
+
+[WARNING]
+====
+启用此功能后，将无法确保每次启动 k3s 时都能获得所有图像。如果上次启动后删除或剪切了图像，请手动重新导入图像。要么是
+
+* 使用`+ctr image import+` 手动导入存档。
+* 使用`+touch+` 修改包含图像的存档的时间戳。
+* 清除`+.cache.json+` 文件的内容，并重新启动 k3s。
+====
+--
+
+嵌入式注册表镜像::
++
+--
+K3s 包括一个符合 OCI 标准的嵌入式分布式注册镜像。
+启用并正确配置后，其他群集成员无需访问外部映像注册表，即可调用任何节点上 containerd 映像存储中的可用映像。
+
+镜像可能来自上游注册表、注册表镜像或 airgap 镜像压缩包。
+有关启用嵌入式分布式注册表镜像的更多信息，请参阅xref:installation/registry-mirror.adoc[嵌入式注册表镜像]文档。
+--
+======
+
+[#_install_k3s]
+== 安装 K3
+
+=== 先决条件
+
+在安装 K3s 之前，请选择上面的 "xref:#_load_images[加载图像]"选项之一，以预先填充 K3s 需要安装的图像。
+
+==== 下载二进制文件和脚本
+
+* 从https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]页面下载 K3s 二进制文件，与获取气隙图像的版本一致。将二进制文件放到`+/usr/local/bin+` 中的每个空气屏蔽节点上，并确保其可执行。
++
+[,bash]
+----
+sudo curl -Lo /usr/local/bin/k3s <PRIME-ARTIFACTS-URL>/k3s/v1.35.1%2Bk3s1/k3s
+sudo chmod +x /usr/local/bin/k3s
+----
+
+* 下载 K3s 安装脚本，网址是https://get.k3s.io[get.k3s.io]。将安装脚本放置在每个气隙节点的任意位置，并将其命名为`+install.sh+` 。
++
+[,bash]
+----
+curl -Lo install.sh https://get.k3s.io
+chmod +x install.sh
+----
+
+.**设置默认网络路由**- 没有默认路由的节点需要此功能
+[%collapsible]
+======
+如果节点没有带默认路由的接口，则必须配置默认路由；即使是通过假接口配置黑洞路由也足够了。K3s 需要一个默认路由，以便自动检测节点的主 IP，并使 kube-proxy ClusterIP 路由正常运行。添加虚拟路由的步骤如下：
+
+[,bash]
+----
+ip link add dummy0 type dummy
+ip link set dummy0 up
+ip addr add 203.0.113.254/31 dev dummy0
+ip route add default via 203.0.113.255 dev dummy0 metric 1000
+----
+======
+
+.**下载 SELinux RPM**- 启用 SELinux 的 airgapped 节点必备
+[%collapsible]
+======
+如果在启用了 SELinux 的 air-gapped 节点上运行，则必须在安装 K3s 之前手动安装 k3s-selinux RPM。该 RPM 包括必要的 SELinux 策略，以便 K3 正常运行。最新版本的 RPM 可在https://github.com/k3s-io/k3s-selinux/releases/latest[] 找到。例如，在 CentOS 8 上：
+
+[,bash]
+----
+# On an internet accessible machine:
+curl -LO https://github.com/k3s-io/k3s-selinux/releases/download/v1.6.stable.1/k3s-selinux-1.6-1.el8.noarch.rpm
+
+# Transfer RPM to air-gapped machine
+sudo yum install ./k3s-selinux-1.6-1.el8.noarch.rpm
+----
+
+安装 k3s-selinux RPM 时，操作系统中必须有以下依赖项：
+
+* container-selinux
+* policycoreutils
+* selinux-policy
+
+更多信息，请参阅xref:advanced.adoc#_selinux_support[SELinux]部分。
+======
+
+=== 运行安装脚本
+
+如下所述，您可以在一台或多台服务器上安装 K3。
+
+[tabs,sync-group-id=airgap-install]
+======
+单服务器配置::
++
+--
+要在单个服务器上安装 K3，只需在服务器节点上执行以下操作：
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true ./install.sh
+----
+
+要添加其他代理，请在每个代理节点上执行以下操作：
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true K3S_URL=https://<SERVER_IP>:6443 K3S_TOKEN=<YOUR_TOKEN> ./install.sh
+----
+--
+
+高可用性配置::
++
+--
+参考《xref:datastore/ha.adoc[使用外部 DB 的高可用性]》或《xref:datastore/ha-embedded.adoc[使用嵌入式 DB 的高可用性]》指南。您需要调整安装命令，以便指定`+INSTALL_K3S_SKIP_DOWNLOAD=true+` 并在本地运行安装脚本，而不是通过 curl。您还将利用`+INSTALL_K3S_EXEC='args'+` 为 k3s 提供任何参数。
+
+例如，"使用外部 DB 的高可用性 "指南的第二步提到了以下内容：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name"
+----
+
+取而代之的是像下面这样对示例进行修改：
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='server --token=SECRET' \
+K3S_DATASTORE_ENDPOINT='mysql://username:password@tcp(hostname:3306)/database-name' \
+./install.sh
+----
+--
+======
+
+[NOTE]
+====
+K3s 的`+--resolv-conf+` 标志会传递给 kubelet，这可能有助于在主机未配置上游名称服务器的空隙网络中配置 pod DNS 解析。
+====
+
+== 升级
+
+[tabs,sync-group-id=airgap-upgrade]
+======
+手动升级::
++
+--
+升级气隙环境的方法如下：
+
+. 从https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]页面下载要升级到的 K3s 版本的新气隙图像（tar 文件）。将 tar 文件放到每个节点上的`+/var/lib/rancher/k3s/agent/images/+` 目录中。删除旧的 tar 文件。
+. 复制并替换每个节点上`+/usr/local/bin+` 中的旧 K3s 二进制文件。将安装脚本复制到https://get.k3s.io （因为自上次发布以来，脚本可能已经更改）。使用相同的环境变量，像以前一样再次运行脚本。
+. 重启 K3s 服务（如果安装程序未自动重启）。
+--
+
+自动升级方法::
++
+--
+K3s 支持xref:upgrades/automated.adoc[自动升级]。要在空气屏蔽环境中启用此功能，必须确保在专用注册表中提供所需的映像。
+
+您需要与打算升级到的 K3s 版本相对应的 rancher/k3s-upgrade 版本。请注意，在 K3s 版本中，image 标签用`+-+` 代替了`+++` ，因为 Docker 映像不支持`+++` 。
+
+您还需要系统-upgrade-controller 清单 YAML 中指定的 system-upgrade-controller 和 kubectl 版本，以便部署。 https://github.com/rancher/system-upgrade-controller/releases/latest[在]查看最新版本的 system-upgrade-controller，并下载 system-upgrade-controller.yaml 以确定需要推送到私有注册表的版本。例如，在 system-upgrade-controller v0.4.0 版中，这些图像是在清单 YAML 中指定的：
+
+----
+rancher/system-upgrade-controller:v0.4.0
+rancher/kubectl:v0.17.0
+----
+
+在私人注册表中添加必要的 rancher/k3s-upgrade、rancher/system-upgrade-controller 和 rancher/kubectl 映像后，请按照xref:upgrades/automated.adoc[自动升级]指南进行操作。
+--
+======
