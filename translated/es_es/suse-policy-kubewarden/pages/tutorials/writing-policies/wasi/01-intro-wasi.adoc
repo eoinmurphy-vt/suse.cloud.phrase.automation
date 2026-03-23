@@ -1,0 +1,135 @@
+include::partial$variables.adoc[]
+= WASI
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Escribir políticas WASI que interactúen con primitivas del sistema cuando una limitación en el compilador Go impida utilizar el mecanismo de comunicación waPC.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "wasi"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "wasi"]
+:sidebar_label: WASI
+:current-version: {page-origin-branch}
+
+https://wasi.dev/[WebAssembly System Interface (WASI)] es un estándar WebAssembly que proporciona un conjunto de interfaces que permiten la ejecución de WebAssembly fuera del navegador.
+
+[CAUTION]
+====
+
+Los autores que escriben políticas regulares nunca deben usar interfaces de sistema WASI simples para escribir políticas.
+
+Esta página está dirigida a los mantenedores de {project-name} o a los autores de políticas de bajo nivel que deseen experimentar con plataformas WASM de vanguardia.
+====
+
+
+Usando WASI, puede tener un módulo WebAssembly que interactúe con primitivas del sistema como STDOUT, STDERR, STDIN, variables de entorno y más.
+
+Muchos de los compiladores utilizados para compilar políticas {short-project-name} producen módulos WebAssembly que se dirigen a interfaces WASI.
+Sin embargo, las políticas {short-project-name} utilizan el proyecto https://github.com/wapc[waPC] para implementar la comunicación bidireccional entre la política y el tiempo de ejecución de la política (`+kwctl+` o `+policy-server+`). xref:reference/spec/01-intro-spec.adoc[Aquí] se describe el uso de{short-project-name} del protocolo de comunicación.
+
+Hay casos especiales en los que el proyecto waPC no puede utilizarse todavía.
+En estas circunstancias, puede escribir una política utilizando las interfaces proporcionadas por WASI.
+
+[IMPORTANT]
+====
+
+{short-project-name} es compatible con las políticas WASI a partir de la versión {short-project-name} 1.7.0.
+====
+
+
+== Limitaciones
+
+No debería utilizar políticas WASI en circunstancias normales porque tienen un rendimiento inferior en el momento de la evaluación en comparación con las políticas waPC/Rego.
+
+[NOTE]
+====
+
+La comunicación bidireccional entre la política y el host se puede lograr, pero requiere que los cambios se hagan dentro del SDK del lenguaje. Esto es necesario para utilizar xref:/reference/spec/host-capabilities/01-intro-host-capabilities.adoc[las capacidades del host] y para escribir políticasxref:/explanations/context-aware-policies.adoc[sensibles al contexto].
+
+Actualmente, sólo los SDKs {short-project-name} Go y JavaScript/TypeScript los exponen a las políticas WASI.
+
+Si le interesa, póngase en contacto con nosotros. Así podremos priorizar el esfuerzo.
+
+====
+
+
+== Casos prácticos
+
+La única razón para escribir una política "WASI simple" es cuando no se puede utilizar el mecanismo de comunicación waPC.
+
+Actualmente, (a partir de junio de 2023), la única buena razón para hacer esto es cuando se utiliza el compilador Go oficial para producir un módulo WebAssembly.
+
+A partir de la versión 1.21, el compilador Go oficial es capaz de producir módulos WebAssembly orientados a la interfaz WASI.
+Sin embargo, estos módulos aún no pueden exportar funciones al tiempo de ejecución de WebAssembly.
+Esta limitación, que se puede consultar en https://github.com/golang/go/issues/42372[], impide la adopción del protocolo waPC.
+
+El equipo del proyecto {short-project-name} aconseja que escriba las directivas Go de {short-project-name} utilizando el compilador TinyGo, tal y como se describe xref:tutorials/writing-policies/go/01-intro-go.adoc[aquí].
+
+Sin embargo, algunas bases de código Go complejas no pueden compilarse con el compilador TinyGo.
+Esto incluye, por ejemplo, bases de código como https://github.com/google/cel-go[CEL-go] o https://github.com/kyverno/kyverno/[Kyverno].
+En estas circunstancias, el uso del compilador Go oficial puede ayudar.
+
+== Protocolo de comunicación
+
+Esta sección describe cómo escribir una política WASI simple.
+
+Tienes que escribir el código como un programa CLI normal.
+El programa debe tomar los siguientes subcomandos:
+
+* `+validate+`Este comando es invocado por el motor de políticas para evaluar una solicitud de admisión.
+* `+validate-settings+`Este comando es invocado por el motor de políticas para validar la configuración de las políticas.
+
+En ambos casos, los datos a validar se proporcionan a través de STDIN.
+La política debe proporcionar la respuesta a través de STDOUT.
+Puede utilizar STDERR para mensajes de depuración o error.
+
+=== Validación
+
+La validación de una solicitud se produce al invocar el programa CLI de políticas mediante el subcomando `+validate+`.
+
+STDIN debe contener un documento JSON que describa un objeto `+ValidationRequest+`.
+La política debe escribir en STDOUT un documento JSON que contenga un objeto `+ValidationResponse+`.
+
+xref:reference/spec/03-validating-policies.adoc[Aquí] se describen los objetos `+ValidationRequest+` y `+ValidationResponse+`.
+
+=== Mutación
+
+Las políticas mutantes funcionan del mismo modo que las validadoras.
+El programa CLI de políticas se invoca mediante el subcomando `+validate+`.
+
+STDIN debe contener un documento JSON que describa un objeto `+ValidationRequest+`.
+La política debe escribir en STDOUT un documento JSON que contenga un objeto `+ValidationResponse+`.
+
+xref:reference/spec/03-validating-policies.adoc[Aquí] se describen los objetos `+ValidationRequest+` y `+ValidationResponse+`.
+
+Cuando se necesita una mutación, el objeto `+ValidationResponse+` debe tener una clave, `+mutated_object+`, que contenga el objeto que se va a crear.
+Este proceso se describe xref:reference/spec/04-mutating-policies.adoc[aquí].
+
+== Context-aware
+
+Por ahora sólo es compatible con el SDK de Go. El SDK de Go expone las capacidades conscientes del contexto como de costumbre, para más información ver xref:explanations/context-aware-policies.adoc[aquí].
+
+Como ejemplo de una política WASI Go sensible al contexto, véasehttps://github.com/kubewarden/go-wasi-context-aware-test-policy[go-wasi-context-aware-test-policy].
+
+=== Validación de la configuración
+
+La política debe proporcionar un subcomando llamado `+validate-settings+`.
+Este comando se utiliza para validar la configuración proporcionada por el usuario.
+
+El programa debe recibir en STDIN, un objeto JSON que contenga la configuración proporcionada por el usuario.
+A continuación, los valida y escribe un objeto `+SettingsValidationResponse+` en STDOUT.
+
+xref:reference/spec/02-settings.adoc[Aquí] se describe el formato de `+SettingsValidationResponse+` y el proceso de validación de los ajustes.
+
+== Metadatos políticos
+
+Cada política de {short-project-name} debe anotarse mediante el comando `+kwctl annotate+`.
+Los metadatos de política de una política WASI simple deben tener este valor:
+
+[subs="+attributes",yaml]
+----
+executionMode: wasi
+----
+
+== Plantilla de proyecto
+
+https://github.com/kubewarden/go-wasi-policy-template[Este repositorio de GitHub] contiene una plantilla de una política basada en Go que utiliza el protocolo WASI.
