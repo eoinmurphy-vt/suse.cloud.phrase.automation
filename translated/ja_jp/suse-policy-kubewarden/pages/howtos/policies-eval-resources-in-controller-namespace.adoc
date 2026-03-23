@@ -1,0 +1,76 @@
+include::partial$variables.adoc[]
+
+= アドミッションコントローラ名前空間での評価の許可
+:description: アドミッションコントローラーが自身の名前空間でポリシー評価を許可するように設定する方法
+:keywords: [ポリシー"、"ClusterAdmissionPolicies"、"ClusterAdmissionPoliciesGroup"、"コンフィギュレーション"、"名前空間"）。
+:doc-persona: ["kubewarden-operator"]
+:doc-type: ["howto"]
+:doc-topic: ["operator-manual", "policies"]
+
+デフォルトでは、アドミッションコントローラは、ポリシーが自身の名前空間内のリソースを評価することを許可しません。これにより、{short-project-name} のインストールを壊してしまうような設定ミスを防ぐことができる。
+
+この安全対策は2層構造になっている。最初のレイヤーは、`+--always-accept-admission-reviews-on-deployments-namespace+` CLIフラグによって制御される。
+このフラグはHelmチャートでデフォルトで有効になっており、PolicyServerデプロイメントでコントローラが`+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+`環境変数を構成するようにします。この変数は、この変数で定義された名前空間からのアドミッション・レビューを常に受け付けるようにポリシー・サーバに指示します。2つ目のレイヤはアドミッションコントローラ自身で、デフォルトではクラスタ全体のポリシーに名前空間セレクタを追加し、コントローラが実行される名前空間をスキップする。
+
+しかし、シナリオによっては、クラスタ管理者がこの名前空間のリソースを評価するポリシーを求めることがあります。このページでは、両方の保護レイヤーを無効にする方法を説明します。
+
+== PolicyServer保護環境変数を削除する
+
+最初のステップは、PolicyServerのデプロイメントで`+KUBEWARDEN_ALWAYS_ACCEPT_ADMISSION_REVIEWS_ON_NAMESPACE+` 環境変数を設定しないようにコントローラを設定することです。
+
+これを行うには、{short-project-name} インストールをアップグレードし、`+kubewarden-controller+` Helm チャートの`+alwaysAcceptAdmissionReviewsOnDeploymentsNamespace+` の値を`+false+` に設定します：
+
+[source,console]
+----
+helm upgrade -n kubewarden
+  --set "alwaysAcceptAdmissionReviewsOnDeploymentsNamespace=false"
+  kubewarden-controller kubewarden/kubewarden-controller
+----
+
+この変更により、ポリシー・サーバーは任意の名前空間からのリソースを評価できるようになった。
+これが完了すると、{short-project-name} 名前空間からアドミッション・レビューを評価するようにポリシーを設定することができる。
+
+== アドミッションコントローラ名前空間のリソースを評価するポリシーを設定する
+
+ポリシーがアドミッションコントローラの名前空間で作成されたリソースを評価できるようにするには、仕様の`+allowInsideAdmissionControllerNamespace+`フィールドを`+true+` に設定してクラスタ全体のポリシーを展開します：
+
+[NOTE]
+.名前空間化されたポリシーは？
+====
+この仕様フィールドは、クラスタ全体のポリシーでのみ使用できます。
+名前空間付きポリシーは、それらが配置されるのと同じ名前空間でリソースを評価するため、このフィールドをそれらの CRD に追加することは意味がありません。
+さらに、アドミッションコントローラの名前空間はクラスタオペレータによって管理されるべきであり、オペレータはそこにポリシーを展開するかどうかを決定することができる。
+====
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: PSP
+    io.kubewarden.policy.severity: medium
+  name: pod-privileged-policy
+spec:
+  module: registry://ghcr.io/kubewarden/policies/pod-privileged:v1.0.10
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - pods
+      operations:
+        - CREATE
+  mutating: false
+  allowInsideAdmissionControllerNamespace: true
+----
+
+この設定オプション (デフォルトは`+false+` ) は、Admission Controller ネームスペースを除外するネームスペースセレクタの追加をコントローラにスキップさせ、ポリシーがそのネームスペースを含むすべてのネームスペースのリソースを評価できるようにします。
+
+[NOTE]
+.カスタム・ネームスペース・セレクタについてはどうですか？
+====
+ポリシーCRDでは、ユーザーが独自の名前空間セレクタを定義することもできます。これらのセレクタは変更されない。これは、ユーザーが{short-project-name} 名前空間をスキップするセレクタを定義しても、ポリシーはその名前空間を期待通りに無視することを意味します。
+====
