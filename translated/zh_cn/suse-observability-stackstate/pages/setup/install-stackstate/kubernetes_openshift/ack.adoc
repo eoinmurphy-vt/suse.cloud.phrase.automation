@@ -1,0 +1,72 @@
+= 阿里云 Kubernetes 容器服务 (ACK) 安装说明
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 最小容量
+
+阿里云的 Kubernetes 容器服务 (ACK) 对基于磁盘的 PersistentVolumeClaims (PVC) 强制执行*20 GiB*的最小卷大小。在 ACK 上部署时，持久卷索赔 (pvc) 必须申请*至少 20Gi*的存储空间。如果达不到 20Gi 的最低要求，可能会导致 Helm 部署期间的卷调配和故障。
+
+我们提供了一套专用的 Helm 值，可调整所有体积大小以满足这一要求。如果在 ACK 上安装，请在安装过程中使用此文件：
+
+[,yaml]
+----
+# ack-values.yaml
+zookeeper:
+  persistence:
+    size: 20Gi
+hbase:
+  tephra:
+    persistence:
+      size: 20Gi
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 20Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 20Gi
+      localpvc:
+        size: 20Gi
+    state:
+      tmpToPVC:
+        volumeSize: 20Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 20Gi
+    vmagent:
+      persistence:
+        size: 20Gi
+    workloadObserver:
+      persistence:
+        size: 20Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 20Gi
+  stackpacks:
+    localpvc:
+      size: 20Gi
+    pvc:
+      size: 20Gi
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 20Gi
+----
+
+请为 ACK 特定值创建一个单独的文件，并在安装时使用。例如，如果按照xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc#_deploy_suse_observability_with_helm[Kubernetes 安装文档]的要求，将上述值保存在名为`+ack-values.yaml+` 的文件中，就可以用以下方式安装 Suse Observability：
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+  --values ack-values.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
