@@ -1,0 +1,99 @@
+include::partial$variables.adoc[]
+= 政策立案者のためのテスト
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Wasmの{project-name} ポリシーに特化した、バットまたは標準的なテストを使用して、kwctlでポリシー作成者をテストする方法を学びます。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["testing-policies", "policy-authors"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"policy testing"、"policy author"、"rust"、"go"、"assemblyscript"、"development environment"]。
+:current-version: {page-origin-branch}
+
+{project-name} ポリシーは、WebAssembly（Wasm）としてコンパイルされた通常のプログラムです。
+どんな種類のプログラムでもそうだが、優れたテスト・カバレッジは重要だ。
+
+ポリシー作成者は、自分の好きな開発環境を使うことができる。
+使い慣れたツールやテストフレームワークを使って開発を検証できる。
+
+これらの{short-project-name} ポリシーは、xref:tutorials/writing-policies/rust/01-intro-rust.adoc[Rustと]xref:tutorials/writing-policies/go/01-intro-go.adoc[Goで]書かれた例である：
+
+* https://github.com/kubewarden/psp-apparmor[psp-apparmor]
+* https://github.com/kubewarden/ingress-policy[イングレスポリシー]
+
+彼らは開発環境の標準的なテストを使ったテスト・スイートを持っている。
+
+ポリシーでは、CIパイプラインにGitHub Actionsを使用している。
+
+== エンド・ツー・エンド・テスト
+
+ポリシーを含むWasmバイナリに対して実行するテストを書くこともできます。
+Kubernetesクラスタをデプロイすることなくこれを行うには、以下のツールを使うことができる：
+
+* https://github.com/bats-core/bats-core[バット]：テストを書き、その実行を自動化すること。
+* https://github.com/kubewarden/kwctl[`+kwctl+`]{short-project-name} のデフォルトCLIツールで、ポリシー関連の操作（プル、インスペクション、アノテーション、プッシュ、実行）を支援します。
+
+`+kwctl run+` ：
+
+. 実行するポリシーの Wasm バイナリファイル参照。
+{short-project-name} ポリシーをロードすることができる：
+ ** ローカルファイルシステム (`+file://+`)
+ ** HTTP(s)サーバー(`+https://+`
+ ** OCIレジストリ(`+registry://+`)。
+. テストする入場リクエストオブジェクト。
+`+--request-path+` 、または`+--request-path+` を`+-+` に設定することで`+stdin+` 。
+. `+--settings-json+` フラグによって、インラインJSONとして実行時のポリシー設定を行う。
+あるいは、`+--settings-path+` を介してファイルシステムからロードされたJSONやYAMLファイル。
+
+テストの後`+kwctl+`,`+ValidationResponse+` オブジェクトを標準出力に表示する。
+
+これは、`+kwctl+` 。https://github.com/kubewarden/ingress-policy[`+ingress-policy+`]をテストする方法です：
+
+[subs="+attributes",console]
+----
+$ curl https://raw.githubusercontent.com/kubewarden/ingress-policy/v0.1.8/test_data/ingress-wildcard.json 2> /dev/null | \
+    kwctl run \
+        --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+        --request-path - \
+        registry://ghcr.io/kubewarden/policies/ingress:v0.1.8 | jq
+----
+
+`+kwctl+`https://github.com/kubewarden/kwctl/releases[ ] のビルド済みバイナリはこちらからダウンロードできる。
+
+`+bats+` 、このコマンドを実行し、期待される出力を探すテストを書くことができる：
+
+.コウモリのテスト
+[%collapsible]
+======
+
+[,bash]
+----
+@test "all is good" {
+  run kwctl run \
+    --request-path test_data/ingress-wildcard.json \
+    --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+    ingress-policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation passed
+  [[ "$output" == *"valid: true"* ]]
+
+  # request accepted
+  [[ "$output" == *"allowed: true"* ]]
+}
+----
+
+======
+
+例えば、`+e2e.bats+` というファイルにコードを記述し、`+bats+` を呼び出す：
+
+[subs="+attributes",console]
+----
+$ bats e2e.bats
+ ✓ all is good
+
+1 tests, 0 failures
+----
+
+xref:tutorials/writing-policies/go/05-e2e-tests.adoc[この]セクションでは、ポリシーのエンド・ツー・エンド・テストの書き方について詳しく説明します。
