@@ -1,0 +1,426 @@
+= 从 StackState 6.x 迁移到 SUSE Observability
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+:page-toclevels: 3
+
+由于产品重新命名，拓扑数据格式也发生了重大变化，因此无法通过标准的 Helm 升级命令从 StackState 升级到 SUSE Observability。本迁移指南将帮助您设置与 StackState 完全相同的 SUSE Observability。
+
+SUSE Observability 将是一个新的安装，没有已有的历史数据。历史数据可*选择*保持可访问状态，直到 SUSE Observability 积累了足够的历史数据。本指南涵盖这两种情况。
+
+根据所选方案的不同，迁移步骤也不同。并行运行稍微复杂一些，需要更多资源。适用于这两种方案的总体步骤是
+
+. 安装最新版本的 StackState 6.x
+. 创建并下载配置备份
+. 安装和配置 SUSE Observability，场景特定步骤
+. 更新开放式遥测采集器配置
+. 迁移代理
+
+[NOTE]
+====
+在本指南中，所有示例都假定了以下设置，请根据具体设置自定义命令：
+
+* 使用名为 `+observability+`
+* StackState 安装在`+stackstate+` 命名空间中
+* SUSE Observability 将安装在`+suse-observability+` 命名空间中
+====
+
+
+== 安装最新版本的 StackState 6.x
+
+只有最新版本的 StackState 6.x 才有配置备份，其中包含与 SUSE Observability 兼容格式的所有配置。请运行`+helm list --namespace stackstate+` （使用安装 StackState 的命名空间），确保已安装最新版本：
+
+* 舵手图版本应为 `+1.12.1+`
+* 应用程序版本应为 `+6.0.0-snapshot.20241023094532-stackstate-6.x-7be52ad+`
+
+如果您没有该版本，请先按照https://docs.stackstate.com/6.0/self-hosted-setup/upgrade-stackstate/steps-to-upgrade#_minor_or_maintenance_stackstate_release[步骤] 的标准升级进行升级。
+
+== 创建配置备份并下载备份
+
+首先，我们要创建 StackState 配置的配置备份，之后就不能再在 StackState 中做任何配置更改了（这些更改不会转移到 SUSE Observability）。要做到这一点，首先要熟悉配置备份，并使用https://docs.stackstate.com/6.0/self-hosted-setup/data-management/backup_restore/configuration_backup#_working_with_configuration_backups[配置备份文档]获取 所需的脚本。
+
+在包含脚本的`+restore+` 目录中运行这些命令：
+
+. 设置活动上下文和命名空间：
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=stackstate
+----
+
+. 创建备份（这需要 1Gi 内存和集群中的 1 个核心），创建 Kubernetes 作业和启动 pod 可能需要一些时间：
++
+[,bash]
+----
+ ./backup-configuration-now.sh
+----
+
+. 在命令输出中，你会看到备份文件的文件名，如`+sts-backup-20241024-1423.sty+`.复制文件名并用它下载备份：
++
+[,bash]
+----
+./download-configuration-backup.sh sts-backup-20241023-1423.sty
+----
+
+现在电脑上应该有配置备份文件了。
+
+== 安装和配置 SUSE Observability
+
+这就是两种方案的不同之处。按照您喜欢的方案进行操作。
+选择其中一项：
+
+* xref:#_replace_stackstate[]
+* xref:#_run_side_by_side[].
+
+=== 替换 StackState
+
+==== 卸载 StackState
+
+在安装 SUSE Observability 之前卸载 StackState 有两个好处：首先，它可以释放集群资源，因此不需要临时增加节点。其次，它删除了 StackState 的入口配置，从而释放了 StackState URL，供 SUSE Observability 重新使用。唯一的缺点是，从现在起到设置 SUSE Observability 配置之前的一段时间内，StackState 和 SUSE Observability 都无法提供监控功能。
+
+卸载 StackState 还会删除历史数据（拓扑和所有其他遥测数据）。要卸载 StackState，请遵循https://docs.stackstate.com/6.0/self-hosted-setup/uninstall[卸载文档]。
+
+==== 安装 SUSE Observability
+
+将 SUSE Observability 安装在与 StackState 不同的命名空间中，以避免任何冲突。建议使用与文档中相同的命名空间`+suse-observability+` 。
+
+安装方面最大的变化是现在支持配置文件，请根据xref:/setup/install-stackstate/requirements.adoc#_resource_requirements[要求]选择与您观察到的群集相匹配的配置文件，并使用它生成安装指南中记录的值。为 StackState 定制的 Helm 值与 SUSE Observability 兼容。不过，必须删除用于自定义资源的值，以便使用新的配置文件，我们将在名为`+custom-values-no-resources.yaml+` 的文件中保留这些值。您可以使用相同的入口设置，这样从用户和代理的角度来看，SUSE Observability 将有效取代 StackState。
+
+要安装 SUSE Observability，请遵循xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[安装指南]，只需对生成的值稍作修改即可完成迁移：
+
+* 使用与您的环境和（更新的）自定义值相匹配的选定配置文件。
+* 从 StackState 值中获取`+global.receiverApiKey+` ，并将其作为额外参数提供给值生成器
+* 对于必须提供的基本 URL，我们使用与当前 StackState 安装相同的 URL： `+https://stackstate.demo.stackstate.io+`
+
+因此，生成值的步骤是这样的（以我们的例子为例，再次使用最小轮廓）：
+
+[,bash]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set receiverApiKey='our-old-api-key' \
+  --set baseUrl='https://stackstate.demo.stackstate.io' \
+  --set sizing.profile='10-nonha' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+Helm 安装命令与安装文档中的相同，如果有`+custom-values-no-resources.yaml+` 值文件，还可以选择将其包括在内。同时确保包含入口配置值，这可以与 StackState 使用的配置值相同。在我们将使用的示例中
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/ingress.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
+
+[NOTE]
+====
+安装默认会生成一个新的管理员密码。如果使用的是标准身份验证，并希望保留与之前相同的管理员密码，则需要在值生成步骤中指定（或在生成值后编辑）。
+====
+
+
+==== 恢复配置备份
+
+现在 SUSE Observability 已安装完毕，可以恢复配置备份了。SUSE Observability Helm 图表附带了一套类似的备份工具，xref:/setup/data-management/backup_restore/configuration_backup.adoc[请参阅此处]。*这些*脚本*与 StackState 6.x 不同*，因此请确保从*SUSE Observability Helm 图表*的`+restore+` 目录中获取脚本，以便恢复备份。
+
+从 SUSE Observability Helm 图表的`+restore+` 目录运行以下命令恢复备份：
+
+. 设置活动上下文和命名空间：
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=suse-observability
+----
+
+. 上传之前创建的备份文件，本例中为`+sts-backup-20241024-1423.sty+` （如有必要，确保使用完整路径）：
++
+[,bash]
+----
+./upload-configuration-backup.sh sts-backup-20241024-1423.sty
+----
+
+. 恢复备份（这需要 1Gi 内存和集群中的 1 个核心），创建 Kubernetes 作业和启动 pod 可能需要一些时间：
++
+[,bash]
+----
+ ./restore-configuration-backup.sh sts-backup-20241024-1423.sty
+----
++
+请务必回答`+yes+` ，以确认删除所有数据都没问题。
+
+. 重新扩展所有部署：
++
+[,bash]
+----
+./scale-up.sh
+----
+
+现在，SUSE Observability 的设置与 StackState 完全相同，我们可以开始使用它了。请注意，由于使用的是相同的 URL，第一次可能需要刷新浏览器。
+
+=== 并排运行
+
+在这种情况下，SUSE Observability 将采集新数据，并负责运行监控器和发送通知。StackState 只提供对历史数据的访问。
+
+在某些时候，需要将流量从 StackState 转换到 SUSE Observability。限制对用户和已安装代理影响的解决方案是使用 StackState 最初使用的 URL 配置 SUSE Observability。本指南将重新使用 StackState URL (`+stackstate.demo.stackstate.io+`)，而 "旧 "StackState 将通过新的`+stackstate-old.demo.stackstate.io+` URL 访问。使用 OIDC 提供程序进行身份验证时，需要在 OIDC 提供程序配置和 StackState 配置中添加/更新`+stackstate-old+` URL。
+
+也可以在新的 URL 下安装 SUSE Observability，在这种情况下，您需要更新代理和 Open Telemetry 收集器以使用新的 URL，或使用其他方法重新路由流量。
+
+总之，迁移前的设置是 StackState 在命名空间`+stackstate+` 中运行，URL`+https://stackstate.demo.stackstate.io+` 。这将被迁移到
+
+* 命名空间`+suse-observability+` 中的 SUSE Observability，网址为`+stackstate.demo.stackstate.io+` ，这将是新的活动实例
+* 命名空间`+stackstate+` 中的 StackState，网址为`+https://stackstate-old.demo.stackstate.io+` ，这里只有历史数据
+
+==== 安装 SUSE Observability
+
+将 SUSE Observability 安装在与 StackState 不同的命名空间中，以避免任何冲突。建议使用与文档中相同的命名空间`+suse-observability+` 。
+
+安装方面最大的变化是现在支持配置文件，请根据xref:/setup/install-stackstate/requirements.adoc#_resource_requirements[要求]选择与您观察到的群集相匹配的配置文件，并使用它生成安装指南中记录的值。为 StackState 定制的 Helm 值与 SUSE Observability 兼容。不过，必须删除用于自定义资源的值，以便使用新的配置文件，我们将在名为`+custom-values-no-resources.yaml+` 的文件中保留这些值。另外，暂时不要在 SUSE Observability 安装中使用入口设置。
+
+要安装 SUSE Observability，请遵循xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc[安装指南]，只需对生成的值稍作修改即可完成迁移：
+
+* 使用与您的环境和（更新的）自定义值相匹配的选定配置文件。
+* 从 StackState 值中获取`+global.receiverApiKey+` ，并将其作为额外参数提供给值生成器
+* 对于必须提供的基本 URL，我们使用与当前 StackState 安装相同的 URL： `+https://stackstate.demo.stackstate.io+`
+
+因此，生成值的步骤是这样的（以我们的例子为例，再次使用最小轮廓）：
+
+[,bash]
+----
+export VALUES_DIR=.
+helm template \
+  --set license='<your license>' \
+  --set receiverApiKey='our-old-api-key' \
+  --set baseUrl='https://stackstate.demo.stackstate.io' \
+  --set sizing.profile='10-nonha' \
+  suse-observability-values \
+  suse-observability/suse-observability-values --output-dir $VALUES_DIR
+----
+
+Helm 安装命令与安装文档中的相同，如果有`+custom-values-no-resources.yaml+` 值文件，还可以选择将其包括在内。
+
+[NOTE]
+====
+安装默认会生成一个新的管理员密码。如果使用的是标准身份验证，并希望保留与之前相同的管理员密码，则需要在值生成步骤中指定（或在生成值后编辑）。
+====
+
+
+==== 恢复配置备份
+
+现在 SUSE Observability 已安装完毕，可以恢复配置备份了。SUSE Observability Helm 图表附带了一套类似的备份工具，xref:/setup/data-management/backup_restore/configuration_backup.adoc[请参阅此处]。*这些*脚本*与 StackState 6.x 不同*，因此请确保从*SUSE Observability Helm 图表*的`+restore+` 目录中获取脚本，以便恢复备份。
+
+从 SUSE Observability Helm 图表的`+restore+` 目录运行以下命令恢复备份：
+
+. 设置活动上下文和命名空间：
++
+[,bash]
+----
+  kubectl config use-context observability
+  kubectl config set-context --current --namespace=suse-observability
+----
+
+. 上传之前创建的备份文件，本例中为`+sts-backup-20241024-1423.sty+` （如有必要，确保使用完整路径）：
++
+[,bash]
+----
+./upload-configuration-backup.sh sts-backup-20241024-1423.sty
+----
+
+. 恢复备份（这需要 1Gi 内存和集群中的 1 个核心），创建 Kubernetes 作业和启动 pod 可能需要一些时间：
++
+[,bash]
+----
+ ./restore-configuration-backup.sh sts-backup-20241024-1423.sty
+----
++
+请仔细检查您是否在 suse-observability 命名空间，而不再是 StackState 命名空间，然后再回答`+yes+` ，以确认删除所有数据都没问题。
+
+. 重新扩展所有部署：
++
+[,bash]
+----
+./scale-up.sh
+----
+
+现在，SUSE Observability 的设置与 StackState 完全相同，我们可以开始使用它了。
+
+==== 准备缩减 StackState
+
+为了确保旧的 "StackState "设置不再有任何变化，同时也为了减少资源使用，必须将 StackState 部署的数量缩减到 0 个副本。最好的方法是通过 Helm 值，这样任何其他配置更改都不会意外地再次扩展某些部署。
+
+创建一个新的`+scaled-down.yaml+` 文件，并将其存储在 StackState`+values.yaml+` 旁边（或编辑现有的`+values.yaml+` 以包含或更新这些键）：
+
+[,yaml]
+----
+common:
+  deployment:
+    replicaCount: 0
+  statefulset:
+    replicaCount: 0
+anomaly-detection:
+  enabled: false
+backup:
+  enabled: false
+stackstate:
+  components:
+    correlate:
+      replicaCount: 0
+    checks:
+      replicaCount: 0
+    healthSync:
+      replicaCount: 0
+    e2es:
+      replicaCount: 0
+    notification:
+      replicaCount: 0
+    receiver:
+      replicaCount: 0
+    state:
+      replicaCount: 0
+    sync:
+      replicaCount: 0
+    slicing:
+      replicaCount: 0
+    vmagent:
+      replicaCount: 0
+  features:
+    server:
+      split: true
+opentelemetry:
+  enabled: false
+----
+
+该文件将在更改 StackState 的入口时使用。如果不再接收代理或开放遥测数据，则不需要这些 StackState 服务。
+
+==== 改变交通路线
+
+重新路由流量将把代理流量和 StackState 用户切换到 SUSE Observability。要做到这一点需要两个步骤，首先将 StackState 切换到新的 URL，然后配置 SUSE Observability ingress 以使用原来的 StackState URL。在这些步骤之间，SUSE Observability/StackState 将暂时无法访问，但代理会缓存数据，并在再次连接时发送。
+
+. 从 StackState 获取入口配置，并将其复制到 SUSE Observability 的值中，或将其复制到一个单独的`+ingress.yaml+` 值文件中，放在生成的`+baseConfig_values.yaml+` 和`+sizing_values.yaml+` 旁边。
+. 更新 StackState 的入口值以使用不同的 URL，这里我们将其从`+stackstate+` 更改为`+stackstate-old+` ：
++
+[,yaml]
+----
+ ingress:
+   annotations:
+     nginx.ingress.kubernetes.io/proxy-body-size: 100m
+   enabled: true
+   hosts:
+     - host: "stackstate-old.demo.stackstate.io"
+   tls:
+     - hosts:
+         - "stackstate-old.demo.stackstate.io"
+       secretName: tls-secret-stackstate-old
+
+ opentelemetry-collector:
+   ingress:
+     enabled: true
+     annotations:
+       nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+       nginx.ingress.kubernetes.io/backend-protocol: GRPC
+     hosts:
+       - host: otlp-stackstate-old.demo.stackstate.io
+         paths:
+           - path: /
+             pathType: Prefix
+             port: 4317
+     tls:
+       - hosts:
+           - otlp-stackstate-old.demo.stackstate.io
+         secretName: tls-secret-stackstate-old-otlp
+----
+
+. 编辑 StackState 的原始`+values.yaml+` ，更新`+stackstate.baseUrl+` 值，使其也使用新的 URL（此处为`+https://stackstate-old.demo.stackstate.io+` ）。
+. 为 StackState 运行 helm 升级，并包含更新的入口配置，以便开始使用`+stackstate-old.demo.stackstate.io+` 入口。还包括上一步中的`+scaled-down.yaml+` 值，并确保包括安装 StackState 时使用的所有值文件：
++
+----
+  helm upgrade \
+   --install \
+   --namespace stackstate \
+   --values stackstate-values/values.yaml \
+   --values stackstate-values/stackstate-ingress.yaml \
+   --values stackstate-values/scaled-down.yaml \
+ stackstate \
+ stackstate/stackstate-k8s
+----
+
+. 运行 SUSE Observability 的xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc#_deploy_suse_observability_with_helm[helm 升级]，开始使用原来的`+stackstate.demo.stackstate.io+` URL（确保包括安装 SUSE Observability 时使用的所有值文件，但现在也包括`+ingress.yaml+` ）：
++
+----
+ export VALUES_DIR=.
+ helm upgrade \
+   --install \
+   --namespace suse-observability \
+   --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+   --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+   --values ingress.yaml \
+ suse-observability \
+ suse-observability/suse-observability
+----
+
+现在，用户可以访问`+https://stackstate.demo.stackstate.io+` ，获得 SUSE Observability 以及所有熟悉的 StackState 功能和实时数据。首次使用的用户可能需要点击刷新来强制加载新的应用程序。
+
+他们可以登录`+https://stackstate-old.demo.stackstate.io+` 查看历史数据。
+
+==== 卸载 StackState
+
+不再需要安装 StackState 时，可使用https://docs.stackstate.com/6.0/self-hosted-setup/uninstall[卸载程序卸载]。
+
+
+== 更新开放式遥测采集器配置
+
+SUSE Observability 的身份验证功能发生了变化。StackState 使用的是`+StackState+` 方案的承载令牌，但 SUSE Observability 使用的是`+SUSEObservability+` 方案。更新已安装的开放式遥测采集器的值，以便进行切换：
+
+[,yaml]
+----
+config:
+  extensions:
+    bearertokenauth:
+      scheme: StackState
+      token: "${env:API_KEY}"
+----
+
+至
+
+[,yaml]
+----
+config:
+  extensions:
+    bearertokenauth:
+      scheme: SUSEObservability
+      token: "${env:API_KEY}"
+----
+
+使用更新后的值通过`+helm upgrade+` 命令升级已安装的采集器，详情另请参阅xref:/setup/otel/collector.adoc#_deploy_the_collector[部署开放式遥测采集器]。
+
+== 升级背包
+
+导航至`+https://your-stackstate-instance/#/stackpacks/+` 或通过主菜单打开 StackPacks 概述。然后查看所有已安装的堆栈包，点击 "升级 "按钮，获取新版本的 SUSE Observability 堆栈包。
+
+== 迁移代理
+
+迁移到 SUSE Observability 的最后一步是更新所有已安装的代理。由于 SUSE Observability 向后兼容 StackState 代理，因此不必立即执行，可在每个特定群集方便的时候执行。
+
+迁移只需简单的两步：
+
+. 卸载 StackState 代理
+. 安装 SUSE Observability 代理
+
+重要的是要先卸载旧的代理，因为不可能同时运行两个代理。在群集上卸载代理的步骤如下：
+
+[,bash]
+----
+helm uninstall -n stackstate stackstate-k8s-agent
+----
+
+如果使用了不同的命名空间或版本名称，请相应更新命令。
+
+导航至`+https://your-stackstate-instance/#/stackpacks/kubernetes-v2+` 。在 StackPack 实例列表中找到要升级代理的集群，复制并运行 Kubernetes 发行版的 helm install 命令。`+--values+` SUSE Observability 代理值使用与 StackState 代理相同的命名。
