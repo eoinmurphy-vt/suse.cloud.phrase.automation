@@ -1,42 +1,42 @@
 include::partial$variables.adoc[]
-= Usando la Admisión de Seguridad de Pods con {project-name}
+= Uso de Pod Security Admission con {project-name}
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Configura la Admisión de Seguridad de Pods en un clúster de Kubernetes con {project-name} para asegurar los pods.
+:description: Configure Pod Security Admission en un clúster Kubernetes con {project-name}'s para asegurar los pods.
 :doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-distributor", "kubewarden-integrator"]
 :doc-topic: ["pod-security-admission-with-kubewarden"]
 :doc-type: ["howto"]
 :keywords: ["{project-name}", "kubewarden", "pod security admission", "pod security policy", "kubernetes"]
-:sidebar_label: Admisión de Seguridad de Pods
+:sidebar_label: Admisión Pod Security
 :sidebar_position: 30
 :current-version: {page-origin-branch}
 
-Las Políticas de Seguridad de Pods (PSP) se han eliminado desde la versión 1.25 de Kubernetes.
-Se reemplazan por la https://kubernetes.io/docs/concepts/security/pod-security-admission/[Admisión de Seguridad de Pods] (PSA).
+Las políticas de seguridad de pods (PSP) se han eliminado desde la versión 1.25 de Kubernetes.
+Se sustituyen por el https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod Security Admission] (PSA).
 
-La PSA simplifica la seguridad de los Pods en los clústeres de Kubernetes.
+PSA simplifica la seguridad de los Pods en los clusters Kubernetes.
 
-La PSA tiene tres perfiles (descritos https://kubernetes.io/docs/concepts/security/pod-security-standards/[en los Estándares de Seguridad de Pods]) para los espacios de nombres:
+PSA dispone de tres perfiles (descritos https://kubernetes.io/docs/concepts/security/pod-security-standards/[en]) para los espacios de nombres:
 
-* *privilegiado*, proporcionando el rango más amplio de permisos
-* *base*, para prevenir nuevas escaladas de privilegios
-* *restringido*, restringido para endurecer los Pods
+* *privilegiada*, que ofrece la más amplia gama de permisos
+* *línea de base*, para evitar nuevas escaladas de privilegios
+* *restringido*, restringido a endurecer Vainas
 
-Un controlador de PSA realiza acciones al detectar violaciones.
-Las acciones son: `enforce`, `audit` y `warn`.
+Un controlador PSA realiza acciones al detectar una infracción.
+Las acciones son: `enforce`, `audit`, y `warn`.
 Se pueden configurar.
 
-En el momento de escribir, con Kubernetes 1.28, el controlador de PSA tiene las siguientes limitaciones:
+En el momento de escribir esto, con Kubernetes 1.28, el controlador PSA tiene las siguientes limitaciones:
 
-* Sin capacidades de mutación
-* Los objetos de nivel superior (como `Deployment`, `Job`) se evalúan solo cuando los modos `audit` o `warn` están habilitados
+* Sin capacidad de mutación
+* Los objetos de nivel superior (como `Deployment`, `Job`) sólo se evalúan cuando están activados los modos `audit` o `warn` 
 
-{short-project-name} se puede usar para *integrar* un perfil de PSA para evitar estas limitaciones.
+{short-project-name} puede utilizarse para *integrar* un perfil PSA que evite estas limitaciones.
 
 [NOTE]
 ====
 
-Podrías usar {short-project-name} para reemplazar la antigua configuración de PSP como se muestra en xref:howtos/psp-migration.adoc[migración de PSP].
+Puede utilizar {short-project-name} para sustituir la antigua configuración de PSP, como se muestra en la xref:howtos/psp-migration.adoc[migración de PSP].
 Sin embargo, el objetivo de este artículo es mostrar cómo {short-project-name} puede complementar el nuevo PSA.
 ====
 
@@ -58,15 +58,15 @@ metadata:
 EOF
 ----
 
-Este perfil de PSA no permite crear contenedores que ejecuten su aplicación como el usuario `root`.
+Este perfil PSA no permite crear contenedores que ejecuten su aplicación como el usuario `root`.
 Al definir este contenedor:
 
-* el atributo `runAsNonRoot` debe establecerse en `true`
-* el `runAsUser` no puede establecerse en `0`.
+* el atributo `runAsNonRoot` debe tener el valor `true`
+* el de `runAsUser` no se puede configurar en `0`.
 
-Por lo tanto, el siguiente recurso no alcanzará su estado deseado:
+Así, el siguiente recurso no alcanzará el estado deseado:
 
-.`kubectl` comando configurando un recurso con `runAsUser: 0` (marcado como ➀)
+.`kubectl` comando de configuración de un recurso con `runAsUser: 0` (marcado como ➀)
 [%collapsible]
 =====
 [subs="+attributes",shell]
@@ -107,7 +107,7 @@ EOF
 <1> `runAsUser: 0`
 =====
 
-Si comprobamos la ampliación, podemos ver que el PSA impide la creación del pod:
+Si comprobamos el despliegue, podemos ver que el PSA impide la creación del pod:
 
 [subs="+attributes",shell]
 ----
@@ -122,9 +122,9 @@ kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.condit
 }
 ----
 
-Puedes solucionar esto eliminando el `runAsUser: 0` de la definición del contenedor:
+Puede solucionarlo eliminando la dirección `runAsUser: 0` de la definición del contenedor:
 
-.`kubectl` comando configurando un recurso sin `runAsUser: 0`
+.`kubectl` configurando un recurso sin `runAsUser: 0`
 [%collapsible]
 =====
 [subs="+attributes",shell]
@@ -164,7 +164,7 @@ EOF
 ----
 =====
 
-Ahora la PSA permite un intento de creación de pod pero aún falla.
+Ahora PSA permite un intento de creación de pods pero sigue fallando.
 
 [subs="+attributes",shell]
 ----
@@ -173,9 +173,9 @@ NAME                                READY   STATUS                       RESTART
 nginx-deployment-57d8568bbb-h4bx7   0/1     CreateContainerConfigError   0          47s
 ----
 
-Es porque la definición del contenedor no especificó un usuario que se utilizará al iniciar un programa dentro del contenedor.
-El valor por defecto es ejecutar como raíz si este es el caso.
-Eso no está permitido por la directiva `runAsNonRoot`:
+Se debe a que la definición del contenedor no especifica el usuario que se utilizará al iniciar un programa dentro del contenedor.
+Por defecto se ejecuta como usuario root si este es el caso.
+Eso no lo permite la directiva `runAsNonRoot`:
 
 [subs="+attributes",shell]
 ----
@@ -200,20 +200,20 @@ kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-h4bx7 -o json | jq 
 ----
 
 Aquí es donde {short-project-name} puede ayudar.
-Puedes usar la política https://artifacthub.io/packages/kubewarden/user-group-psp/user-group-psp[`user-group-policy`] para modificar la definición de la ampliación.
+Puede utilizar la política https://artifacthub.io/packages/kubewarden/user-group-psp/user-group-psp[`user-group-policy`] para modificar la definición de implantación.
 Esto configura un usuario por defecto para los contenedores omitiendo esa información.
 
 [NOTE]
 ====
 
-Necesitas la pila {short-project-name} en el clúster de Kubernetes para este ejemplo.
-Consulta el xref:quick-start.adoc[QuickStart] para más detalles.
+Para este ejemplo se necesita la pila {short-project-name} en el clúster Kubernetes.
+Para más información, consulte la xref:quick-start.adoc[Guía rápida].
 ====
 
 
 Es posible imponer un rango de ID de usuario, por ejemplo, 1000--2000 y 4000--5000:
 
-.comando kubectl que impone un rango de ID de usuario
+.comando kubectl que impone un rango de id de usuario
 [%collapsible]
 ======
 
@@ -253,16 +253,16 @@ EOF
 
 ======
 
-Verifica que la directiva esté activa antes de continuar:
+Compruebe que la política está activa antes de continuar:
 
 [subs="+attributes",shell]
 ----
 kubectl get clusteradmissionpolicy.policies.kubewarden.io/user-group-psp
 ----
 
-Cuando la directiva esté activa, vuelve a crear la ampliación:
+Cuando la política esté activa, vuelva a crear la implantación:
 
-.comando kubectl que recrea la ampliación
+.comando kubectl recreando el despliegue
 [%collapsible]
 ======
 
@@ -305,8 +305,8 @@ EOF
 
 ======
 
-Ahora la ampliación está mutada por la directiva de {short-project-name} que permite que el Pod se inicie.
-El contenedor definido dentro del Pod tiene un valor por defecto de `runAsUser`:
+Ahora el despliegue es mutado por {short-project-name}'s policy que permite que el Pod se inicie.
+El contenedor definido dentro del Pod tiene un valor por defecto `runAsUser`:
 
 [subs="+attributes",shell]
 ----
@@ -327,11 +327,11 @@ kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-nv8fj -o json | jq 
 ----
 
 La integración de {short-project-name} puede hacer más en este escenario.
-Puede verificar el valor del `runAsUser` proporcionado.
+Puede comprobar el valor de la dirección `runAsUser` facilitada.
 
-Este recurso es rechazado por la directiva de {short-project-name} de antes:
+Este recurso es rechazado por la política {short-project-name} de antes:
 
-.comando kubectl para mostrar el rechazo del recurso
+.Comando kubectl para mostrar el rechazo de recursos
 [%collapsible]
 ======
 
@@ -373,7 +373,7 @@ EOF
 <1> `runAsUser: 7000`
 ======
 
-Es rechazado porque el valor de `runAsUser` está establecido en `7000`, que está fuera de los rangos permitidos por la directiva:
+Se rechaza porque el valor `runAsUser` se establece en `7000`, que está fuera de los rangos permitidos por la política:
 
 [subs="+attributes",shell]
 ----
@@ -390,7 +390,7 @@ kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.condit
 
 == Resumen
 
-PSA proporciona una forma fácil de asegurar los clústeres de Kubernetes.
-El objetivo principal de PSA es la simplicidad y no tiene el poder y la flexibilidad del anterior PSP.
+PSA ofrece una forma sencilla de proteger los clústeres Kubernetes.
+El principal objetivo de la PSA es la simplicidad y no tiene la potencia y flexibilidad de la anterior PSP.
 
-Usar {short-project-name} junto con PSA ayuda a llenar este vacío.
+El uso de {short-project-name} junto con PSA ayuda a llenar este vacío.
