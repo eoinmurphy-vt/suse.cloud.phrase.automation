@@ -1,38 +1,36 @@
 include::partial$variables.adoc[]
-= 将Gatekeeper策略迁移到{project-name}
+= 将网守策略迁移到 {project-name}
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: 通过两个主要步骤配置{project-name}策略：将Rego代码编译为WebAssembly。
+:description: 通过以下两个主要步骤迁移现有的 Gatekeeper 策略，配置{project-name} 策略：将 Rego 代码编译成 WebAssembly。
 :keywords: ["{project-name}", kubewarden, gatekeeper]
 :doc-persona:
   [kubewarden-operator, kubewarden-integrator, kubewarden-policy-developer]
 :doc-type: [howto]
 :doc-topic: [operator-manual]
 
-本指南向您展示如何将现有的Gatekeeper策略转换为{project-name}策略。此过程涉及两个主要步骤：
-. 将Rego程序编译为WebAssembly（Wasm）模块。
-. 将WebAssembly模块分发为{short-project-name}策略。
+本指南向您介绍如何将现有的 Gatekeeper 策略转换为{project-name} 策略。这一过程包括两个主要步骤：
+. 将 Rego 程序编译成 WebAssembly (Wasm) 模块。
+. 将 WebAssembly 模块作为{short-project-name} 策略分发。
 
-xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[Rego策略教程]涵盖了将Rego代码编译为WebAssembly模块的大部分构建过程。本指南专注于逐步提取Gatekeeper自定义资源定义（CRD），并将其迁移为功能性{short-project-name}策略。它使用一个基本的Gatekeeper演示策略。
+xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[Rego 策略教程]涵盖了将 Rego 代码编译成 WebAssembly 模块的大部分构建过程。本指南重点介绍提取网守自定义资源定义（CRD）并将其迁移到{short-project-name} 功能策略中的逐步过程。它使用基本的网守演示策略。
 
 == 先决条件
 
-* link:https://github.com/open-policy-agent/opa/releases[opa]：您使用此工具将代码构建为wasm。本指南是使用`v1.5.1`版本编写的。
-* link:https://github.com/kubewarden/kwctl/releases[`kwctl`]：您用来准备和运行{short-project-name} WebAssembly模块的工具。
-* link:https://github.com/bats-core/bats-core[`bats`]：用于运行端到端测试的工具。如果您决定编写这种类型的测试
-* link:https://github.com/mikefarah/yq[`yq`]：用于从yaml文件中提取数据的工具。
+* link:https://github.com/open-policy-agent/opa/releases[OPA]：使用此工具将代码编入 wasm。本指南使用`v1.5.1` 版本编写。
+* link:https://github.com/kubewarden/kwctl/releases[`kwctl`]：您用来准备和运行{short-project-name} 网页组装模块的工具
+* link:https://github.com/bats-core/bats-core[`bats`]端到端测试工具：用于运行端到端测试的工具。如果您决定编写此类测试
+* link:https://github.com/mikefarah/yq[`yq`]：用于从 yaml 文件中提取数据的工具
 
-== 在迁移您的策略之前
+== 迁移策略前
 
-在开始迁移Gatekeeper策略的过程中，请考虑使用{short-project-name}link:https://artifacthub.io/packages/search?kind=13[目录]中已有的策略。其中一些link:https://github.com/kubewarden/rego-policies-library[策略]是公开可用的OPA和Gatekeeper策略，已迁移到{short-project-name}。
+在开始迁移 Gatekeeper 策略之前，请考虑使用{short-project-name}link:https://artifacthub.io/packages/search?kind=13[ 目录]中已有的策略。link:https://github.com/kubewarden/rego-policies-library[]的部分是公开的 OPA 和 Gatekeeper 政策，已迁移到{short-project-name} 。
 
-此外，请查看我们的xref:/explanations/comparisons/opa-comparison.adoc[比较]的文档，对比{short-project-name}和Gatekeeper。
+此外，请查看我们的{short-project-name} 和 Gatekeeperxref:/explanations/comparisons/opa-comparison.adoc[比较]文档。
 
-== 第 1 步：初始化您的{short-project-name}策略项目
+== 步骤 1：初始化{short-project-name} 策略项目
 
-首先，使用{short-project-name} Gatekeeper
-link:https://github.com/kubewarden/gatekeeper-policy-template[模板]来创建
-一个基本的策略项目结构。这提供了用于构建和测试您策略的Makefile目标。在您从模板创建策略代码后，运行Makefile命令以检查策略构建和测试是否成功：
+首先，使用{short-project-name} Gatekeeperlink:https://github.com/kubewarden/gatekeeper-policy-template[模板]创建基本策略项目结构。它提供了用于构建和测试策略的 Makefile 目标。从模板创建策略代码后，运行 Makefile 命令检查策略的构建和测试运行是否成功：
 
 [source,console]
 ----
@@ -47,14 +45,14 @@ opa test *.rego
 PASS: 2/2
 ----
 
-== 第 2 步：迁移Gatekeeper策略代码
+== 步骤 2：迁移网守策略代码
 
-现在，开始迁移Gatekeeper策略。这涉及将一个`ConstraintTemplate`及其相关的`Constraint`资源转换为一个{short-project-name}策略。在{short-project-name}上下文中，将`ConstraintTemplate`视为核心策略代码，而`Constraint`实例则转换为在{short-project-name}中运行的策略实例。
+现在，开始迁移网守策略。这包括将`ConstraintTemplate` 及其相关的`Constraint` 资源转换为{short-project-name}政策。在{short-project-name} 上下文中，将`ConstraintTemplate` 视为核心策略代码，而`Constraint` 实例则转化为在{short-project-name} 中运行的策略实例。
 
-首先，将您的`ConstraintTemplate`中的Rego代码复制到`policy.rego`文件中，该文件由{short-project-name}模板生成。在这个例子中，您应该使用来自Gatekeeper储存库的以下基本link:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[演示策略]。
+首先，将`ConstraintTemplate` 中的 Rego 代码复制到{short-project-name} 模板生成的`policy.rego`文件中。在本示例中，您应使用 Gatekeeper 资源库中的以下基本link:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[演示策略]。
 
 [.details]
-.Gatekeeper策略yaml
+.网守策略 yaml
 [%collapsible]
 ====
 [source,yaml]
@@ -92,23 +90,23 @@ spec:
 ----
 ====
 
-将Rego代码片段从`rego`字段复制到您的`policy.rego`文件中：
+将`rego` 字段中的 Rego 代码段复制到`policy.rego` 文件中：
 
 [source,console]
 ----
 cat gatekeeper/demo/basic/templates/k8srequiredlabels_template.yaml | yq ".spec.targets[0].rego" > policy.rego
 ----
 
-=== 为{short-project-name}调整Rego代码
+=== 调整雷戈代码 {short-project-name}
 
-您需要确保Rego代码中使用的`package`名称是`policy`。
-这是{short-project-name} Gatekeeper模板在许多地方期望的值。
+您需要确保 Rego 代码中使用的`package` 名称是`policy` 。
+这是{short-project-name} Gatekeeper 模板在许多地方的预期值。
 
-如果您不更改它，构建策略和运行其端到端测试时将会出现错误。
+如果不更改，在构建策略和运行端到端测试时就会出错。
 
-例如，我们正在转换的演示策略定义在`k8srequiredlabels`包中，这个值必须更改为`policy`。
+例如，我们要转换的演示策略是在`k8srequiredlabels` 软件包中定义的，必须将该值改为`policy` 。
 
-`policy.rego`文件的内容应如下所示：
+`policy.rego` 文件的内容必须如此：
 
 [source,rego]
 ----
@@ -123,7 +121,7 @@ msg := sprintf("you must provide labels: %v", [missing])
 }
 ----
 
-在此更改后尝试构建代码可能会显示新的编译错误：
+在此更改后尝试编译代码可能会发现新的编译错误：
 
 [source,console]
 ----
@@ -134,7 +132,7 @@ policy.rego:3: rego_parse_error: `contains` keyword is required for partial set 
 make: *** [Makefile:4: policy.wasm] Error 1
 ----
 
-策略作者必须修复这些错误，以允许`opa` CLI成功构建代码。具体的更改可能会根据`opa`版本和原始策略代码而有所不同。由于我们正在迁移一个在OPA v1之前的Rego策略，我们需要更新代码以符合v1标准。最终的`policy.rego`代码如下：
+策略作者必须修复这些错误，才能让`opa` CLI 成功构建代码。根据`opa` 版本和原始政策代码的不同，具体变更可能会有所不同。由于我们正在迁移 OPA v1 之前的 rego 政策，因此需要更新代码以符合 v1 标准。最终的`policy.rego` 代码如下所示：
 
 [source,rego]
 ----
@@ -162,42 +160,42 @@ rm bundle.tar.gz
 touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
 ----
 
-有关如何构建Gatekeeper策略的更多信息，请参阅我们的xref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[教程]。
+有关如何构建网守策略的更多信息，请参阅我们的xref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[教程]。
 
-=== Rego策略代码与OPA v1.0.0的兼容性
+=== 雷戈政策代码与 OPA v1.0.0 兼容
 
-随着OPA（开放政策代理）link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[v1.0.0]在2024年12月的发布，引入了关于Rego策略语法的重大更改。
+随着 2024 年 12 月 OPA（开放式策略代理）link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[v1.0.0 版本]的发布，Rego 策略语法发生了重大变化。
 
-之前，`if`对于所有规则定义和`contains`对于多值规则是可选的；现在，它们是强制性的。此更改影响大多数旧策略。
+以前，所有规则定义的`if` 和多值规则的`contains` 都是可选的，现在则是必须的。这一变化影响到大多数旧保单。
 
 以下是您需要了解的内容摘要：
 
-* *OPA v1.0.0语法*：OPA v1.0.0强制要求对所有规则定义使用`if`，并对多值规则使用`contains`。不遵循此语法的策略将会失效。
-* *向后兼容性*：如果您需要构建不使用新v1.0.0语法的旧策略，您必须在`opa build`命令中提供`--v0-compatible`标志。
-* *Gatekeeper集成*：Gatekeeper在其link:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[v3.19.0发布]中将其OPA依赖项更新为v1.0.0。
-* *Gatekeeper模板中的Rego版本*：Gatekeeper假设使用`v0`语法，除非模板在`code.engine: Rego`下的`source`字段中明确指定`version: "v1"`。
+* *OPA v1.0.0 语法*：OPA v1.0.0 规定所有规则定义使用`if` ，多值规则使用`contains` 。不遵守此语法的政策将被破坏。
+* *向后兼容性*：如果需要构建不使用新版 v1.0.0 语法的旧版策略，必须在`opa build`命令中提供`--v0-compatible` 标志。
+* *网守集成*：在link:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[.19.0 版中] v3，Gatekeeper 将其 OPA 依赖关系更新为 v1.0.0。
+* *网守模板中的 Rego 版本*：除非模板在`code.engine: Rego` 下的`source` 字段中明确指定`version: "v1"` ，否则 Gatekeeper 假定使用的是`v0` 语法。
 
-有关如何处理`v0`和`v1`版本的Rego的更多详细信息，请参见Gatekeeper文档中link:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[本节]。
+有关如何处理`v0` 和`v1` 版本的 Rego 的更多详情，请参阅link:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[这一部分] Gatekeeper 文档的。
 
-这对您意味着：
+这对您意味着什么？
 
-* 如果 Gatekeeper CR 没有指定 Rego 版本，则意味着将使用 `v0`。您必须使用 `OPA_V0_COMPATIBLE=true make` 命令构建策略。
-* 如果 Gatekeeper CR 明确指定了 `version: "v1"`，您必须在不设置任何环境变量的情况下构建策略。
+* 如果 Gatekeeper CR 没有指定 Rego 版本，就意味着将使用`v0` 。您必须使用`OPA_V0_COMPATIBLE=true make`命令来构建策略。
+* 如果 Gatekeeper CR 明确指定`version: "v1"` ，则必须在不设置任何环境变量的情况下构建策略。
 
-== 第三步：更新并运行测试
+== 步骤 3：更新和运行测试
 
-虽然强烈推荐，但策略作者可能会跳过为策略的初始版本创建测试。如果这适用于您，您需要禁用用于运行测试的 Makefile 目标。您不能完全去除这些目标，因为默认的 CI 作业期望它们被定义。相反，您应该用 "无操作" 操作替换调用 `opa` 和 `bats` 的命令。例如，您可以使用 `echo` 命令打印出为什么不运行测试的解释。
+虽然强烈建议，但政策作者可以跳过为政策的初始版本创建测试。如果您遇到这种情况，则需要禁用用于运行测试的 Makefile 目标。您不能完全删除这些目标，因为默认 CI 作业希望定义这些目标。取而代之的是用 "无操作 "操作取代调用`opa` 和`bats` 的命令。例如，可以使用`echo` 命令打印测试未运行的原因说明。
 
-{short-project-name} Gatekeeper 模板包括 Rego 单元测试和使用 Bats 和 `kwctl` 的端到端 (e2e) 测试。如果您计划包含测试，则两个集合都需要根据您的策略进行调整。
+{short-project-name} Gatekeeper 模板包括 Rego 单元测试和使用 Bats 和`kwctl` 的端到端（e2e）测试。如果您计划包含测试，则需要根据您的政策对两套测试进行调整。
 
-如果您的 Gatekeeper 策略已经有 Rego 测试，您可以将它们复制到 `policy_test.rego` 文件中。当您执行 `make test` 命令时，这些测试会自动运行。
+如果 Gatekeeper 策略中已经有 Rego 测试，可以将其复制到`policy_test.rego` 文件中。执行`make test` 命令时，这些命令会自动运行。
 
 [CAUTION]
 ====
-请记住，您在 `policy_test.rego` 中编写的任何 Rego 测试都受到 <<_rego_policy_code_and_opa_v1_0_0_compatibility,Rego 策略代码和 OPA v1.0.0 兼容性>> 部分中详细说明的相同兼容性问题的影响。
+请记住，您在`policy_test.rego` 中编写的任何 Rego 测试都会受到<<_rego_policy_code_and_opa_v1_0_0_compatibility,Rego 策略代码和 OPA v1.0.0 兼容性>>部分详述的相同兼容性问题的影响。
 ====
 
-您在本指南中迁移的策略没有测试；我们需要自己添加它们。因此，我们将用一些基本测试更新 `policy_test.rego` 测试文件：
+本指南中迁移的策略没有测试；我们需要自己添加测试。因此，我们将更新`policy_test.rego` 测试文件，加入一些基本测试：
 
 [source,rego]
 ----
@@ -226,7 +224,7 @@ test_reject if {
 }
 ----
 
-现在，运行 `make test` 应该验证您的策略：
+现在，运行`make test` 就能验证你的策略：
 
 [source,console]
 ----
@@ -271,7 +269,7 @@ run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/sett
 }
 ----
 
-您需要创建 `test_data/settings.json`、`test_data/accept_deploy_request.json` 和 `test_data/reject_deploy_request.json` 文件以支持这些测试。
+您需要创建`test_data/settings.json` 、`test_data/accept_deploy_request.json` 和`test_data/reject_deploy_request.json`文件来支持这些测试。
 
 [.details]
 .test_data/settings.json
@@ -285,7 +283,7 @@ run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/sett
 ----
 ====
 
-我们不会在这里包含 `accept_deploy_request.json` 和 `reject_deploy_request.json` 的完整内容，因为 `AdmissionRequest` JSON 可能会很长，我们希望保持本指南的简洁。但是，您可以使用 xref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`kwctl scaffold`] 命令生成这些文件。本指南的关键在于，一个请求应该缺少所需的标签，而另一个请求应该定义该标签。
+我们不会在此包含`accept_deploy_request.json` 和`reject_deploy_request.json` 的全部内容，因为`AdmissionRequest` JSON 可能相当长，我们希望本指南简明扼要。不过，您可以使用xref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`kwctl scaffold`]命令生成这些文件。本指南的关键在于，一个请求应缺少所需的标签，而另一个请求则应定义了标签。
 
 检查 e2e 测试是否通过：
 
@@ -300,15 +298,15 @@ e2e.bats
 
 [IMPORTANT]
 ====
-策略参数（例如，本示例中的标签）源自策略设置。这使您能够以不同的参数/设置部署多个相同策略的实例，类似于约束在 Gatekeeper 中的功能。
+策略参数（例如本例中的标签）源自策略设置。这样就可以部署具有不同参数/设置的同一策略的多个实例，类似于 Gatekeeper 中的 "约束 "功能。
 ====
 
-== 第四步：准备 `metadata.yml` 以供分发
+== 步骤 4：准备`metadata.yml` 以供分发
 
-现在您有了一个功能性策略，请准备 `metadata.yml` 文件以供分发。该文件定义了带有策略描述、作者、许可证和其他基本信息的注释。至关重要的是，它定义了 `rules`，指定策略可以验证哪些资源和动词。该信息驱动 `kwctl scaffold` 命令生成用于在您的集群中部署策略的清单。
+现在您已经有了一个实用的政策，请准备好`metadata.yml` 文件，以便分发。该文件定义了政策说明、作者、许可证和其他重要信息的注释。最重要的是，它定义了`rules` ，规定了政策可以验证哪些资源和动词。这些信息会驱动`kwctl scaffold` 命令生成清单，以便在群集中部署策略。
 
-Gatekeeper 的 `Constraints` CRDs，它们是在`ConstraintTemplates`中定义的策略实例，指定了策略实例评估哪些资源。
-因此，如果您有现有的`Constraints`应用了`ConstraintTemplate`，它们为您在`metadata.yml`文件中应定义的资源提供了良好的参考。例如，在之前使用的Gatekeeper示例中，从`k8srequiredlabels``ConstraintTemplate`创建的`K8sRequiredLabels``Constraint`适用于`Namespaces`：
+网守的`Constraints` CRD 是在`ConstraintTemplates` 中定义的策略实例，指定策略实例评估哪些资源。
+因此，如果您有应用`ConstraintTemplate` 的现有`Constraints` ，它们将为您在`metadata.yml` 文件中定义资源提供很好的参考。例如，在前面使用的网守示例中，从`k8srequiredlabels`创建的`K8sRequiredLabels` `Constraint``ConstraintTemplate` 适用于`Namespaces` ：
 
 [source,yaml]
 ----
@@ -325,7 +323,7 @@ spec:
     labels: ["gatekeeper"]
 ----
 
-基于此，更新您的`metadata.yml`的`rules`部分，以包括一个新的`rule`，用于在`CREATE`和`UPDATE`操作期间验证`namespaces`：
+在此基础上，更新`metadata.yml` 中的`rules` 部分，加入新的`rule` ，以便在`CREATE` 和`UPDATE` 操作期间验证`namespaces` ：
 
 [source,yaml]
 ----
@@ -358,9 +356,9 @@ annotations:
   io.kubewarden.policy.category: Resource validation
 ----
 
-现在，您的策略已准备好分发和部署。请参考教程中的xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[发布策略]部分，了解如何将其推送到远程注册表。
+现在，您的政策已准备好分发和部署。请参阅教程中的 "xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[发布策略]"部分，了解如何将xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[策略]推送到远程注册表。
 
-您可以使用`kwctl`搭建策略清单：
+您可以使用`kwctl` 构架策略清单：
 
 [source,console]
 ----
@@ -399,7 +397,7 @@ spec:
 
 === 定义策略设置
 
-该策略具有参数，Gatekeeper在`Constraint`中定义这些参数。您需要更新生成的`settings`策略清单中的{short-project-name}部分，以包含这些必需的参数。在以下示例中，除了定义设置外，您还可以从OCI注册表测试该策略：
+该策略具有参数，由 Gatekeeper 在`Constraint` 中定义。您需要更新生成的{short-project-name}策略清单中的`settings` 部分，以包含这些所需的参数。在下面的示例中，除了定义设置外，还可以从 OCI 注册表测试策略：
 
 [source,yaml]
 ----
@@ -437,7 +435,7 @@ spec:
   mutating: false
 ----
 
-尝试部署缺少必需`gatekeeper`标签的名称空间：
+尝试部署缺少所需`gatekeeper` 标签的命名空间：
 
 [source,console]
 ----
@@ -452,7 +450,7 @@ EOF
 Error from server: error when creating "STDIN": admission webhook "clusterwide-policy-name.kubewarden.admission" denied the request: you must provide labels: [gatekeeper]
 ----
 
-以及另一个带有必需标签的名称空间：
+以及另一个带有所需标签的命名空间：
 
 [source,console]
 ----
