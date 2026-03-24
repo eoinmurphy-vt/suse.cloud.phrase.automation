@@ -1,0 +1,59 @@
+= Microsoft Entra ID
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+:experimental:
+
+== Entra IDでアプリケーションを作成する
+
+. https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app?tabs=client-secret[このガイドに従って]、Entra ID にアプリケーションを登録します。
+ .. 表示名としては、例えば、こう使うことができる、 `+SUSE Observability+`
+ .. `+Web+` プラットフォームを選択し、リダイレクト URL を指定します： `+https://<your-stackstate-installation>/loginCallback?client_name=StsOidcClient+`
+ .. クレデンシャルを追加する際は、`+client secret+` のクレデンシャルを使用し、必ずシークレットを保存してください。
+. `+Prepare for development+` セクションの他のセクションは必須ではありませんが、本番インストールでは、所有者を設定し、特定のスコープを事前承認するために、これらのセクションに従う必要があります（SUSE Observabilityが要求するスコープについては、次のセクションを参照してください）。
+. 最後に、 https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims?tabs=appui#_configure_groups_optional_claims[このガイド（]使用してアプリ登録にグループクレームを追加することで、SUSE Observabilityがユーザのグループ（認可に必要）を受信することを確認します。このドキュメントの残りの部分では、トークンのプロパティをカスタマイズせず、SUSE ObservabilityがグループIDを受け取ることを前提としています。
+
+== SUSE Observabilityの設定
+
+アプリの登録情報を使用して、SUSE Observability用の新しい`+authentication.yaml+` ファイルを作成します：
+
+----
+stackstate:
+  authentication:
+    oidc:
+      # The client id is in the list of essentials on the overview page of the App registration
+      clientId: "<Application (client) ID>"
+      secret: "<Application (client) secret>"
+      # The Directory (Tenant) ID is in the list of essentials on the overview page of the App registration
+      discoveryUri: "https://login.microsoftonline.com/<Directory (tenant) ID>/v2.0/.well-known/openid-configuration"
+      jwsAlgorithm: RS256
+      scope: ["openid", "email", "profile", "offline_access"]
+      jwtClaims:
+        usernameField: "email"
+        groupsField: groups
+    roles:
+      guest: []
+      powerUser: []
+      admin: [ "aaaaaaaa-bbbb-1111-2222-aabbccddeeff", "eeeeeeeeee-bbbb-1111-2222-aabbccddeeff" ]
+      k8sTroubleshooter: []
+----
+
+の値を取得する：
+
+* アプリケーション（クライアント）ID：アプリ登録の概要ページにある「Essentials」セクション内
+* アプリケーション（クライアント）シークレット：前セクションのステップ1で作成され、どこかに保存されている。
+* ディレクトリ（テナント）ID：アプリ登録の概要ページの「Essentials」セクションに記載
+* 異なるロールのグループ ID: Entra ID 管理画面で、menu:IdentityAll[Groups] を参照します。グループIDは2列目の`+Object Id+` 。どの Entra ID グループにどのレベルの権限を持たせるかを決定し、上記の yaml の例でそれぞれのロールに割り当てます（2 つのグループ ID の例を削除します）。
+
+ここで、インストールに使用したhelmコマンドを使用してSUSE Observabilityを再デプロイしますが、新しい`+authentication.yaml+` ファイル、`+helm upgrade ... --values authentication.yaml+` 。アップグレードの際には、必ずこのファイルを含めるようにしてください。
+
+=== 中古スコープ
+
+SUSE Observabilityは4つのスコープを要求するように設定されています：
+
+* 認証のためのオープンID
+* ユーザーを特定するための電子メール
+* プロファイルをリクエストできるようになります。
+* offline_accessを使用すると、再認証なしでユーザを長時間ログイン状態に保ち、SUSE Observabilities APIトークンを使用できるようになります。
+
+詳細については、https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-permissions-and-consent[Microsoft Identity Platform における権限と同意（learn.microsoft.com]）を参照してください。
