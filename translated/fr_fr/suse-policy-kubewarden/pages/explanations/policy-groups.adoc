@@ -1,0 +1,250 @@
+include::partial$variables.adoc[]
+= Groupes politiques
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Apprenez à créer des stratégies complexes en combinant des stratégies plus simples par le biais de groupes de stratégies, en particulier en utilisant les définitions AdmissionPolicyGroup et ClusterAdmissionPolicyGroup.
+:doc-persona: ["kubewarden-operator"]
+:doc-topic: ["explications", "groupe de politiques"].
+:doc-type: ["explanation"]
+:doctype: book
+:keywords: ["{project-name}", "kubewarden", "policy groups", "clusteradmissionpolicygroup", "admissionpolicygroup"].
+:sidebar_label: Groupes politiques
+:sidebar_position: 21
+:current-version: {page-origin-branch}
+
+La fonction de groupe de politiques permet aux utilisateurs de créer des politiques complexes en combinant des politiques plus simples. Il introduit deux nouvelles définitions de ressources personnalisées (CRD) :
+
+* `+AdmissionPolicyGroup+`: pour les politiques d'admission qui s'appliquent à des espaces de noms spécifiques.
+* `+ClusterAdmissionPolicyGroup+`: pour les politiques d'admission qui s'appliquent à l'ensemble de la grappe.
+
+Ces groupes de politiques permettent aux utilisateurs d'utiliser les politiques existantes, ce qui réduit la nécessité de créer des politiques personnalisées et améliore la réutilisation. En évitant la duplication de la logique des politiques, les utilisateurs peuvent simplifier la gestion et créer des politiques personnalisées avec une configuration de type DSL.
+
+Les groupes de politiques permettent l'évaluation combinée de plusieurs politiques à l'aide d'opérateurs logiques. Cela permet de définir une logique complexe. Cependant, alors que les politiques ordinaires peuvent inclure une logique de mutation pour modifier les ressources lors de l'admission, les groupes de politiques n'effectuent qu'une validation.
+
+La configuration des groupes de politiques est similaire à celle des politiques ordinaires. La différence réside dans l'ajout des champs `+expression+`, `+message+` et `+policies+`et dans la déclaration des règles contextuelles à un endroit différent.
+
+Il s'agit d'un exemple de `+ClusterAdmissionPolicyGroup+` que vous pouvez utiliser dans les sections suivantes pour expliquer les différents champs :
+
+.Un `+ClusterAdmissionPolicyGroup+` qui rejette les Pods qui utilisent des images avec la balise `+latest+`, à moins que les images ne soient signées par deux parties de confiance : Alice et Bob.
+[%collapsible]
+======
+[,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicyGroup # or AdmissionPolicyGroup
+metadata:
+  name: demo
+spec:
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations:
+        - CREATE
+        - UPDATE
+  policies:
+    signed_by_alice:
+      module: ghcr.io/kubewarden/policies/verify-image-signatures:v0.3.0
+      settings:
+        modifyImagesWithDigest: false
+        signatures:
+          - image: "*"
+            pubKeys:
+              - |
+                -----BEGIN PUBLIC KEY-----
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyg65hiNHt8FXTamzCn34IE3qMGcV
+                yQz3gPlhoKq3yqa1GIofcgLjUZtcKlUSVAU2/S5gXqyDnsW6466Jx/ZVlg==
+                -----END PUBLIC KEY-----
+    signed_by_bob:
+      module: ghcr.io/kubewarden/policies/verify-image-signatures:v0.3.0
+      settings:
+        modifyImagesWithDigest: false
+        signatures:
+          - image: "*"
+            pubKeys:
+              - |
+                -----BEGIN PUBLIC KEY-----
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEswA3Ec4w1ErOpeLPfCdkrh8jvk3X
+                urm8ZrXi4S3an70k8bf1OlGnI/aHCcGleewHbBk1iByySMwr8BabchXGSg==
+                -----END PUBLIC KEY-----
+    reject_latest:
+      module: registry://ghcr.io/kubewarden/policies/trusted-repos:v0.2.0
+      settings:
+        tags:
+          reject:
+            - latest
+  expression: "reject_latest() || (signed_by_alice() && signed_by_bob())"
+  message: "the image is using the latest tag or is not signed by Alice and Bob"
+----
+======
+
+== Principaux champs de configuration
+
+Cette section présente les principaux champs de configuration d'un groupe de politiques.
+
+=== L'attribut `+policies+` 
+
+Le champ des politiques est une carte des politiques ordinaires. {project-name} appelle les politiques par le groupe de politiques, afin de déterminer si la ressource évaluée doit être acceptée ou rejetée. Les définitions de ces politiques sont une version simplifiée des politiques ordinaires {short-project-name}, ne contenant que les attributs `+module+`, `+settings+` et`+contextAwareResources+`. Ces éléments sont nécessaires au fonctionnement des politiques au sein d'un groupe de politiques.
+
+Un nom unique identifie chaque politique du groupe. Par exemple, l'extrait suivant définit trois politiques : `+signed_by_alice+`, `+signed_by_bob+`et `+reject_latest_tag+`.
+
+[,yaml]
+----
+policies:
+  signed_by_alice:
+    module: ghcr.io/kubewarden/policies/verify-image-signatures:v0.2.8
+    settings: {} # settings for the policy
+  signed_by_bob:
+    module: ghcr.io/kubewarden/policies/verify-image-signatures:v0.2.8
+    settings: {} # settings for the policy
+  reject_latest_tag:
+    module: ghcr.io/kubewarden/policies/trusted-repos-policy:v0.2.0
+    settings: {} # settings for the policy
+----
+
+[TIP]
+====
+
+Un groupe de stratégies peut inclure plusieurs fois la même stratégie avec des paramètres différents.
+
+====
+
+
+=== L'attribut `+expression+` 
+
+L'attribut `+expression+` contient une déclaration composée d'identifiants de politique reliés entre eux par des opérateurs logiques.
+
+L'évaluation de l'instruction `+expression+` doit aboutir à une valeur booléenne.
+
+La représentation des politiques se fait sous la forme d'une fonction nommée d'après l'identifiant spécifié dans la carte `+.spec.policies+`. Les résultats produits par l'évaluation des politiques sont ensuite évalués à l'aide des opérateurs logiques fournis par l'utilisateur.
+
+Il s'agit des opérateurs pris en charge :
+
+* `+&&+``+AND+`: utilisé pour effectuer des opérations
+* `+||+``+OR+`: utilisé pour effectuer des opérations
+* `+!+``+NOT+`: utilisé pour effectuer des opérations
+
+Vous pouvez utiliser les crochets ronds `+( )+` pour définir les priorités d'évaluation.
+
+Par exemple, étant donné l'expression suivante :
+
+[,console]
+----
+reject_latest() || (signed_by_alice() && signed_by_bob())
+----
+
+La politique rejette les charges de travail contenant des images utilisant la balise `+latest+`, sauf si Alice et Bob ont tous deux signé les images.
+
+=== L'attribut `+message+` et le format de réponse
+
+Le champ `+message+` indique le message renvoyé lorsque l'évaluation du champ`+expression+` aboutit à un rejet. La réponse comprend le message, ainsi que les résultats de l'évaluation des politiques individuelles.
+
+[IMPORTANT]
+====
+
+L'évaluation des politiques appartenant au groupe n'a lieu qu'en cas de nécessité.
+
+Par exemple, étant donné l'expression suivante :
+
+[,console]
+----
+reject_latest() || (signed_by_alice() && signed_by_bob())
+----
+
+Les politiques `+signed_by_bob+` et `+signed_by_alice+` ne sont pas évaluées lorsque la politique`+reject_latest+` renvoie `+true+`.
+
+De même, la politique `+signed_by_bob+` n'est pas évaluée si les politiques`+signed_by_alice+` et `+reject_latest+` renvoient `+false+`.
+
+Cela permet d'éviter les évaluations inutiles des politiques dans le groupe et de répondre rapidement aux demandes d'admission.
+
+====
+
+Le système envoie tous les détails de l'évaluation des politiques de groupe dans le cadre de la réponse d'admission (AdmissionResponse) `+.status.details.causes+` lorsqu'une politique de groupe est rejetée.
+
+Vous pouvez obtenir tous les détails d'une demande d'admission rejetée en augmentant le niveau de verbosité de `+kubectl+`:
+
+[,shell]
+----
+kubectl -v4 apply -f signed-pod.yml
+I0919 18:29:40.251332    4330 helpers.go:246] server response object: [{
+  "kind": "Status",
+  "apiVersion": "v1",
+  "metadata": {},
+  "status": "Failure",
+  "message": "error when creating \"signed-pod.yml\": admission webhook \"clusterwide-demo.kubewarden.admission\" denied the request: the image is using the latest tag or is not signed by Alice and Bob",
+  "details": {
+    "causes": [
+      {
+        "message": "Resource signed is not accepted: verification of image testing.registry.svc.lan/busybox:latest failed: Host error: Callback evaluation failure: Image verification failed: missing signatures\nThe following constraints were not satisfied:\nkind: pubKey\nowner: null\nkey: |\n  -----BEGIN PUBLIC KEY-----\n  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEswA3Ec4w1ErOpeLPfCdkrh8jvk3X\n  urm8ZrXi4S3an70k8bf1OlGnI/aHCcGleewHbBk1iByySMwr8BabchXGSg==\n  -----END PUBLIC KEY-----\nannotations: null\n",
+        "field": "spec.policies.signed_by_bob"
+      },
+      {
+        "message": "not allowed, reported errors: tags not allowed: latest",
+        "field": "spec.policies.reject_latest"
+      }
+    ]
+  },
+  "code": 400
+}]
+Error from server: error when creating "signed-pod.yml": admission webhook "clusterwide-demo.kubewarden.admission" denied the request: the image is using the latest tag or is not signed by Alice and Bob
+----
+
+La réponse d'admission complète est disponible dans les journaux du serveur de politiques lorsqu'il fonctionne en mode débogage. En outre, les détails de l'évaluation font toujours partie des traces OpenTelemetry émises par Policy Server.
+
+== Politiques tenant compte du contexte
+
+Une autre distinction entre les groupes de politiques et les politiques ordinaires est l'emplacement de définition des règles de ressources contextuelles. Chaque politique d'un groupe accepte un champ facultatif `+contextAwareResources+` pour spécifier les ressources auxquelles la politique peut accéder pendant l'évaluation. Comme pour les politiques ordinaires, vous ne pouvez utiliser les capacités contextuelles qu'en définissant une`+ClusterAdmissionPolicyGroup+`. Ceci pour des raisons de sécurité, car seuls les utilisateurs non privilégiés peuvent déployer des ressources sur le site `+AdmissionPolicyGroup+`. Pour plus de détails, voir la documentation sur lesxref:explanations/context-aware-policies.adoc[politiques contextuelles].
+
+.Exemple de groupe de politiques utilisant une politique contextuelle.
+[%collapsible]
+======
+[,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicyGroup # or AdmissionPolicyGroup
+metadata:
+  name: demo-ctx-aware
+spec:
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - services
+      operations:
+        - CREATE
+        - UPDATE
+  policies:
+    unique_service_selector:
+      module: registry://ghcr.io/kubewarden/policies/unique-service-selector-policy:v0.1.0
+      contextAwareResources:
+        - apiVersion: v1
+          kind: Service
+      settings:
+        app.kubernetes.io/name: MyApp
+    owned_by_foo_team:
+      module: registry://ghcr.io/kubewarden/policies/safe-annotations:v0.2.9
+      settings:
+        mandatory_annotations:
+          - owner
+        constrained_annotations:
+          owner: "foo-team"
+  expression: "unique_service_selector() || (!unique_service_selector() && owned_by_foo_team())"
+  message: "the service selector is not unique or the service is not owned by the foo team"
+----
+======
+
+Dans l'exemple précédent, la politique `+unique_service_selector+` peut accéder à la ressource`+Service+`. Cependant, le site `+owned_by_foo_team+` n'a pas accès aux ressources de Kubernetes.
+
+== Validation des paramètres
+
+Lorsque le serveur de politiques démarre, il valide les paramètres des groupes de politiques et des politiques ordinaires. Cependant, les groupes de politiques subissent une étape de validation supplémentaire pour vérifier que l'expression est valide et qu'elle est évaluée comme une valeur booléenne.
+
+== Scanner d'audit
+
+Comme pour les CRD AdmissionPolicy et ClusterAdmissionPolicy, le champ`+backgroundAudit+` indique s'il faut inclure le groupe de politiques lors desxref:../explanations/audit-scanner/audit-scanner.adoc[contrôles d'audit.]
+
+== Serveur de politique
+
+Vous pouvez étendre le fichier de paramètres `+policies.yml+` afin d'inclure des groupes de politiques en plus des politiques ordinaires. Comme pour les polices ordinaires, le téléchargement des modules n'a lieu qu'une seule fois. Vous utilisez le même module de politique dans un groupe de politiques et dans une politique ordinaire.
