@@ -1,0 +1,118 @@
+= 高可用性外部数据库
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+本节介绍如何安装带有外部数据库的高可用性{k3s-product-name} 群集。
+
+[NOTE]
+====
+要快速部署大型 HA 集群，请参阅xref:related-projects.adoc[相关项目]
+====
+
+
+单个服务器群集可以满足各种用例，但对于 Kubernetes 控制平面的正常运行时间至关重要的环境，您可以在 HA 配置中运行 K3。一个 HA K3s 集群由以下部分组成：
+
+* 两个或更多*服务器节点*，为 Kubernetes API 提供服务，并运行其他控制平面服务
+* *外部数据存储*（而不是单服务器设置中使用的嵌入式 SQLite 数据存储）
+* 可选：指定运行应用程序和服务的零个或多个*代理节点*
+* 可选：用于代理节点向群集注册的*固定注册地址*
+
+有关这些组件如何协同工作的详细信息，请参阅xref:architecture.adoc#_high_availability_k3s[架构部分。]
+
+== 安装概要
+
+设置 HA 群集需要以下步骤：
+
+=== 1.创建外部数据存储
+
+首先需要为群集创建一个外部数据存储。有关详细信息，请参阅xref:datastore/datastore.adoc[群集数据存储选项]文档。
+
+=== 2.启动服务器节点
+
+{k3s-product-name} 这种 HA 配置需要两个或更多服务器节点。有关最低机器要求，请参阅xref:installation/requirements.adoc[要求]指南。
+
+在这些节点上运行`+k3s server+` 命令时，必须设置`+datastore-endpoint+` 参数，以便 K3s 知道如何连接外部数据存储。`+token+` 参数还可用于在添加节点时设置确定性标记。如果为空，则会自动生成该标记，以便进一步使用。
+
+例如，可以使用以下命令安装 K3s 服务器，将 MySQL 数据库作为外部数据存储，并xref:cli/server.adoc#_cluster_options[设置令牌]：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name" \
+  --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
+----
+
+其中`+INSTALL_K3S_ARTIFACT_URL+` 是https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[首要文物 URL]
+
+数据存储端点格式因数据库类型而异。有关详细信息，请参阅xref:datastore/datastore.adoc#_datastore_endpoint_format_and_functionality[数据存储端点格式]一节。
+
+要在启动服务器节点时配置 TLS 证书，请参阅xref:datastore/datastore.adoc#_external_datastore_configuration_parameters[数据存储配置指南。]
+
+[NOTE]
+====
+单服务器安装可用的安装选项同样适用于高可用性安装。更多详情，请参阅xref:installation/configuration.adoc[配置选项]文档。
+====
+
+
+默认情况下，服务器节点是可调度的，因此可以在这些节点上启动工作负载。如果希望有一个不运行用户工作负载的专用控制平面，可以使用污点。`+node-taint+` 参数可让您配置带有污点的节点，例如`+--node-taint CriticalAddonsOnly=true:NoExecute+` 。
+
+在所有服务器节点上启动`+k3s server+` 进程后，使用`+k3s kubectl get nodes+` 确保群集正常启动。您应该可以看到服务器节点处于就绪状态。
+
+=== 3.可选：加入更多服务器节点
+
+步骤 2 中的示例命令也可用于加入其他服务器节点，此时需要使用第一个节点的令牌。
+
+如果启动第一个服务器节点时没有使用`+--token+` CLI 标志或`+K3S_TOKEN+` 变量，则可以从任何已加入群集的服务器中检索令牌值：
+
+[,bash]
+----
+cat /var/lib/rancher/k3s/server/token
+----
+
+然后就可以xref:cli/server.adoc#_cluster_options[使用令牌]添加其他服务器节点：
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name"
+----
+
+有几个配置标志必须在所有服务器节点中保持一致：
+
+* 网络相关标志：`+--cluster-dns+`,`+--cluster-domain+`,`+--cluster-cidr+` 、 `+--service-cidr+`
+* 控制某些组件部署的标志：`+--disable-helm-controller+`,`+--disable-kube-proxy+`,`+--disable-network-policy+` 以及传递给 `+--disable+`
+* 功能相关标志： `+--secrets-encryption+`
+
+[NOTE]
+====
+确保保留此令牌的副本，因为从备份恢复和添加节点时需要它。以前，K3s 在使用外部 SQL 数据存储时不会强制使用令牌。
+====
+
+
+=== 4.可选：配置固定注册地址
+
+代理节点需要一个 URL 来注册。这可以是任何服务器节点的 IP 或主机名，但在许多情况下，这些 IP 或主机名可能会随着时间的推移而改变。例如，如果在支持扩展组的云中运行集群，节点可能会随着时间的推移而创建和销毁，并从最初的服务器节点集更改为不同的 IP。最好在服务器节点前有一个稳定的端点，不会随着时间的推移而改变。该端点可通过多种方法设置，例如
+
+* 第 4 层（TCP）负载平衡器
+* 循环 DNS
+* 虚拟或弹性 IP 地址
+
+有关配置示例，请参阅xref:datastore/cluster-loadbalancer.adoc[群集负载平衡器]。
+
+该端点还可用于访问 Kubernetes API。因此，举例来说，你可以修改https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/[] kubeconfig 文件，使其指向它而不是某个特定节点。
+
+为避免在这种配置中出现证书错误，应使用`+--tls-san=YOUR_IP_OR_HOSTNAME_HERE+` 选项配置服务器。该选项在 TLS 证书中添加了一个额外的主机名或 IP 作为主题替代名称，如果想通过 IP 和主机名进行访问，可以多次指定。
+
+=== 5.可选：加入代理节点
+
+由于 K3s 服务器节点默认是可调度的，因此 HA K3s 集群不需要代理节点。不过，您可能希望使用专用代理节点来运行应用程序和服务。
+
+在 HA 群集中加入代理节点与在单个服务器群集中加入代理节点相同。您只需指定代理应注册的 URL（服务器 IP 之一或固定注册地址）和应使用的令牌。
+
+[,bash]
+----
+K3S_TOKEN=SECRET k3s agent --server https://server-or-fixed-registration-address:6443
+----
