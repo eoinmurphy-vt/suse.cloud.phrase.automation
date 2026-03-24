@@ -1,0 +1,193 @@
+include::partial$variables.adoc[]
+= Protection du délai d'évaluation de la politique
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurez les délais d'évaluation des politiques pour garantir une exécution en temps voulu et éviter l'épuisement des ressources grâce à la fonction de protection intégrée du serveur de politiques.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "policy-evaluation-timeout"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "policy timeout protection"].
+:current-version: {page-origin-branch}
+
+[IMPORTANT]
+====
+
+Cette fonctionnalité est disponible à partir de {project-name} v1.5.0 pour le délai d'attente par serveur de politique, et à partir de v1.29.0 pour le délai d'attente par politique.
+
+====
+
+La protection du délai d'évaluation des politiques est une fonction de sécurité des politiques et du serveur de politiques. Son objectif est de limiter la durée de l'évaluation d'une demande.
+
+== Objectif
+
+Vous pouvez écrire des politiques {short-project-name} en utilisant des langages de programmation traditionnels (comme xref:../tutorials/writing-policies/go/01-intro-go.adoc[Go],xref:../tutorials/writing-policies/rust/01-intro-rust.adoc[Rust] et dxref:../tutorials/writing-policies/index.adoc['autres)] ou en utilisant le langage d'interrogation spécialxref:../tutorials/writing-policies/rego/01-intro-rego.adoc[Rego]. Les deux approches ont leurs mérites et l'un des objectifs de {short-project-name} est de permettre aux auteurs de politiques de choisir l'outil le mieux adapté à leurs besoins.
+
+Lorsque l'on utilise un langage traditionnelhttps://en.wikipedia.org/wiki/Turing_completeness[] Turing-complet, il est possible de rencontrer des problèmes tels que
+
+* https://en.wikipedia.org/wiki/Infinite_loop[Boucles infinies]
+* https://en.wikipedia.org/wiki/Deadlock[Blocages]
+* Code lent manquant d'optimisations
+* Opérations à forte intensité de calcul
+
+La fonction de protection du délai d'évaluation de la politique met fin à l'évaluation d'une demande après une période de temps prédéfinie. Cela garantit que le serveur de politique dispose toujours de ressources informatiques pour traiter les demandes entrantes.
+
+== Limites
+
+Actuellement, la protection du délai d'évaluation des politiques est capable d'interrompre la plupart des évaluations de longue durée. Certains cas particuliers n'ont pas encore été traités.
+Il s'agit notamment de l'invocation d'une instruction `+sleep+` à partir d'une politique, et des blocages.
+
+Une prochaine version de Policy Server traitera ces scénarios.
+
+Enfin, le délai d'évaluation des politiques affecte toutes les politiques hébergées par une instance de serveur de politiques. Actuellement, il n'existe aucun moyen d'ajuster le délai d'évaluation d'une politique sur une base individuelle.
+
+== Configuration
+
+Toutes les valeurs des délais d'évaluation par politique, des délais d'évaluation par serveur de politique et des délais des webhooks sont validées de manière à ce qu'elles se situent toutes dans des limites acceptables. Par exemple, il n'est pas possible de définir une valeur de délai d'évaluation de la politique qui soit supérieure au délai d'attente du webhook de Kubernetes.
+
+### Par politique
+
+Depuis {short-project-name} v1.29.0, chaque politique {short-project-name} peut définir sa propre valeur de temporisation via son attribut `+spec.timeoutEvalSeconds+`. À ne pas confondre avec `+spec.timeoutSeconds+`, utilisé pour le délai d'attente du Webhook (voir la section [ci-dessous](#comparaison-avec-kubernetes-dynamic-admission-controller-timeout)).
+
+Le site `+spec.timeoutEvalSeconds+` est très précis, ce qui permet de régler le délai d'évaluation de chaque politique.
+
+Ce paramètre est prioritaire par rapport à la configuration globale de l'évaluation du délai d'attente par serveur de politique.
+
+Par exemple, pour définir un délai d'évaluation plus long pour une politique spécifique :
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Secrets
+    io.kubewarden.policy.severity: medium
+  name: env-variable-secrets-scanner
+spec:
+  module: registry://ghcr.io/kubewarden/policies/env-variable-secrets-scanner:v1.0.6
+  settings: {}
+  timeoutEvalSeconds: 10 // Set evaluation timeout
+  mutating: false
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["replicationcontrollers"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      resources: ["jobs", "cronjobs"]
+      operations: ["CREATE", "UPDATE"]
+----
+
+=== Par serveur de politiques
+
+À partir de {short-project-name} v1.5.0, les serveurs de politiques sont dotés d'un délai d'évaluation configurable, activé par défaut. L'interruption de l'évaluation d'une demande a lieu après 2 secondes. Cette configuration affecte toutes les politiques programmées dans ce serveur de politiques. Le délai d'attente configurable pour chaque politique ( `+spec.timeoutEvalSeconds+`) a la priorité sur ce paramètre pour chaque serveur de politique.
+
+Vous pouvez régler ce comportement en utilisant ces variables d'environnement :
+
+* `+KUBEWARDEN_DISABLE_TIMEOUT_PROTECTION+`: Cela désactive complètement l'évaluation des politiques. Toute valeur attribuée désactive la fonction.
+* `+KUBEWARDEN_POLICY_TIMEOUT+`: Cela permet de définir une valeur différente pour le délai d'attente. La valeur est exprimée en secondes, la valeur par défaut étant `+2+`.
+
+Lorsque vous utilisez lahttps://doc.crds.dev/github.com/kubewarden/kubewarden-controller/policies.kubewarden.io/PolicyServer/v1@v1.4.2[`+PolicyServer+`]Kubernetes Custom Resource Definition, vous pouvez définir ces variables d'environnement comme suit :
+
+[source,yaml]
+----
+# A Policy Server that has policy evaluation timeout disabled
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: no-policy-timeout
+spec:
+  env:
+    - name: KUBEWARDEN_DISABLE_TIMEOUT_PROTECTION
+      value: "true"
+---
+
+# A Policy Server that has policy evaluation timeout enabled,
+# with a 3 seconds timeout value
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: custom-policy-timeout
+spec:
+  env:
+    - name: KUBEWARDEN_POLICY_TIMEOUT
+      value: "3"
+----
+
+== Comparaison avec le délai d'attente du contrôleur d'admission dynamique de Kubernetes
+
+{short-project-name} est une implémentation de https://en.wikipedia.org/wiki/Webhook[webhook] du https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/[contrôleur d'admission dynamique de] Kubernetes.
+
+En interne, le serveur API Kubernetes envoie une requête HTTP au serveur de politiques {short-project-name} décrivant un événement sur le point de se produire. Après la requête HTTP, Kubernetes API Server attend une réponse\.... Cependant, le serveur API Kubernetes n'attend pas indéfiniment. Au bout d'un certain temps, il considère que la demande a expiré.
+
+Citation de la https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#timeouts[documentation officielle de Kubernetes]:
+
+____
+Les webhooks augmentant la latence des demandes d'API, ils doivent être évalués le plus rapidement possible. `+timeoutSeconds+` permet de configurer le temps que le serveur d'API doit attendre pour qu'un webhook réponde avant de considérer l'appel comme un échec.
+
+Si le délai expire avant que le webhook ne réponde, l'appel au webhook sera ignoré ou l'appel à l'API sera rejeté sur la base de la [politique d'échec]https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#failure-policy.
+
+La valeur du délai d'attente doit être comprise entre 1 et 30 secondes.
+
+Le délai d'attente pour un webhook d'admission est par défaut de 10 secondes.
+____
+
+Cela signifie que, indépendamment de la fonction de délai d'évaluation de la politique, chaque demande d'admission à Kubernetes est soumise à un délai.
+
+Chaque politique {short-project-name} peut définir sa propre valeur de temporisation via l'attribut `+timeoutSeconds+`des ressources personnalisées `+ClusterAdmissionPolicy+` et `+AdmissionPolicy+`.
+Par défaut, le délai d'attente est de 10 secondes.
+
+[IMPORTANT]
+====
+
+Toutes les demandes d'admission à Kubernetes adressées à un serveur de politiques sont soumises à deux délais différents :
+
+* Valeur du délai d'attente du serveur de l'API Kubernetes. La valeur par défaut est de 10 secondes, mais elle peut être ajustée pour chaque politique via l'attribut `+spec.timeoutSeconds+`de la ressource personnalisée de la politique.
+* Le délai d'évaluation de la politique. Défini dans le serveur de politiques via des variables d'environnement ou par politique via l'attribut `+spec.timeoutEvalSeconds+` sur la ressource personnalisée de la politique.
+
+====
+
+Vous pouvez maintenant examiner les scénarios suivants pour mieux comprendre les différences entre le délai d'attente du Webhook de Kubernetes et le délai d'attente de l'évaluation de la politique de {short-project-name}.
+
+
+=== {short-project-name} le délai d'évaluation de la politique est désactivé
+
+Supposons que vous disposiez d'un serveur de politiques dont la fonction de délai d'évaluation des politiques est désactivée et qu'aucune politique planifiée sur ce serveur n'ait défini son champ`+spec.timeoutEvalSeconds+`. Ce serveur de politiques héberge une politique affectée par un bogue qui la fait entrer dans une boucle infinie pendant l'évaluation.
+
+Le serveur API Kubernetes envoie une demande d'admission pour évaluation par cette politique boguée. Par conséquent, l'évaluation de la politique entre dans une boucle infinie.
+Pendant ce temps, le serveur API de Kubernetes attend une réponse.
+
+Après 10 secondes, le délai d'attente du webhook de Kubernetes s'écoule et la demande est traitée conformément à la politique d'échec du webhook.
+
+Le serveur de politique générale dispose désormais de ressources informatiques bloquées dans cette boucle infinie.
+Au fil du temps, l'augmentation du nombre de demandes d'admission déclenchant la politique défectueuse entraîne l'épuisement des ressources de calcul du serveur de politique. Il n'est pas en mesure de répondre au serveur API Kubernetes. Cela équivaut à une attaque par déni de service (DOS) sur le serveur de politique.
+
+=== {short-project-name} le délai d'évaluation de la politique est activé
+
+Supposons un scénario dans lequel la fonction de délai d'évaluation de la politique est activée sur le même serveur de politique, soit globalement dans le serveur de politique, soit dans la politique via la politique `+spec.timeoutEvalSeconds+`, et le délai d'évaluation de la politique est de 2 secondes.
+
+Le serveur API Kubernetes envoie une demande d'admission pour évaluation par cette politique boguée. En conséquence, l'évaluation des politiques entre dans une boucle infinie.
+Pendant ce temps, le serveur API de Kubernetes attend une réponse.
+
+Au bout de deux secondes, la fonction de temporisation de l'évaluation des politiques du site {short-project-name} interrompt l'évaluation des politiques et produit une réponse de rejet. La réponse contient un message expliquant que le rejet est dû au fait que l'évaluation de la politique ne s'est pas terminée à temps.
+
+[NOTE]
+====
+
+Définir le délai d'évaluation de la politique de {short-project-name} à une valeur aussi élevée que le délai du webhook de Kubernetes n'est pas un bon choix.
+
+Bien que l'évaluation de la politique soit toujours interrompue, ce qui réduit les risques d'attaque DOS, la réponse finale de rejet n'est pas produite par le serveur de politique. Le rejet provient du serveur API Kubernetes avec le délai d'attente du webhook.
+
+Par conséquent, il est plus difficile pour les utilisateurs, et les opérateurs Kubernetes, de détecter ces politiques lentes/bugueuses. La seule preuve de l'interruption de l'évaluation des politiques se trouve dans les journaux et les traces du serveur de politiques.
+
+====
+
