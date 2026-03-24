@@ -1,0 +1,303 @@
+include::partial$variables.adoc[]
+= Políticas en bruto
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure políticas sin procesar como un motor genérico de evaluación de políticas utilizando {project-name}.
+:doc-persona: ["kubewarden-distributor", "kubewarden-integrator", "kubewarden-operator", "kubewarden-policy-developer"].
+:doc-topic: ["kubewarden", "kubernetes", "raw-policies"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "support", "raw policies"]
+:sidebar_label: Políticas en bruto
+:sidebar_position: 60
+:current-version: {page-origin-branch}
+
+A partir de `+v1.9.0+`, {project-name} admite la capacidad de escribir y ejecutar políticas fuera de un clúster Kubernetes, como motor genérico de evaluación de políticas.
+El servidor de políticas expone el punto final `+/validate_raw+` que puede utilizarse para validar documentos JSON arbitrarios con respecto a una política {short-project-name}.
+
+Para esta guía, utilizaremos las siguientes políticas brutas:
+
+* https://github.com/kubewarden/raw-validation-policy[raw-validation-policy]
+* https://github.com/kubewarden/raw-mutation-policy[raw-mutation-policy]
+
+[NOTE]
+====
+Asegúrese de que el autor de la política la ha marcado como `+policyType: raw+` en los metadatos.
+Puede inspeccionar los metadatos utilizando `+kwctl+`
+
+[subs="+attributes",bash]
+----
+kwctl inspect ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+----
+====
+
+
+== Ejecución del servidor de políticas fuera de Kubernetes
+
+El Servidor de Políticas puede ejecutarse fuera de Kubernetes como un contenedor independiente.
+
+En primer lugar, cree un archivo `+policies.yml+` con el siguiente contenido:
+
+[subs="+attributes",yaml]
+----
+raw-validation:
+  module: ghcr.io/kubewarden/tests/raw-validation-policy:v0.1.0
+  settings:
+    validUsers:
+      - alice
+      - bob
+    validActions:
+      - read
+      - write
+    validResources:
+      - orders
+      - products
+
+raw-mutation:
+  module: ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+  allowedToMutate: true
+  settings:
+    forbiddenResources:
+      - privateResource
+      - secretResource
+    defaultResource: publicResource
+----
+
+Para iniciar el servidor de políticas:
+
+[subs="+attributes",bash]
+----
+# Create a docker volume to store the policies
+docker volume create --driver local \
+                --opt type=tmpfs \
+                --opt device=tmpfs \
+                --opt o=ui=65533 \
+                policy-store
+
+# Start the policy server
+docker run --rm -it \
+    -p 3000:3000 \
+    -v $(pwd)/policies.yml:/policies.yml \
+    -v policy-store:/registry \
+    ghcr.io/kubewarden/policy-server:1.9.0 \
+    --ignore-kubernetes-connection-failure=true
+----
+
+NOTE: la bandera `+--ignore-kubernetes-connection-failure=true+` es necesaria para iniciar el servidor de políticas sin Kubernetes.
+Sin embargo, es posible iniciar el Servidor de Políticas con/dentro de Kubernetes y utilizar el punto final de validación sin procesar.
+Las políticas en bruto pueden acceder a las capacidades xref:../explanations/context-aware-policies.adoc[contextuales] como las políticas estándar.
+
+== Ejecución de un servidor de políticas dentro de Kubernetes sin el controlador {short-project-name} 
+
+No es posible utilizar una instancia de Policy Server gestionada por el controlador {short-project-name} para alojar políticas sin procesar.
+El controlador no permitirá que el usuario cambie el Policy Server ConfigMap para añadir una política sin procesar, ya que intentará reconciliarla revirtiendo los cambios.
+Por ello, debe iniciarse un servidor de políticas dedicado.
+
+Cree un archivo `+policy-server.yaml+` con el siguiente contenido:
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-server-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: policy-server
+  template:
+    metadata:
+      labels:
+        app: policy-server
+    spec:
+      containers:
+        - name: policy-server
+          image: ghcr.io/kubewarden/policy-server:v1.9.0
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: policy-store
+              mountPath: /registry
+            - name: policies-config
+              mountPath: /policies.yml
+              subPath: policies.yml
+      volumes:
+        - name: policy-store
+          emptyDir: {}
+        - name: policies-config
+          configMap:
+            name: policies-configmap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy-server-service
+spec:
+  selector:
+    app: policy-server
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: policies-configmap
+data:
+  policies.yml: |
+    raw-validation:
+      module: ghcr.io/kubewarden/tests/raw-validation-policy:v0.1.0
+      settings:
+        validUsers:
+          - alice
+          - bob
+        validActions:
+          - read
+          - write
+        validResources:
+          - orders
+          - products
+    raw-mutation:
+      module: ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+      allowedToMutate: true
+      settings:
+        forbiddenResources:
+          - privateResource
+          - secretResource
+        defaultResource: publicResource
+----
+
+Aplica la configuración:
+
+[subs="+attributes",bash]
+----
+kubectl apply -f policy-server.yaml
+----
+
+[IMPORTANT]
+====
+La instancia de Policy Server desplegada tendrá acceso a los recursos de Kubernetes que podrían ser utilizados por las políticas conscientes del contexto.
+El nivel de acceso a los recursos de Kubernetes viene determinado por la Cuenta de Servicio utilizada para ejecutar la carga de trabajo del Servidor de Políticas.
+
+En el ejemplo anterior, no se ha definido ninguna cuenta de servicio en la especificación de despliegue, por lo que se utilizará la cuenta de servicio `+default+`.
+====
+
+
+== Uso del punto final validate_raw
+
+=== Validación
+
+El punto final de validación en bruto está expuesto en `+/validate_raw+` y acepta solicitudes de `+POST+`.
+Como hemos desplegado un servicio, podemos establecer un port-forward para acceder a él con`+kubectl port-forward service/policy-server-service 3000:3000 -n default+`.
+
+Intentemos validar un documento JSON con la política `+raw-validation+`:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-validation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "customers"
+  }
+}'
+----
+
+La solicitud no será aceptada, ya que `+alice+` no ha obtenido acceso al recurso `+customers+`:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": false,
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+Intentémoslo de nuevo con un recurso válido:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-validation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "orders"
+  }
+}'
+----
+
+Esta vez, la solicitud será aceptada:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": true,
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+[NOTE]
+====
+Si el campo `+uid+` se proporciona en la carga útil de la solicitud, se devolverá como parte de la respuesta.
+====
+
+
+=== Mutación
+
+Ahora, intentemos mutar un documento JSON contra la política `+raw-mutation+`:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-mutation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "privateResource"
+  }
+}'
+----
+
+La solicitud será mutada y la respuesta contendrá un JSONPatch:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": true,
+    "patchType": "JSONPatch",
+    "patch": "W3sib3AiOiJyZXBsYWNlIiwicGF0aCI6Ii9yZXNvdXJjZSIsInZhbHVlIjoicHVibGljUmVzb3VyY2UifV0=",
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+== Redactar políticas en bruto
+
+Al igual que las políticas que validan los recursos de Kubernetes, las políticas en bruto se escriben en WebAssembly utilizando los SDK de {short-project-name}.
+Si está interesado en escribir políticas sin formato, consulte la documentación específica del lenguaje para obtener más información:
+
+* xref:../tutorials/writing-policies/go/10-raw-policies.adoc[Vaya a]
+* xref:../tutorials/writing-policies/rust/08-raw-policies.adoc[Óxido]
+* xref:../tutorials/writing-policies/rego/open-policy-agent/05-raw-policies.adoc[OPA]
+* xref:../tutorials/writing-policies/wasi/02-raw-policies.adoc[WASI]
