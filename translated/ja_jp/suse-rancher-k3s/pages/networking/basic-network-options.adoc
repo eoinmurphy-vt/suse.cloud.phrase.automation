@@ -1,0 +1,247 @@
+= 基本的なネットワーク・オプション
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-12-31
+:page-revdate: {revdate}
+
+このページでは、Flannelの設定や交換、IPv6やdualStackの設定など、K3sのネットワーク設定オプションについて説明します。
+
+== フランネル・オプション
+
+https://github.com/flannel-io/flannel/blob/master/README.md[Flannelは]、Kubernetes Container Network Interface（CNI）を実装するレイヤー3ネットワークファブリックの軽量プロバイダーである。一般にCNIプラグインと呼ばれるものだ。
+
+* フランネル・オプションはサーバー・ノードでのみ設定でき、クラスタ内のすべてのサーバーで同じでなければなりません。
+* Flannel のデフォルトのバックエンドは`+vxlan+` です。暗号化を有効にするには、`+wireguard-native+` バックエンドを使用します。
+* 最近のバージョンのUbuntuを搭載したRasperry Piで`+vxlan+` を使用するには、xref:installation/requirements.adoc#os_tab_raspberry_pi[追加の準備が]必要です。
+* Flannelのバックエンドとして`+wireguard-native+` を使用する場合、Linuxディストリビューションによっては追加モジュールが必要になる場合があります。詳細については、https://www.wireguard.com/install/[WireGuardインストールガイドを]参照してください。
+WireGuardのインストール手順により、オペレーティングシステムに適したカーネルモジュールがインストールされます。
+WireGuard Flannelバックエンドを使用する前に、すべてのノード（サーバとエージェントの両方）でWireGuardカーネルモジュールが使用可能であることを確認する必要があります。
+
+|===
+| CLIフラグと値 | 説明
+
+| `+--flannel-ipv6-masq+`
+| IPv6トラフィックにマスカレードルールを適用する（IPv4のデフォルト）。デュアルスタックまたはIPv6のみのクラスタにのみ適用されます。`+none+` 以外の Flannel バックエンドと互換性があります。
+
+| `+--flannel-external-ip+`
+| Flannelトラフィックの宛先として、内部IPではなくノードの外部IPアドレスを使用する。--node-external-ip がノードに設定されている場合にのみ適用されます。
+
+| `+--flannel-backend=vxlan+`
+| VXLANを使ってパケットをカプセル化する。Raspberry Piでは追加のカーネルモジュールが必要になる場合があります。
+
+| `+--flannel-backend=host-gw+`
+| ノードIP経由でポッドサブネットへのIPルートを使用する。クラスタ内の全ノード間のレイヤ2直接接続が必要です。
+
+| `+--flannel-backend=wireguard-native+`
+| WireGuard を使用して、ネットワーク・トラフィックをカプセル化および暗号化します。追加のカーネルモジュールが必要な場合がある。
+
+| `+--flannel-backend=ipsec+`
+| ネットワークトラフィックを暗号化するには、`+swanctl+` バイナリ経由で strongSwan IPSec を使用します。(非推奨。v1.27.0で削除予定)
+
+| `+--flannel-backend=none+`
+| フランネルを完全に無効にする。
+|===
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+
+K3sは2022-12リリース(v1.26.0+k3s1, v1.25.5+k3s1, v1.24.9+k3s1, v1.23.15+k3s1)からstrongSwan`+swanctl+` および`+charon+` バイナリを含まなくなりました。`+ipsec+` バックエンドを使用したい場合は、これらのリリースにアップグレードまたはインストールする前に、ノードに正しいパッケージをインストールしてください。
+====
+
+[#_migrating_from_wireguard_or_ipsec_to_wireguard_native]
+=== `+wireguard+` または`+ipsec+` からの移行 `+wireguard-native+`
+
+レガシー`+wireguard+` バックエンドは、ホスト上に`+wg+` ツールをインストールする必要がある。このバックエンドはK3s v1.26以降では利用できず、カーネルと直接インターフェースする`+wireguard-native+` 。
+
+従来の`+ipsec+` バックエンドは、`+swanctl+` と`+charon+` バイナリをホストにインストールする必要があります。このバックエンドはK3s v1.27以降では利用できません。`+wireguard-native+` 。
+
+ユーザーはできるだけ早く新しいバックエンドに移行することをお勧めします。移行には、ノードが新しい構成に対応するまでの短いダウンタイムが必要です。以下の2つのステップを踏む必要がある：
+
+. すべてのサーバーノードでK3sの設定を更新します。設定ファイルを使用する場合、`+/etc/rancher/k3s/config.yaml+` は、`+flannel-backend: wireguard+` または`+flannel-backend: ipsec+` の代わりに`+flannel-backend: wireguard-native+` を含める必要があります。systemdユニットのCLIフラグを使ってK3を設定している場合は、同等のフラグを変更する必要がある。
+. すべてのノードを再起動する。
+
+=== フランネル・エージェントのオプション
+
+これらのオプションは各エージェントで利用可能で、そのノード上で動作しているFlannelインスタンスに固有のものです。
+
+|===
+| CLI Flag | 説明
+
+| `+--flannel-iface+` 価値
+| デフォルトのフランネル・インターフェースを上書きする
+
+| `+--flannel-conf+` 価値
+| デフォルトのフランネル設定ファイルを上書きする
+
+| `+--flannel-cni-conf+` 価値
+| デフォルトのフランネルcni設定ファイルを上書きする
+|===
+
+== カスタムCNI
+
+K3sを`+--flannel-backend=none+` 、お好きなCNIをインストールしてください。ほとんどのCNIプラグインには独自のネットワーク・ポリシー・エンジンが付属しているので、競合を避けるために`+--disable-network-policy+` 。考慮すべき重要な情報がある：
+
+[tabs,,sync-group-id=cni]
+======
+運河::
++
+--
+https://docs.tigera.io/calico/latest/getting-started/kubernetes/flannel/install-for-flannel#installing-calico-for-policy-and-flannel-aka-canal-for-networking[Canal Docsの]ウェブサイトをご覧ください。カナルをインストールする手順に従ってください。例えば、`+container_settings+` セクションで IP フォワーディングが許可されるように Canal YAML を修正する：
+
+[,yaml]
+----
+"container_settings": {
+  "allow_ip_forwarding": true
+}
+----
+
+カナルYAMLを適用する。
+
+ホスト上で以下のコマンドを実行して、設定が適用されたことを確認する：
+
+[,bash]
+----
+cat /etc/cni/net.d/10-canal.conflist
+----
+
+IPフォワーディングがtrueに設定されていることが確認できるはずだ。
+--
+
+キャラコ::
++
+--
+https://docs.tigera.io/calico/latest/reference/configure-cni-plugins[Calico CNI Plugins Guideに従って]ください。例えば、`+container_settings+` セクションでIPフォワーディングが許可されるように、キャリコのYAMLを修正する：
+
+[,yaml]
+----
+"container_settings": {
+  "allow_ip_forwarding": true
+}
+----
+
+キャリコYAMLを適用する。
+
+ホスト上で以下のコマンドを実行して、設定が適用されたことを確認する：
+
+[,bash]
+----
+cat /etc/cni/net.d/10-calico.conflist
+----
+
+IPフォワーディングがtrueに設定されていることが確認できるはずだ。
+--
+
+繊毛::
++
+--
+`+k3s-killall.sh+` または`+k3s-uninstall.sh+` を実行する前に、`+cilium_host+` 、`+cilium_net+` 、`+cilium_vxlan+` インタフェースを手動で削除する必要があります。これを行わないと、K3sが停止したときにホストとのネットワーク接続が失われる可能性があります。
+
+[,bash]
+----
+ip link delete cilium_host
+ip link delete cilium_net
+ip link delete cilium_vxlan
+----
+
+さらに、ciliumのiptablesルールは削除すべきである：
+
+[,bash]
+----
+iptables-save | grep -iv cilium | iptables-restore
+ip6tables-save | grep -iv cilium | ip6tables-restore
+----
+--
+======
+
+== 制御プレーン・エグレス・セレクターの設定
+
+K3sエージェントとサーバーは、コントロールプレーン（apiserver）とエージェント（kubeletとcontainerd）コンポーネント間の双方向通信をカプセル化するために使用されるノード間のWebソケットトンネルを維持する。
+これにより、エージェントは、kubeletおよびコンテナランタイムのストリーミングポートを着信接続に公開せずに動作し、エージェントを無効にして動作しているときに制御プレーンがクラスタサービスに接続できるようになる。
+この機能は、他のKubernetesディストリビューションで一般的に使用されているhttps://kubernetes.io/docs/tasks/extend-kubernetes/setup-konnectivity/[]Konnectivityサービスと同等で、apiserverのegressセレクタ設定によって管理される。
+
+デフォルトのモードは`+agent+` 。xref:advanced.adoc#_running_agentless_servers_experimental[エージェントレスサーバを]実行する場合は、flannelとkube-proxyがない場合にapiserverがクラスタサービスのエンドポイントにアクセスできるようにするため、`+pod+` または`+cluster+` モードを推奨します。
+
+イグレス・セレクター・モードは、`+--egress-selector-mode+` フラグを使ってサーバー上で設定することができ、4つのモードがある：
+
+* `+disabled+`:apiserverはエージェント・トンネルを使用してkubeletやクラスター・エンドポイントと通信しません。
+`+kubectl exec+` `+kubectl logs+`このモードでは、サーバーが kubelet、CNI、および kube-proxy を実行し、エージェントに直接接続できる必要があります。
+* `+agent+` (デフォルト）：apiserverはエージェント・トンネルを使用してkubeletと通信する。
+このモードでは、サーバーがkubelet、CNI、およびkube-proxyも実行している必要があり、そうでなければapiserverはサービス・エンドポイントにアクセスできません。
+* `+pod+`:apiserverはエージェント・トンネルを使用してkubeletやサービス・エンドポイントと通信し、ノードとエンドポイントを監視してエンドポイント接続を正しいエージェントにルーティングする。 +
+*注*：独自のIPAMを使用し、ノードのPodCIDR割り当てを尊重しないCNIを使用する場合、このモードは機能しません。これらのCNIでは、代わりに`+cluster+` または`+agent+` モードを使用する必要があります。
+* `+cluster+`:apiserverはエージェント・トンネルを使用してkubeletやサービス・エンドポイントと通信し、PodsとEndpointsを監視してエンドポイント接続を正しいエージェントにルーティングする。このモードは異なるクラスタ構成間で最も移植性が高いが、その代償としてオーバーヘッドが増加する。
+
+== デュアルスタック（IPv4 + IPv6）ネットワーキング
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+
+https://github.com/k3s-io/k3s/releases/tag/v1.21.0%2Bk3s1[] v11で実験的サポートが利用可能になりました。 +
+https://github.com/k3s-io/k3s/releases/tag/v1.23.7%2Bk3s1[] v11で安定サポートが利用可能になりました。
+====
+
+
+[CAUTION]
+.既知の問題
+====
+
+1.27 より前の Kuberneteshttps://github.com/kubernetes/kubernetes/issues/111695[Issue #111695]では、デュアルスタック環境でクラスタトラフィックにプライマリネットワークインターフェースを使用していない場合、Kubelet がノードの IPv6 アドレスを無視します。このバグを回避するには、1.27以降を使用するか、K3sサーバーとエージェントの両方に以下のフラグを追加してください：
+
+----
+--kubelet-arg="node-ip=0.0.0.0" # To proritize IPv4 traffic
+#OR
+--kubelet-arg="node-ip=::" # To proritize IPv6 traffic
+----
+====
+
+
+デュアルスタックネットワーキングは、クラスタを最初に作成するときに設定する必要があります。一度IPv4オンリーとして開始した既存のクラスタで有効にすることはできない。
+
+K3sでデュアルスタックを有効にするには、すべてのサーバーノードで有効なデュアルスタック`+cluster-cidr+` 、`+service-cidr+` 。これは有効なコンフィギュレーションの例である：
+
+----
+--cluster-cidr=10.42.0.0/16,2001:db8:42::/56 --service-cidr=10.43.0.0/16,2001:db8:43::/112
+----
+
+`+cluster-cidr+` 、`+service-cidr+` の値は自由に設定できるが、上記のマスクを推奨する。`+cluster-cidr+` マスクを変更する場合は、`+node-cidr-mask-size-ipv4+` と`+node-cidr-mask-size-ipv6+` の値も変更して、ノードあたりの計画ポッド数と合計ノード数に一致させる必要があります。サポートされる最大の`+service-cidr+` マスクは、IPv4では/12、IPv6では/112である。パブリッククラウドに導入する場合は、ipv6トラフィックを許可することを忘れないでください。
+
+ULA範囲など、パブリックにルーティングされていないIPv6アドレスを使用する場合、デフォルトではポッドが送信トラフィックにポッドIPv6アドレスを使用するため、`+--flannel-ipv6-masq+` オプションを追加してIPv6 NATを有効にするとよいでしょう。
+ただし、パブリックにルーティングされたIPv6アドレスを使用する場合は、それらのアドレスがクラスタに向けてルーティングされていることを確認する必要がある。そうしないと、ポッドは自分のIPv6アドレスから発信されたパケットに対する応答を受け取ることができない。どのアドレスがどのノードで使用されているかを外部のルーティングインフラに自動的に伝えることはK3sの範囲外ですが、クラスタメンバーはポッドトラフィックを正しく転送できるので、クラスタに属するどのノードにもルートを向けることができます。
+
+カスタムCNIプラグイン、つまりFlannel以外のCNIプラグインを使用している場合、追加の設定が必要になることがあります。プラグインのデュアルスタックのドキュメントを参照し、ネットワークポリシーが有効かどうかを確認してください。
+
+[CAUTION]
+.既知の問題
+====
+IPv6をプライマリファミリとしてcluster-cidrおよびservice-cidrを定義する場合、すべてのクラスタメンバーのnode-ipを明示的に設定し、ノードの希望するIPv6アドレスを最初のアドレスとして配置する必要があります。デフォルトでは、kubeletはプライマリ・アドレス・ファミリとして常にIPv4を使用します。
+====
+
+== シングルスタックIPv6ネットワーキング
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+https://github.com/k3s-io/k3s/releases/tag/v1.22.9%2Bk3s1[]v11で利用可能。
+====
+
+
+[CAUTION]
+.既知の問題
+====
+IPv6のデフォルトルートがルーター広告（RA）によって設定されている場合は、sysctl`+net.ipv6.conf.all.accept_ra=2+` を設定する必要がある。RAを受け入れると、https://github.com/kubernetes/kubernetes/issues/91507[マン・イン・ザ・ミドル攻撃の]リスクが高まる可能性があることに注意すること。
+====
+
+
+シングルスタックIPv6クラスタ（IPv4を使用しないクラスタ）は、`+--cluster-cidr+` および`+--service-cidr+` フラグを使用してK3でサポートされています。これは有効なコンフィギュレーションの例である：
+
+[,bash]
+----
+--cluster-cidr=2001:db8:42::/56 --service-cidr=2001:db8:43::/112
+----
+
+ULA範囲など、パブリックにルーティングされていないIPv6アドレスを使用する場合、デフォルトではポッドが送信トラフィックにポッドIPv6アドレスを使用するため、`+--flannel-ipv6-masq+` オプションを追加してIPv6 NATを有効にするとよいでしょう。
+
+== ホスト名のないノード
+
+Linodeのようなクラウドプロバイダーによっては、"localhost "をホスト名としてマシンを作成するところもあれば、ホスト名をまったく設定しないところもある。これはドメイン名の解決に問題を引き起こす可能性がある。`+--node-name+` フラグまたは`+K3S_NODE_NAME+` 環境変数を指定してK3sを実行すれば、ノード名を渡してこの問題を解決できる。
