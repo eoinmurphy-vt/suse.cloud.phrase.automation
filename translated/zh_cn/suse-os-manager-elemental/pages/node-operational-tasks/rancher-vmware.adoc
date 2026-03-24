@@ -1,0 +1,148 @@
+= 如何将{elemental-product-name} 与 Rancher 和 VMware 结合使用
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+== 摘录
+
+在本文档中，我们将了解如何在 VMware 工作站中设置虚拟机来启动 Elemental 节点。
+
+== 先决条件
+
+安装并运行 Rancher 2.8 或更高版本。请参见快速入门指南。
+
+== 步骤 1：创建注册终点
+
+我们需要创建 ISO 映像来引导节点，并针对 Rancher 实例进行注册。为此，需要一个注册端点xref:references/machineregistration-reference.adoc[（MachineRegistration]资源）。
+
+请参阅`+MachineRegistration+` 这个示例：
+
+[,yaml]
+.registration.yaml
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      users:
+        - name: root
+          passwd: root
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineInventoryLabels:
+    element: fire
+    manufacturer: "${Product/Vendor}"
+    productName: "${Product/Name}"
+    serialNumber: "${Product/Serial Number}"
+    machineUUID: "${Product/UUID}"
+----
+
+上述机器注册假设节点包含 TPM 2.0。如果虚拟化目标机不包括虚拟 TPM 设备，可在`+config.elemental.registration+` 部分配置软件仿真。
+
+请看下面的例子：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  ...
+spec:
+  config:
+    cloud-config:
+      ...
+    elemental:
+      install:
+        ...
+      registration:
+        emulate-tpm: true
+        emulated-tpm-seed: -1
+  machineInventoryLabels:
+    ...
+----
+
+`+emulated-tpm-seed: -1+` 设置客户端使用随机种子计算 TPM 哈希值，这有助于在多台机器上重复使用相同的注册端点定义。请参见更多xref:operator-operational-tasks/tpm.adoc[TPM 文档]。
+
+== 步骤 2：创建安装 ISO
+
+安装介质需要与特定的注册终点绑定。这是用xref:references/seedimage-reference.adoc[种子图像]资源创建和处理的。
+
+请看下面的例子：
+
+[,yaml]
+.seedimage.yaml
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  baseImage: registry.suse.com/suse/sle-micro-iso/5.5:2.0.2
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+一旦创建了 SeedImage 资源，它就会开始用提供的操作系统映像构建 ISO，并将其链接到给定的注册终点。完成后，下载 URL 将出现在 SeedImage 资源状态中。
+
+您可以通过以下方式下载
+
+[,shell]
+----
+wget --no-check-certificate --content-disposition $(kubectl get seedimages.elemental.cattle.io -n fleet-default fire-img -o jsonpath="{.status.downloadURL}")
+----
+
+== 步骤 3：启动目标设备
+
+理想情况下，你只需将 iso 刻录到 usb 驱动器上，然后使用 usb 设备启动边缘设备，一旦设备启动并在 Rancher 的 "机器清单 "下激活，你就可以从中选择并创建一个群集，不过在这里我们将使用虚拟机来模拟边缘设备进行测试。
+
+=== 3.1 准备虚拟机以仿真 TPM
+
+在 VMware 工作站中按正常方法创建虚拟机，确保硬盘大小至少为 40 GB。
+
+现在编辑机器设置并转到 "选项 "选项卡。最后一个选项是 "高级"。
+
+点击 "Advanced（高级）"，在右侧窗口窗格中将固件类型从 "BIOS "改为 "UEFI"，并选中 "Enable secure boot（启用安全启动）"选项，如下所示：
+
+* 选择 BIOS 时的默认设置
+
+image::rancher-vmware-vm-boot-bios.png[虚拟机启动选项与 BIOS]
+
+* 更新设置，选择 UEFI 并启用安全启动
+
+image::rancher-vmware-vm-boot-uefi.png[使用 UEFI 的虚拟机启动选项]
+
+现在，在同一个 "选项 "选项卡上点击 "访问控制 "选项，然后点击右侧的 "加密"。
+
+image::rancher-vmware-access-control-menu.png[门禁控制菜单]
+
+这将要求您输入密码来加密机器。输入密码，然后点击 "加密"。
+
+image::rancher-vmware-access-control-encrypt.png[访问控制加密凭证]
+
+这对添加 TPM 硬件非常重要。然后返回硬件选项，点击 "添加"。
+
+然后添加 TPM（可信平台模块）硬件，点击 "完成"。
+
+完成这一步后，我们的虚拟机就准备就绪了。
+
+=== 3.2 使用元素 ISO 启动虚拟机
+
+然后将我们之前创建的 ISO 添加到虚拟机中并启动。
+
+它应该会启动 ISO 并开始安装 Elemental：
+
+image::rancher-vmware-elemental-install-grub.png[{elemental-product-name} 操作系统安装 grub 菜单]
+
+image::rancher-vmware-elemental-install-logs.png[{elemental-product-name} 操作系统安装日志]
+
+完成后，它会重启虚拟机，并在 Rancher 的机器清单中显示为活动状态。
