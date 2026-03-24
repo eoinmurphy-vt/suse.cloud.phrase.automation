@@ -1,0 +1,203 @@
+include::partial$variables.adoc[]
+
+= Audit Scanner - Rapports sur les politiques
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Stockez et interrogez les résultats de l'analyse des politiques de l'analyseur d'audit à l'aide d'objets Report ou ClusterReport au sein de votre cluster Kubernetes.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-policy-developer", "kubewarden-integrator"].
+:doc-topic: ["explications", "audit-scanner", "rapports sur les politiques"].
+:doc-type: ["explication"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "audit scanner", "policy reports"]
+:sidebar_label: Rapports sur les politiques
+:current-version: {page-origin-branch}
+
+Lorsque vous utilisez le scanner d'audit {project-name}, vous stockez les résultats des analyses de politiques à l'aide des ressources personnalisées d' https://openreports.io/[OpenReports].
+
+[CAUTION]
+====
+
+Avec {project-name} 1.33, la fonction Audit Scanner enregistre par défaut les rapports dans des CRD OpenReports à partir de [openreports.io] (https://openreports.io).
+
+Les CRDslink:https://htmlpreview.github.io/?https://github.com/kubernetes-sigs/wg-policy-prototypes/blob/045372e558b896695b2daae92e8c7a04d4d40282/policy-report/docs/index.html[PolicyReport]du groupe de travail K8s Policy ne sont pas installés par défaut, sont marqués comme dépréciés et seront supprimés dans une prochaine version.
+
+Les utilisateurs qui souhaitent continuer à utiliser les PolicyReports dépréciés, c'est-à-dire le comportement antérieur à la version 1.33, doivent :- Changer la valeur du diagramme de Helm `+kubewarden-crds+` de `+.Values.install.installPolicyReportCRDs+` à `+true+`- Changer la valeur du diagramme de Helm `+kubewarden-controller+` de `+.Values.auditScanner.reportCRDsKind+` de `+openreports+` à `+policyreport+`.
+
+====
+
+
+Ces CRD OpenReport offrent un moyen structuré de stocker et de gérer les résultats de l'audit.
+
+Vous stockez les résultats de l'analyse de la politique d'audit à l'aide de `+Report+` et `+ClusterReport+`.
+L'analyseur d'audit crée un `+Report+` ou un `+ClusterReport+` pour chaque ressource analysée, en fonction de l'étendue de la ressource. Les objets `+Report+` sont disponibles dans l'espace de noms de la ressource, tandis que les objets `+ClusterReport+` sont disponibles dans l'étendue du cluster.
+
+Les résultats de l'audit générés par le scanner sont les suivants :
+
+* la politique évaluée
+* la ressource scannée
+* le résultat de l'évaluation (réussite, échec ou non)
+* un horodatage indiquant le moment où l'évaluation a eu lieu.
+
+Vous pouvez également définir des annotations de gravité et de catégorie pour vos politiques.
+
+Les opérateurs peuvent interroger les rapports en utilisant `+kubectl+`. Ils peuvent également utiliser l'interface utilisateur optionnelle fournie par le projet open-sourcehttps://kyverno.github.io/policy-reporter[policy-reporter] pour le suivi et l'observabilité des CRD OpenReports.
+
+== Interroger les rapports
+
+En utilisant l'interface de commande kubectl, il est possible d'interroger les résultats de l'analyse :
+
+Liste les rapports dans l'espace de noms par défaut :
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get report -o wide
+NAME                                   KIND   NAME            PASS   FAIL   WARN   ERROR   SKIP   AGE
+44da974b-6057-4745-a92c-9dd8a1b01cc4   Pod    nginx-secrets   6      1      0      0       0      33m
+----
+
+Liste des rapports sur l'ensemble du groupe :
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get clusterreport -o wide
+NAME                                   KIND        NAME                 PASS   FAIL   WARN   ERROR   SKIP   AGE
+6c66175f-e15f-47e8-8c33-2c63d5ecde3e   Namespace   namespace1           3      1     0       0       0      1h
+d0ffbf4f-7348-4350-af7b-fdbfc079cc49   Namespace   namespace2           0      4     0       0       0      1h
+e48d9bbc-a9c4-4c36-8519-bc7390d9ec64   Namespace   namespace3           4      0     0       0       0      15h
+----
+
+Obtenir les détails d'un rapport spécifique :
+
+[source,console,subs="+attributes"]
+----
+kubectl get report 44da974b-6057-4745-a92c-9dd8a1b01cc4 -o yaml
+----
+
+Obtenir les détails d'un rapport de cluster spécifique :
+
+[source,console,subs="+attributes"]
+----
+kubectl get clusterreport e48d9bbc-a9c4-4c36-8519-bc7390d9ec64 -o yaml
+----
+
+== Exemple de rapport
+
+L'exemple suivant montre un `+Report+` pour la ressource `+Deployment+``+deployment1+` dans l'espace de noms `+default+`. Le rapport indique que le site `+Pod+`a échoué à la politique d'admission `+safe-labels+`.
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: PolicyReport
+metadata:
+  creationTimestamp: “2024-02-29T06:55:37Z”
+  generation: 6
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  namespace: default
+  ownerReferences:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: deployment1
+      uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  resourceVersion: “2685996”
+  uid: c5a88847-d678-4733-8120-1b83fd6330cb
+results:
+  - category: Resource validation
+    message: “The following mandatory labels are missing: cost-center”
+    policy: namespaced-default-safe-labels
+    properties:
+      policy-resource-version: “2684810”
+      policy-uid: 826dd4ef-9db5-408e-9482-455f278bf9bf
+      policy-name: “safe-labels”
+      policy-namespace: “default”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: deployment1
+  namespace: default
+  resourceVersion: “3”
+  uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== Exemple de rapport sur les clusters
+
+L'exemple suivant montre un `+ClusterReport+` pour la ressource `+Namespace+``+default+` . Le rapport indique que la ressource a échoué à la validation de`+safe-annotations+` ClusterAdmissionPolicy.
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: ClusterPolicyReport
+metadata:
+  creationTimestamp: “2024-02-28T14:44:37Z”
+  generation: 3
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  ownerReferences:
+    - apiVersion: v1
+      kind: Namespace
+      name: default
+      uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  resourceVersion: “2403034”
+  uid: 20a3d00e-e955-4f21-a887-317d40f3f052
+results:
+  - category: Resource validation
+    message: “The following mandatory annotations are not allowed: owner”
+    policy: clusterwide-safe-annotations
+    properties:
+      policy-resource-version: “2396437”
+      policy-uid: 46780d6e-e51a-4d65-8572-a6af01380aa7
+      policy-name: “safe-annotations”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: v1
+  kind: Namespace
+  name: default
+  resourceVersion: “37”
+  uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== Policy Reporter UI
+
+Le Policy Reporter est livré en tant que sous-carte de `+kubewarden-controller+`. Pour plus d'informations, reportez-vous à la page d'xref:howtos/audit-scanner.adoc[installation du scanner d'audit.] 
+
+L'interface utilisateur du rapporteur de politique fournit un tableau de bord indiquant toutes les violations. Voir la capture d'écran ci-dessous :
+
+image::policy-reporter_dashboard.png[Exemple de tableau de bord Policy Reporter]
+
+{short-project-name} expédie l'interface utilisateur de Policy Reporter avec un filtre préconfiguré qui n'affiche que les politiques {short-project-name}, ainsi que des informations plus détaillées :
+
+image::policy-reporter_policyreports.png[Policy Reporter PolicyReports exemple]
+
+Les autres fonctionnalités de Policy Reporter comprennent la transmission des résultats à différents clients (comme Grafana Loki, Elasticsearch, les applications de chat), les points de terminaison des métriques, et plus encore. Voir lahttps://kyverno.github.io/policy-reporter[documentation de la communauté] pour plus d'informations.
