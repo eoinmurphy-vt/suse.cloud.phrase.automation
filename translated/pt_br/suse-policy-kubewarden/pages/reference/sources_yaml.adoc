@@ -1,0 +1,130 @@
+include::partial$variables.adoc[]
+= Referência para sources.yaml
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure seu arquivo sources.yaml para funcionar com os CRs do PolicyServer, especificando o caminho e o formato das autoridades de origem, bem como das fontes inseguras.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "sources.yaml"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "sources.yaml"]
+:sidebar_label: sources.yaml
+:sidebar_position: 110
+:current-version: {page-origin-branch}
+
+Você pode ajustar o comportamento push-pull dos binários `+kwctl+` e `+policy-server+` com o argumento `+--sources-path+`, para especificar o caminho do arquivo`+sources.yaml+`.
+
+Para configurar um CR do PolicyServer, defina seus campos `+spec.insecureSources+` e`+spec.sourceAuthorities+`. O formato desses campos corresponde às respectivas seções abaixo.
+
+== O arquivo `+sources.yaml+` 
+
+Se você omitir o argumento `+--sources-path+` do comando `+kwctl+`, ele tentará carregar o arquivo `+sources.yaml+` a partir dessas pastas:
+
+* Linux: `+$HOME/.config/kubewarden/sources.yaml+`
+* Mac: `$HOME/Library/Application Support/io.kubewarden.kubewarden/sources.yaml`
+* Windows: `+$HOME\AppData\Roaming\kubewarden\config\sources.yaml+`
+
+Sua estrutura é a seguinte:
+
+[subs="+attributes",yaml]
+----
+insecure_sources:
+  - "registry-dev.example.com"
+  - "registry-dev2.example.com:5500"
+source_authorities:
+  "registry-pre.example.com":
+    - type: Path
+      path: /opt/example.com/pki/ca-pre1-1.pem
+    - type: Path
+      path: /opt/example.com/pki/ca-pre1-2.der
+  "registry-pre2.example.com:5500":
+    - type: Data
+      data: |
+            -----BEGIN CERTIFICATE-----
+            ca-pre2 PEM cert
+            -----END CERTIFICATE-----
+----
+
+Esse arquivo está no formato YAML ou JSON. Todas as chaves são opcionais, portanto, o seguinte é um arquivo `+sources.yaml+` válido:
+
+[subs="+attributes",yaml]
+----
+insecure_sources: ["dev.registry.example.com"]
+----
+
+Como está:
+
+[subs="+attributes",json]
+----
+{
+    "source_authorities": {
+        "host.k3d.internal:5000": [
+            {"type": "Data","data":"pem cert 1"},
+            {"type": "Data","data":"pem cert 2"}
+        ]
+    }
+}
+----
+
+=== Seção de fontes inseguras
+
+Os hosts na seção `+insecure_sources+` se comportam de forma diferente dos que não estão listados.
+
+* Hosts não listados, tente:
+ ** para se conectar usando HTTPS, verificando a identidade do servidor
+
++
+Se a conexão falhar, a operação será interrompida.* Hosts listados em `+insecure_sources+`, tente na ordem: conectar-se ** usando HTTPS verificar a identidade do servidor ** conectar-se usando HTTPS, ignorando a verificação do host ** conectar-se usando HTTP
+
++
+A operação será interrompida se todos falharem.
+
+[NOTE]
+====
+
+Normalmente, não há problema em usar `+insecure_sources+` ao usar registros locais ou servidores HTTP para desenvolvimento. Ele evita o ônus de gerenciar certificados.
+Claramente, isso não é para uso em produção.
+
+====
+
+
+=== Seção de autoridades de origem
+
+A seção `+source_authorities+` contém URIs e certificados CA. Ele forma uma cadeia de certificados para esse URI. Ele é usado para verificar a identidade dos registros da Iniciativa OpenContainer (OCI) e dos servidores HTTPS.
+
+Você codifica esses certificados nos formatos Privacy Enhanced Mail (PEM) ou Distinguished Encoding Rule (DER). Para especificar certificados de formato DER, use um caminho para um arquivo que contenha o certificado. No formato PEM, você especifica um caminho para o arquivo de certificado ou uma cadeia de caracteres com o certificado real. Você especifica ambos com uma chave `+type+`:
+
+[subs="+attributes",yaml]
+----
+source_authorities:
+  "registry-pre.example.com":
+    - type: Path
+      path: /opt/example.com/pki/ca-pre1-1.pem
+    - type: Path
+      path: /opt/example.com/pki/ca-pre1-2.der
+    - type: Data
+      data: |
+            -----BEGIN CERTIFICATE-----
+            A string with the ca-pre1-3 PEM cert
+            -----END CERTIFICATE-----
+  "registry-pre2.example.com:5500":
+    - type: Path
+      path: /opt/example.com/pki/ca-pre2-1.der
+----
+
+=== Seção Proxies
+
+A seção `+proxies+` contém a configuração de proxy análoga às variáveis de ambiente usuais `+HTTP_PROXY+`, `+HTTPS_PROXY+`, `+NO_PROXY+` (e suas contrapartes em minúsculas).
+
+Essa configuração tem precedência sobre a definição dessas variáveis de ambiente.
+
+Consulte sua xref:/howtos/proxy-configuration.adoc[página de instruções] para obter mais informações sobre esse recurso.
+
+Seu formato é:
+
+[,yaml]
+----
+proxies:
+  http_proxy: "http://proxy.corp:3128"
+  https_proxy: "http://proxy.corp:3129"
+  no_proxy: "localhost,.corp"
+----
