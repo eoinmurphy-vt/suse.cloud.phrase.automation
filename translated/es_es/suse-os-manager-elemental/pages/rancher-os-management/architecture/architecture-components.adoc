@@ -1,0 +1,47 @@
+= Componentes de arquitectura
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Los componentes necesarios para prestar los xref:rancher-os-management/architecture/services/architecture-services.adoc[servicios de{elemental-product-name} ] son:
+
+* la herramienta de línea de comandos <<_elemental_command_line_tool,`+elemental+`>> herramienta de línea de comandos
+* el demonio <<_elemental_operator_daemon,`+elemental-operator+`>> demonio
+* la herramienta de línea de comandos <<_elemental_register_command_line_tool,`+elemental-register+`>> herramienta de línea de comandos
+* el demonio <<_elemental_system_agent_daemon,`+elemental-system-agent+`>> demonio
+* una o más <<_suse_rancher_prime_os_manager_os_container_image,imágenes contenedoras del SO{elemental-product-name} >>
+
+== `+elemental+` herramienta de línea de comandos
+
+La herramienta `+elemental+` forma parte del link:{elemental_toolkit_url}[{elemental_toolkit_name}] proyecto.
+Realiza las operaciones reales de instalación y actualización del SO en el host y se utiliza para ejecutar las directivas xref:references/cloud-config-reference.adoc[cloud-config] añadidas en xref:rancher-os-management/architecture/custom-resources.adoc[los CRD de{elemental-product-name} ].
+
+El binario `+elemental+` se incluye en todas las imágenes del SO base distribuidas con {elemental-product-name}.
+
+== `+elemental-operator+` demonio
+
+El demonio *operador elemental* realiza dos tareas principales:
+
+. incorpora los controladores Kubernetes de {elemental-product-name} para gestionar todos los xref:rancher-os-management/architecture/custom-resources.adoc[CRD de{elemental-product-name} ]
+. expone los _puntos finales de registro_ para permitir que el host se registre y descargue la configuración de instalación del sistema operativo durante la xref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[incorporación de la máquina].
+
+El demonio `+elemental-operator+` se despliega en el clúster Rancher como `+Deployment+` a través de xref:references/operatorchart-reference.adoc[{elemental-product-name} Operator Helm Chart].
+
+== `+elemental-register+` herramienta de línea de comandos
+
+El binario *elemental-register* es el cliente utilizado para registrar el host contra los _puntos finales de registro_ expuestos por el <<_elemental_operator_daemon,elemental-operator>>. Recoge y envía los datos del host para que el <<_elemental_operator_daemon,operador elemental>> pueda rellenar las plantillas de etiquetas SMBIOS y Hardware.
+
+Si la fase de registro se realiza correctamente, el *elemental-register* obtiene del *elemental-operator* la configuración completa almacenada en el xref:references/machineregistration-reference.adoc[MachineRegistration].
+Como último paso, el cliente *elemental-register* llama al binario <<_elemental_command_line_tool,elemental>> pasándole la configuración recuperada para iniciar la instalación del SO.
+
+== `+elemental-system-agent+` demonio
+
+El `+elemental-system-agent+` se construye a partir del https://github.com/rancher/system-agent[proyecto] y permite a {elemental-product-name} desplegar _planes_ para ayudar con el aprovisionamiento del host.
+Cabe destacar que la instalación y configuración de `+rancher-system-agent+` necesaria para el xref:rancher-os-management/architecture/services/architecture-clusterdeployment.adoc[servicio de aprovisionamiento de Kubernetes Cluster] se realiza a través de un _plan_ `+elemental-system-agent+`.
+
+== {elemental-product-name} Imagen de contenedor del SO
+
+Una imagen link:{elemental_toolkit_url}[{elemental_toolkit_name}] es una imagen de contenedor OCI que contiene todos los archivos que formarán el sistema operativo del host de destino. Contiene no sólo todos los binarios y bibliotecas, sino también el núcleo y los archivos de arranque necesarios para un sistema linux.
+
+La imagen {elemental-product-name} OS es una imagen link:{elemental_toolkit_url}[{elemental_toolkit_name}] OS que se basa en https://www.suse.com/products/micro/[Micro] SLE y contiene configuraciones y binarios específicos de {elemental-product-name} (el <<_elemental_command_line_tool,elemental>> y el <<_elemental_register_command_line_tool,elemental-register>> ).
+
+Las imágenes del SO {elemental-product-name} se rastrean en los recursos xref:references/managedosversion-reference.adoc[ManagedOSVersions]. Los recursos xref:references/managedosversion-reference.adoc[ManagedOSVersions] se crean dinámicamente a partir de recursos xref:references/managedosversionchannel-reference.adoc[ManagedOSVersionChannel]. Con cada instalación de {elemental-product-name} Operator se despliega un recurso `+ManagedOSVersionChannel+` por defecto.
