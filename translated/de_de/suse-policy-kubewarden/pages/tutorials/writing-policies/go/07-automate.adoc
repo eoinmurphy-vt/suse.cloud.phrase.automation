@@ -1,0 +1,74 @@
+include::partial$variables.adoc[]
+= Integration mit GitHub-Aktionen
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Erfahren Sie mehr über die Integration von GitHub-Aktionen für automatisierte Aufgaben, Unit-Tests, End-to-End-Tests und CI/CD-Workflows.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "golang", "github-action-integration"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "github", "integration"]
+:sidebar_label: GitHub-Aktionen
+:sidebar_position: 56
+:current-version: {page-origin-branch}
+
+== Automatisierung
+
+In diesem Abschnitt wird beschrieben, wie Sie GitHub-Aktionen verwenden können, um Aufgaben zu automatisieren.
+
+Das Projektgerüst enthält bereits alle GitHub-Aktionen, die Sie benötigen.
+Sie können die Aktionen in den Dateien `+.github/workflows/test.yml+` und `+.github/workflows/release.yml+` finden.
+
+Sie können diese Grundsätze anpassen, um ein anderes CI-System zu verwenden.
+
+== Prüfung
+
+Die Automatisierung der Unit-Tests und der End-to-End-Tests funktioniert out of the box.
+Es verwendet die in `+.github/workflows/test.yml+` definierten Aufträge.
+
+== Freigabe
+
+Das Projekt Gerüstbau hat einen `+release+` Job in `+.github/workflows/release.yml+`.
+
+Diese Aufgabe führt die folgenden Schritte aus:
+
+* Code für die Kasse
+* Erstellen der WebAssembly-Richtlinie
+* die Politik auf ein Register der Open Container Initiative (OCI) zu übertragen
+* Erstellen Sie eine neue GitHub-Veröffentlichung
+
+Um den Job zu aktivieren, passen Sie den `+oci-target+` Action Input für den wiederverwendbaren Workflow (`+reusable-release-policy-go.yml+`) an, der in der Datei `+release.yml+` aufgerufen wird.
+
+Je nach dem Commit, der seine Ausführung ausgelöst hat, verhält sich der Auftrag unterschiedlich.
+
+Regelmäßige Commits führen zur Erstellung eines OCI-Artefakts namens `+<policy-name>:latest+`.
+Eine GitHub-Veröffentlichung wird für diese Commits nicht erstellt.
+
+Das Erstellen eines Tags, das dem Muster `+v*+` entspricht, führt zu:
+
+* Erstellung eines OCI-Artefakts namens `+<policy-name>:<tag>+`.
+* Erstellung einer GitHub-Veröffentlichung mit dem Namen `+Release <full tag name>+`.
+Die Veröffentlichung umfasst die Assets, den Quellcode der Richtlinie und die WebAssembly-Binärdatei.
+
+=== Ein Beispiel
+
+Angenommen, eine Police mit dem Namen `+safe-labels+` muss als `+ghcr.io/kubewarden/policies/safe-labels+` veröffentlicht werden.
+
+Der Inhalt des Abschnitts `+jobs.push-to-oci-registry.env+` von `+ci.yml+` sollte folgendermaßen aussehen:
+
+[subs="+attributes",yaml]
+----
+jobs:
+  push-to-oci-registry:
+    runs-on: ubuntu-latest
+    env:
+      WASM_BINARY_NAME: policy.wasm
+      OCI_TARGET: ghcr.io/kubewarden/policies/safe-labels
+----
+
+Das Schieben eines Tags mit dem Namen `+v0.1.0+` führt zur Erstellung und Veröffentlichung des OCI-Artefakts namens `+ghcr.io/kubewarden/policies/safe-labels:v0.1.0+`.
+
+Es wird eine GitHub-Veröffentlichung mit dem Namen `+Release v0.1.0+` erstellt.
+Die Veröffentlichung umfasst die folgenden Assets:
+
+* Quellcode komprimiert als `+zip+` und `+tar.gz+`
+* Eine Datei namens `+policy.wasm+`; dies ist die eigentliche WebAssembly-Richtlinie
