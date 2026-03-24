@@ -1,0 +1,217 @@
+= タートルズとCAPIのGitOpsベストプラクティス
+:revdate: 2025-10-02
+:page-revdate: {revdate}
+
+ifeval::["{build-type}" == "product"]
+このセクションでは、エージェントのプロビジョニングと`+CAPI+` エコシステムへの統合を自動化するために、https://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/index.html[Continuous Delivery]と*Cluster API Addon Provider Fleet*(`+CAAPF+`)を組み合わせて使用することに焦点を当て、Turtles と Cluster API (CAPI) を使って GitOps を実装するためのベストプラクティスを提供します。
+endif::[]
+ifeval::["{build-type}" == "community"]
+このセクションでは、エージェントのプロビジョニングと`+CAPI+` エコシステムへの統合を自動化するために、https://fleet.rancher.io/[Fleet]と*Cluster API Addon Provider Fleet*(`+CAAPF+`) を組み合わせて使用することに焦点を当て、Turtles と Cluster API (CAPI) で GitOps を実装するためのベストプラクティスを提供します。
+endif::[]
+
+これらのヒントは転用可能で、別のGitOpsソリューションを使う場合でも適用できる。
+
+== 一般的なヒント
+
+ifeval::["{build-type}" == "product"]
+- **CAPIクラスタとClusterClassコンフィギュレーションの分離：**
+  CAPIクラスタ構成(`+clusters/+`)とCAPI`+ClusterClass+` 定義(`+templates/+`)は区別してください。この分離により、意図しないインフラ変更のリスクを低減しながら、共有テンプレートから複数のクラスタをプロビジョニングできる。
+- **アドオン設定の分離：**
+  アプリケーション・マニフェストを`+applications/+` に格納し、`+Clusters+` および`+ClusterClasses+` から独立していることを保証する。これにより、ユーザーの要求またはマッチングセレクタに基づく選択的またはグループ化されたプロビジョニングが可能になり、クラスタインフラとの干渉を防ぐことができる。Helmチャートの依存関係は、アドオンプロビジョニングの前にhttps://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/gitrepo-content.html#_fleet_yaml[]。
+- **ネストした GitRepo リソースを活用する：**
+  リポジトリのコンテンツを効率的に構造化するために、Fleet のhttps://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/gitrepo-content.html#_nested_gitrepo_crs[ネストされた] `+GitRepo+` リソースを活用する。このアプローチでは、`+ClusterClass+` の定義、必要なアドオン/アプリケーション、およびクラスタ構成を組み合わせて、関心事の分離を維持しながら、モジュール式のプロビジョニングを行うことができます。
+- **GitOps統合ツールが利用可能な場合は利用する：**
+  GitOpsのセットアップを構成するときは、利用可能なツールとそれが提供する機能を考慮に入れてください。この例はhttps://rancher.github.io/cluster-api-addon-provider-fleet/00_intro.html[`+CAAPF+`]これは、`+CAPI+` クラスタへの Fleet GitOps のインストールを自動化し、便利な自動化を提供します。
+- **Kustomizeオーバーレイを適用して環境固有のカスタマイズを行う：**
+  `+overlays/+` を使用して、さまざまな環境用の Kustomize オーバーレイを保存します。これにより、スケーリング調整、ネットワーク変更、コンポーネントアップグレードなどの構成変更を、ベースマニフェストを変更することなく動的に適用できるようになります。
+- **比較パッチを活用する：**
+  Fleetは、バンドルにhttps://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/troubleshooting.html#_suse_rancher_prime_continuous_delivery_deployment_stuck_in_modified_state[`+diff+` 検出の]ための適切なルールが含まれている場合、リソースの差分を選択的に無視することができます。これにより、バンドルが修正された状態で動かなくなるのを防ぐことができる。
+endif::[]
+ifeval::["{build-type}" == "community"]
+- **CAPIクラスタとClusterClassコンフィギュレーションの分離：**
+  CAPIクラスタ構成(`+clusters/+`)とCAPI`+ClusterClass+` 定義(`+templates/+`)は区別してください。この分離により、意図しないインフラ変更のリスクを低減しながら、共有テンプレートから複数のクラスタをプロビジョニングできる。
+- **アドオン設定の分離：**
+  アプリケーション・マニフェストを`+applications/+` に格納し、`+Clusters+` および`+ClusterClasses+` から独立していることを保証する。これにより、ユーザーの要求またはマッチングセレクタに基づく選択的またはグループ化されたプロビジョニングが可能になり、クラスタインフラとの干渉を防ぐことができる。Helmチャートの依存関係は、アドオンプロビジョニングの前にhttps://fleet.rancher.io/gitrepo-content#fleetyaml[]。
+- **ネストした GitRepo リソースを活用する：**
+  リポジトリのコンテンツを効率的に構造化するために、Fleet のhttps://fleet.rancher.io/gitrepo-content#nested-gitrepo-crs[ネストされた] `+GitRepo+` リソースを活用する。このアプローチでは、`+ClusterClass+` の定義、必要なアドオン/アプリケーション、およびクラスタ構成を組み合わせて、関心事の分離を維持しながら、モジュール式のプロビジョニングを行うことができます。
+- **GitOps統合ツールが利用可能な場合は利用する：**
+  GitOpsのセットアップを構成するときは、利用可能なツールとそれが提供する機能を考慮に入れてください。この例はhttps://rancher.github.io/cluster-api-addon-provider-fleet/00_intro.html[`+CAAPF+`]これは、`+CAPI+` クラスタへの Fleet GitOps のインストールを自動化し、便利な自動化を提供します。
+- **Kustomizeオーバーレイを適用して環境固有のカスタマイズを行う：**
+  `+overlays/+` を使用して、さまざまな環境用の Kustomize オーバーレイを保存します。これにより、スケーリング調整、ネットワーク変更、コンポーネントアップグレードなどの構成変更を、ベースマニフェストを変更することなく動的に適用できるようになります。
+- **比較パッチを活用する：**
+  Fleetは、バンドルにhttps://fleet.rancher.io/troubleshooting#fleet-deployment-stuck-in-modified-state[`+diff+` 検出の]ための適切なルールが含まれている場合、リソースの差分を選択的に無視することができます。これにより、バンドルが修正された状態で動かなくなるのを防ぐことができる。
+endif::[]
+
+== フォルダ分け戦略
+
+よく構造化されたリポジトリは、管理を簡素化し、明快さを向上させる。次のようなフォルダ分け戦略を推奨する：
+
+----
+repo-root/
+│── fleet/
+│   ├── providers/         # CAPIProvider files to use with templates
+│   │   ├── core/          # Core provider configuration
+│   │   ├── infra-docker/  # Docker provider configuration
+│   │   ├── infra-aws/     # AWS provider configuration
+│   ├── clusters/          # Cluster-specific configurations
+│   │   ├── prod/          # Production clusters
+│   │   ├── staging/       # Staging clusters
+│   │   ├── dev/           # Development clusters
+│   ├── addons/            # Application-specific manifests focused on cluster bootstrapping, like CNI, CCM, CPI configurations.
+│   │   ├── cni/           # Group applications based on purpose. Provide fleet.yaml per each sub-directory to maintain bundle separation.
+│   │   ├── ccm/
+│   ├── templates/         # CAPI ClusterClass templates for cluster provisioning
+│   ├── fleet.yaml         # Fleet bundle configuration
+│── overlays/              # Kustomize overlays for different environments
+│   ├── prod/.             # Kustomize overlays for production environments
+│   ├── staging/.          # Kustomize overlays for staging environments
+│   ├── dev/.              # Kustomize overlays for development environments
+----
+
+== プロバイダー設定
+
+CAPIプロバイダは、クラスタのプロビジョニングに必要なインフラストラクチャ・コンポーネントを定義します。簡単なセットアップは次のようなものだ：
+
+----
+repo-root/
+│── fleet/
+│   ├── providers/
+│   │   ├── core/
+│   │   |   ├── core.yaml  # Core `+CAPIProvider+` definition
+│   │   |   ├── fleet.yaml # Fleet.yaml definition for the provider setup
+----
+
+コア・プロバイダーが含まれる：
+
+[source,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: cluster-api
+spec:
+  type: core
+----
+
+== テンプレート設定
+
+特定の`+CAPIProvider+` バンドルまたは外部`+GitRepo+` コンポーネントについては、`+fleet.yaml+` で`+dependsOn+` を指定する。これにより、テンプレートが正しい順序でロールアウトされ、コンポーネントコントローラーが欠落していたり、`+ClusterClass+` の定義を受け入れる準備ができていなかったりする問題を防ぐことができる。
+
+[source,yaml]
+----
+namespace: capa-clusters
+dependsOn:
+  - name: core      # Ensure core bundle is installed first
+  - name: infra-aws # Wait for AWS provider installation
+----
+
+== クラスタ構成
+
+ラベルを使用してクラスタと必要なアドオンを動的にマッチングさせ、必要なワークロードのみをデプロイできるようにします。
+
+ラベルの使用例：
+
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: aws-cluster
+  labels:
+    cni: calico
+    ccm: aws
+    env: dev
+----
+
+[WARNING]
+====
+クラスタ定義をテンプレートから分離することをお勧めします。クラスタバンドルが削除されると、CAPIコントローラが正しい順序で削除を処理できるようになるからです。`+Clusters+` と`+ClusterClasses+` を同時に削除すると、予期せぬ結果をもたらす可能性がある。
+====
+
+== アドオン設定
+
+アドオン構成は、クラスタのプロビジョニングを合理化し、手動介入やサードパーティのツールなしでクラスタが`+Ready+` の状態に到達することを保証するために不可欠です。
+
+クラスターアドオンは、適切にラベル付けされたクラスターと照合するために、正確な選択ルールを定義する必要がある。
+
+以下の例は、`+Calico+` CNI と`+AWS+` Cloud Controller Manager (CCM) のインストールが必要なクラスタを示しています：
+
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: aws-cluster
+  labels:
+    cni: calico
+    ccm: aws
+----
+
+このセットアップには2つの`+GitRepo+` リソースが必要で、それぞれが特定のラベルに基づくアドオンのプロビジョニングを担当する（1つは`+cni: calico+` 用、もう1つは`+ccm: aws+` 用）。
+
+以下は、`+Calico+` CNIを展開するための`+GitRepo+` リソースの例です：
+
+[source,yaml]
+----
+apiVersion: fleet.cattle.io/v1alpha1
+kind: GitRepo
+metadata:
+  name: calico
+spec:
+  branch: main
+  paths:
+  - /fleet/applications/calico
+  repo: https://github.com/rancher-sandbox/cluster-api-addon-provider-fleet.git
+  targets:
+  - clusterSelector:
+      matchLabels:
+        cni: calico
+        env: dev
+----
+
+これにより、`+Calico+` CNIは、`+cni: calico+` および`+env: dev+` とラベル付けされたクラスタ上にのみ展開され、選択的な環境プロビジョニングが可能になります。
+
+=== ヘルムチャートの値のテンプレート化
+
+アドオン設定は、一致するクラスタ定義と特定のクラスタ状態に基づいて、`+Calico+` ワークロードを動的に調整する必要があります。これは、以下のような`+fleet.yaml+` ：
+
+----
+repo-root/
+│── fleet/
+│   ├── applications/
+│   │   ├── calico/
+│   │   │   ├── fleet.yaml # Fleet configuration for the Calico setup
+----
+
+`+fleet.yaml+` ファイルは、クラスタ構成に依存せず、スムーズなロールアウトを保証するためのテンプレート・ルールと`+comparePatches+` を定義しています。ここで活用されている`+CAAPF+` テンプレートの詳細については、https://rancher.github.io/cluster-api-addon-provider-fleet/04_reference/02_templating-strategy.html[] 公式参照してください。
+
+[source,yaml]
+----
+helm:
+  releaseName: projectcalico
+  repo: https://docs.tigera.io/calico/charts
+  chart: tigera-operator
+  templateValues:
+    installation: |-
+      cni:
+        type: Calico
+        ipam:
+          type: HostLocal
+      calicoNetwork:
+        bgp: Disabled
+        mtu: 1350
+        ipPools:
+          ${- range $cidr := .ClusterValues.Cluster.spec.clusterNetwork.pods.cidrBlocks }
+          - cidr: "${ $cidr }"
+            encapsulation: None
+            natOutgoing: Enabled
+            nodeSelector: all()${- end}
+
+diff:
+  comparePatches:
+  - apiVersion: operator.tigera.io/v1
+    kind: Installation
+    name: default
+    operations:
+    - {"op":"remove", "path":"/spec/kubernetesProvider"}
+----
