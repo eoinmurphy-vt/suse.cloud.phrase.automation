@@ -1,0 +1,73 @@
+= CAPI-Anbieter
+:revdate: 2025-08-25
+:page-revdate: {revdate}
+
+Die Ressource `+CAPIProvider+` ermöglicht die Verwaltung von Cluster-API-Operator-Manifesten auf deklarative Weise. Es wird zur Bereitstellung und Konfiguration von Cluster-API-Anbietern wie AWS, vSphere usw. verwendet.
+
+`+CAPIProvider+` folgt einem GitOps-Modell - die Spezifikationsfelder sind deklarative Benutzereingaben. Der Controller aktualisiert nur den Status.
+
+Jedes Feld, das von der vorgelagerten Ressource CAPI Operator `+CAPIProviderSpec+` bereitgestellt wird, ist auch in der Spezifikation der Ressource `+CAPIProvider+` verfügbar. Für fortgeschrittene Szenarien können Sie die vorgelagerten link:https://cluster-api-operator.sigs.k8s.io/03_topics/02_configuration/05_provider-spec-configuration[Konfigurationsanleitungen] zu Rate ziehen.
+
+Alle xref:../overview/certified.adoc[zertifizierten] CAPI-Provider werden über eine eingebettete Konfiguration konfiguriert. Um sie außer Kraft setzen zu können, muss eine benutzerdefinierte xref:./clusterctlconfig.adoc#_override_a_certified_provider_version[ClusterctlConfig] erstellt werden.
+
+== Verwendung
+
+So verwenden Sie die Ressource `+CAPIProvider+`:
+
+. Erstellen Sie eine Ressource `+CAPIProvider+` mit dem gewünschten Anbieternamen, dem Typ, den Anmeldedaten, der Konfiguration und den Funktionen.
+. Der `+CAPIProvider+` Controller übernimmt das Templating der erforderlichen Cluster-API-Operator-Manifeste auf der Grundlage der `+CAPIProvider+` Spezifikation.
+. Das Statusfeld auf der Ressource `+CAPIProvider+` spiegelt den Status der erzeugten Manifeste wider.
+. Verwalten Sie das Objekt `+CAPIProvider+` deklarativ, um Änderungen an den generierten Anbietermanifesten vorzunehmen.
+
+Hier ist ein Beispiel `+CAPIProvider+` manifest:
+
+[source,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: aws-infra
+  namespace: capi-providers
+spec:
+  name: aws
+  type: infrastructure
+  enableAutomaticUpdate: true
+  credentials:
+    rancherCloudCredential: aws-creds # Rancher credentials secret for AWS
+  configSecret:
+    name: aws-config
+  features:
+    clusterResourceSet: true
+----
+
+Dadurch wird ein AWS-Infrastrukturprovider mit der mitgelieferten Zuordnung für das Rancher-Anmeldungsgeheimnis und die benutzerdefinierten aktivierten Funktionen erstellt.
+
+Der `+CAPIProvider+` Controller ist Eigentümer aller generierten Provider-Ressourcen und ermöglicht die Garbage Collection durch Löschen des `+CAPIProvider+` Objekts.
+
+== Spezifikation
+
+Die Schlüsselfelder in der Spezifikation `+CAPIProvider+` sind:
+
+* `+name+` - Name des Anbieters (aws, vsphere usw.). Geerbt von `+metadata.name+`, wenn nicht angegeben.
+* `+type+` - Art der Anbieterressource (kann auf `+core+`, `+controlPlane+`, `+bootstrap+`, `+infrastructure+`, `+addon+`, `+ipam+` oder `+runtimeextension+` gesetzt werden).
+* `+credentials+` - Quellennachweise für die Anbieterangabe.
+* `+configSecret+` - Name des Konfigurationsgeheimnisses des Anbieters, in dem die Variablen und die synchronisierten Anmeldeinformationen gespeichert werden. Wenn nicht angegeben, wird standardmäßig der Name der Ressource `+CAPIProvider+` übernommen.
+* `+features+` - Aktivierte Anbieterfunktionen.
+* `+variables+` - Variablen ist eine Karte mit Umgebungsvariablen, die dem Inhalt von `+configSecret+` hinzugefügt werden können.
+* `+version+` - Version gibt die Version des Anbieters an.
+* `+enableAutomaticUpdate+` - Erlauben Sie dem Anbieter eine automatische Aktualisierung. Standardmäßig nur bei Anbietern aktiviert, die Turtles Chart installiert haben.
+* `+fetchConfig+` - FetchConfig bestimmt, wie der Betreiber die Komponenten und Metadaten für den Anbieter abruft.
+** `+oci+` - OCI, um die Komponenten und Metadaten des Anbieters aus einem OCI-Artefakt abzurufen. Sie müssen das Feld `+providerSpec.Version+` setzen, damit der Operator die gewünschte Version der Veröffentlichung von GitHub abrufen kann. Fehlt die providerSpec.Version, wird die neueste Provider-Version aus den clusterctl-Standardeinstellungen verwendet.
+** `+selector+` - Selektor, der zum Abrufen der Komponenten und Metadaten des Anbieters aus den im Cluster gespeicherten ConfigMaps verwendet wird. Jede ConfigMap sollte nur Komponenten und Metadaten für eine bestimmte Version enthalten.
+** `+url+` - URL, die für den Abruf der Komponenten und Metadaten des Anbieters aus einem entfernten Github-Repository verwendet werden soll.
+
+== Versionsanbindung und automatische Updates
+
+Die `+CAPIProvider+` `+version+` kann jederzeit eingestellt werden, um den Anbieter an eine bestimmte Version zu binden. Darüber hinaus kann `+automaticUpdates+` umgeschaltet werden, um automatische Aktualisierungen auf die neueste verfügbare Version zu ermöglichen. Die neueste verfügbare Version wird durch die eingebettete clusterctl-Konfiguration für xref:../overview/certified.adoc[zertifizierte] Anbieter bestimmt und kann für benutzerdefinierte Anbieter mit xref:../reference/clusterctlconfig.adoc[ClusterctlConfig] außer Kraft gesetzt oder konfiguriert werden.
+
+== Löschung
+
+Wenn eine `+CAPIProvider+` Ressource gelöscht wird, bereinigt die Kubernetes Garbage Collection alle generierten Provider-Ressourcen, die ihr gehören. Dazu gehören:
+
+* Cluster-API-Operator-Ressourceninstanz
+* Geheimnis referenziert durch das `+configSecret+`
