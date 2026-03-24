@@ -1,0 +1,53 @@
+= Erstellen von Raw-Disk-Images für Raspberry Pi
+:revdate: 2024-09-24
+:page-revdate: {revdate}
+
+In dieser Anleitung wird gezeigt, wie man ein rohes Disk-Image erstellt, das auf eine SD-Karte geschrieben und ohne weitere Installationsmedien gebootet werden kann.
+
+[CAUTION]
+====
+Alle Daten auf der SD-Karte werden gelöscht. Bitte verwenden Sie nur eine SD-Karte, auf der sich keine wichtigen Daten befinden.
+
+Die SD-Karte muss einigermaßen groß (32 GB oder mehr) und *schnell* (!!) sein.
+====
+
+.SeedImage-Ressource
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  type: raw
+  baseImage: registry.opensuse.org/isv/rancher/elemental/staging/containers/suse/sl-micro/6.0/baremetal-os-container:latest
+  targetPlatform: linux/arm64
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+Prüfen Sie die Protokolle für den Build-Pod mit:
+
+[,shell]
+----
+kubectl logs -n fleet-default fire-img -f -c build
+----
+
+Wenn der Build abgeschlossen ist, können wir die Image-Datei mit wget herunterladen:
+
+[,shell]
+----
+wget --no-check-certificate $(kubectl get seedimage -n fleet-default fire-img -o jsonpath="{.status.downloadURL}") -O sle-micro.arm64.raw
+----
+
+Jetzt können wir das `+.raw+` Image auf die SD-Karte schreiben. Dies kann mit `+dd+` auf der Linux-Befehlszeile durchgeführt werden, wenn Sie mit diesem Befehl vertraut sind.https://www.opensuse.org[openSUSE] hat eine schöne Anleitung, wie man ein Image auf ein Speichermedium für https://en.opensuse.org/SDB:Live_USB_stick[Linux],https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_Windows[Windows] und https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_macOS[OS X] schreibt.
+
+== Starten der Maschine
+
+Das Raw Disk Image enthält nur die EFI-Partition, die OEM-Partition und die Recovery-Partition. Beim ersten Start wird das System in das Wiederherstellungssystem gebootet, um fehlende Partitionen zu erweitern und hinzuzufügen. Nach der Erweiterung wird er bei Rancher registriert und neu gestartet.
+
+Tritt während der Registrierungsphase ein Fehler auf, kann das Journal mit`+journalctl -u elemental-register-reset+` gefunden werden.
