@@ -1,0 +1,193 @@
+include::partial$variables.adoc[]
+= ポリシー評価タイムアウト保護
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ポリシーの評価タイムアウトを設定して、タイムリーな完了を保証し、Policy Server の組み込み保護機能でリソースの枯渇を防ぐ。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "policy-evaluation-timeout"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"ポリシータイムアウト保護"]]。
+:current-version: {page-origin-branch}
+
+[IMPORTANT]
+====
+
+この機能は、{project-name} v1.5.0からPolicy-Serverごとのタイムアウトで、v1.29.0からPolicyごとのタイムアウトで利用できる。
+
+====
+
+ポリシー評価タイムアウト保護はポリシーとポリシーサーバーのセキュリティ機能です。その目的は、リクエスト評価にかかる時間を制限することである。
+
+== 目的
+
+従来のプログラミング言語（xref:../tutorials/writing-policies/go/01-intro-go.adoc[Go]、xref:../tutorials/writing-policies/index.adoc[Rustなど]）でも、特別なクエリー言語xref:../tutorials/writing-policies/rego/01-intro-rego.adoc[Regoでも]、{short-project-name} ポリシーを書くことができる。どちらのアプローチにも利点があるため、{short-project-name} の目標は、政策立案者にそのニーズに最適なツールを選択させることである。
+
+従来のhttps://en.wikipedia.org/wiki/Turing_completeness[]チューリング完全言語を使用する場合、次のような問題が発生する可能性がある：
+
+* https://en.wikipedia.org/wiki/Infinite_loop[無限ループ]
+* https://en.wikipedia.org/wiki/Deadlock[デッドロック]
+* 最適化を欠いた動作の遅いコード
+* 計算量の多いオペレーション
+
+ポリシー評価タイムアウト保護機能は、あらかじめ定義された期間後にリクエストの評価を終了する。これにより、Policy Serverは常に受信リクエストを処理するための計算リソースを確保できる。
+
+== 制限事項
+
+現在、ポリシー評価のタイムアウト保護は、ほとんどの長時間実行中の評価を中断することができる。まだ扱われていないエッジケースもある。
+これには、ポリシーの中から`+sleep+` 命令を呼び出すことや、デッドロックが含まれる。
+
+Policy Serverの将来のリリースでは、これらのシナリオに対応する予定です。
+
+最後に、ポリシー評価タイムアウトは、Policy Server インスタンスによってホストされるすべてのポリシーに影響します。現在のところ、ポリシー評価タイムアウトをポリシーごとに調整する方法はない。
+
+== 構成
+
+Policyごとの評価タイムアウト、Policy-Serverごとの評価タイムアウト、およびWebhookのタイムアウトのすべての値が検証され、それらがすべて互いの許容値内に収まるようにします。例えば、KubernetesのWebhookタイムアウトよりも高いPolicy評価タイムアウト値を設定することはできません。
+
+### ポリシー
+
+{short-project-name} v1.29.0から、すべての{short-project-name} Policyは、`+spec.timeoutEvalSeconds+` 属性を介して、独自のタイムアウト値を設定することができます。これは、Webhook のタイムアウトに使用される`+spec.timeoutSeconds+` と混同しないでください (セクション [下記](#comparison-with-kubernetes-dynamic-admission-controller-timeout) を参照)。
+
+`+spec.timeoutEvalSeconds+` はきめ細かく、ポリシーごとに評価タイムアウトを調整できる。
+
+この設定は、Policy-Serverごとのグローバルタイムアウト評価設定よりも優先されます。
+
+例えば、特定のポリシーの評価タイムアウトを長く設定する：
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Secrets
+    io.kubewarden.policy.severity: medium
+  name: env-variable-secrets-scanner
+spec:
+  module: registry://ghcr.io/kubewarden/policies/env-variable-secrets-scanner:v1.0.6
+  settings: {}
+  timeoutEvalSeconds: 10 // Set evaluation timeout
+  mutating: false
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["replicationcontrollers"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      resources: ["jobs", "cronjobs"]
+      operations: ["CREATE", "UPDATE"]
+----
+
+=== ポリシーサーバーごと
+
+{short-project-name} v1.5.0から、Policy Serverには設定可能な評価タイムアウトが付属し、デフォルトで有効になっています。リクエスト評価の中断は2秒後に行われる。この構成は、そのポリシー サーバでスケジュールされているすべてのポリシーに影響します。ポリシーごとに設定可能な`+spec.timeoutEvalSeconds+`タイムアウトは、このポリシーごとのサーバー設定よりも優先されます。
+
+この動作は、以下の環境変数を使って調整できる：
+
+* `+KUBEWARDEN_DISABLE_TIMEOUT_PROTECTION+`:これによって政策評価は完全に無効になる。どのような値が割り当てられても、その機能はオフになる。
+* `+KUBEWARDEN_POLICY_TIMEOUT+`:これは別のタイムアウト値を設定する。値は秒単位で、デフォルト値は`+2+` 。
+
+Kubernetes Custom Resource Definitionhttps://doc.crds.dev/github.com/kubewarden/kubewarden-controller/policies.kubewarden.io/PolicyServer/v1@v1.4.2[`+PolicyServer+`]Kubernetes Custom Resource Definitionを使用する場合、これらの環境変数を次のように設定できます：
+
+[source,yaml]
+----
+# A Policy Server that has policy evaluation timeout disabled
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: no-policy-timeout
+spec:
+  env:
+    - name: KUBEWARDEN_DISABLE_TIMEOUT_PROTECTION
+      value: "true"
+---
+
+# A Policy Server that has policy evaluation timeout enabled,
+# with a 3 seconds timeout value
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: custom-policy-timeout
+spec:
+  env:
+    - name: KUBEWARDEN_POLICY_TIMEOUT
+      value: "3"
+----
+
+== Kubernetes Dynamic Admission Controllerのタイムアウトとの比較
+
+{short-project-name} はhttps://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/[Dynamic Admission Controller] Kubernetes のhttps://en.wikipedia.org/wiki/Webhook[Webhook]実装である。
+
+内部的には、Kubernetes APIサーバーは、{short-project-name}'s Policy Serverに対して、起ころうとしているイベントを記述するHTTPリクエストを行う。HTTPリクエストの後、Kubernetes API Serverは回答を待つ。しかし、Kubernetes APIサーバーはいつまでも待ってはくれない。一定の時間が経過すると、リクエストはタイムアウトしたとみなされる。
+
+https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#timeouts[Kubernetes公式ドキュメントを]引用する：
+
+____
+WebhookはAPIリクエストの待ち時間を増やすので、できるだけ早く評価する必要がある。`+timeoutSeconds+` 、APIサーバーがWebhookの応答を待ってから、その呼び出しを失敗とみなすまでの時間を設定できる。
+
+Webhook が応答する前にタイムアウトが切れると、Webhook 呼び出しは無視されるか、https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#failure-policy[failure policy] に基づいて API 呼び出しが拒否されます。
+
+タイムアウト値は1秒から30秒の間でなければならない。
+
+アドミッションWebhookのタイムアウトのデフォルトは10秒です。
+____
+
+つまり、ポリシーの評価タイムアウト機能に関係なく、Kubernetesの各認可リクエストはタイムアウトの対象となる。
+
+`+ClusterAdmissionPolicy+` と`+AdmissionPolicy+` カスタム・リソースの`+timeoutSeconds+`属性を使って、{short-project-name} ポリシーごとにタイムアウト値を設定できます。
+デフォルトでは、タイムアウト値は10秒である。
+
+[IMPORTANT]
+====
+
+Policy Serverに対して行われるすべてのKubernetesアドミッション要求は、2つの異なるタイムアウトに従う：
+
+* Kubernetes APIサーバーのタイムアウト値。デフォルトでは10秒に設定され、ポリシー・カスタム・リソースの専用`+spec.timeoutSeconds+`属性によってポリシーごとに調整できます。
+* ポリシー評価タイムアウト。環境変数によってポリシーサーバで設定するか、ポリシーカスタムリソースの`+spec.timeoutEvalSeconds+` 属性によってポリシーごとに設定する。
+
+====
+
+KubernetesのWebhookタイムアウトと{short-project-name}'ポリシー評価タイムアウトの違いをよりよく理解するために、次のシナリオを調べることができます。
+
+
+=== {short-project-name} ポリシーの評価タイムアウトを無効にする
+
+ポリシー評価タイムアウト機能がオフになっているポリシー サーバがあり、そのポリシー サーバでスケジュールされているポリシーが`+spec.timeoutEvalSeconds+` フィールドを設定していないと仮定します。このポリシー サーバは、評価中に無限ループに入るバグの影響を受けるポリシーをホストしています。
+
+Kubernetes APIサーバーは、このバギーポリシーによる評価のためにアドミッション要求を送信する。その結果、政策評価は無限ループに入る。
+一方、Kubernetes APIサーバーは応答を待っている。
+
+10秒後、Kubernetesのウェブフックのタイムアウトが起こり、リクエストはウェブフックの失敗ポリシーに従って処理される。
+
+今、Policy Serverはこの無限ループから抜け出せない計算資源を持っている。
+時間の経過とともに、バグを持つポリシーをトリガーするアドミッションリクエストが増え、ポリシーサーバは計算リソースを使い果たしてしまう。Kubernetes APIサーバーに応答できない。これはポリシー サーバに対するサービス拒否 (DOS) 攻撃と同じです。
+
+=== {short-project-name} ポリシー評価タイムアウトが有効
+
+同じポリシー サーバでポリシー評価タイムアウト機能が有効になっており、ポリシー サーバでグローバルに、またはポリシー`+spec.timeoutEvalSeconds+` を介してポリシーで有効になっており、ポリシー評価タイムアウトが 2 秒であるシナリオを想定します。
+
+Kubernetes APIサーバーは、このバギーポリシーによる評価のためにアドミッション要求を送信する。その結果、政策評価は無限ループに陥る。
+一方、Kubernetes APIサーバーは応答を待っている。
+
+2秒後、{short-project-name} のポリシー評価タイムアウト機能は、ポリシー評価を中断し、拒否応答を生成する。レスポンスには、ポリシー評価が時間内に完了しなかったために拒否が起こったことを説明するメッセージが含まれている。
+
+[NOTE]
+====
+
+{short-project-name}'のポリシー評価タイムアウトをKubernetesのウェブフックタイムアウトと同じくらい高い値に設定するのは良い選択ではない。
+
+ポリシーの評価はまだ中断され、DOS攻撃の可能性は減少しますが、最終的な拒否応答はポリシーサーバによって生成されません。拒否はKubernetes APIサーバーからWebhookのタイムアウトとともにやってくる。
+
+その結果、ユーザーやKubernetesのオペレーターは、これらの遅い／バグだらけのポリシーを検出することが難しくなる。ポリシー評価中断の唯一の証拠は、Policy Serverのログとトレースイベントです。
+
+====
+
