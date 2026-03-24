@@ -1,0 +1,512 @@
+include::partial$variables.adoc[]
+= クイックスタート
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: PolicyServersやClusterAdmissionPolicyリソースなど、{project-name} スタックの主なコンポーネントの展開と管理方法について理解します。
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["quick-start"]
+:doc-type: ["tutorial"]
+:keywords: ["{project-name}", "installation", "quick start", "policyserver", "clusteradmissionpolicy", "admissionpolicy" ]。
+:sidebar_label: クイックスタート
+:sidebar_position: 20
+:current-version: {page-origin-branch}
+
+++++
+<head>
+<script async src="https://artifacthub.io/artifacthub-widget.js"></script>
+</head>
+++++
+
+{project-name} スタックからなる：
+
+* 1つ以上の{cluster-admission-policy} リソース：Kubernetesクラスタのポリシーを定義します。
+* 1つ以上の{policy-server} リソース：{short-project-name} `+PolicyServer+` の展開を表す。{short-project-name} `+PolicyServer+` は、管理者のポリシーをロードし、評価する。
+* 1 つ以上の{admission-policy} リソース：定義されたネームスペースのポリシー。
+* `+kubewarden-controller+`このコントローラは、{cluster-admission-policy} リソースを監視し、{short-project-name} {policy-server} コンポーネントと相互作用する。
+
+[TIP]
+====
+
+{short-project-name} Kubernetes Custom Resource Definitions (CRDs)についてはxref:reference/CRDs.adoc[こちらを]ご覧ください。
+
+{short-project-name} このチュートリアルやその他のドキュメントで言及されているCRDは、使いやすいように短い名前になっています。これらはCRDの略称である：
+
+[cols="1,1"]
+|===
+| リソース | shortName
+
+| アドミッションポリシー
+| *ap*
+
+| ClusterAdmissionPolicies
+| *cap*
+
+| アドミッションポリシーグループ
+| *apg*
+
+| ClusterAdmissionPolicyGroups
+| *capg*
+
+| PolicyServers
+| *ps*
+
+|===
+
+====
+
+
+== インストール
+
+[IMPORTANT]
+.認証
+====
+
+:gh-pat-url: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+
+{short-project-name} ポリシーは、GitHub コンテナ・レジストリhttps://ghcr.io. から取得できます。{short-project-name} CLI でリポジトリを使用するには、{gh-pat-url}[GitHub personal access token] (PAT) という認証が必要です。まだ作成されていない方は、ドキュメントを参照してください。
+そして、次のようなコマンドで認証する：
+
+[subs="+attributes",console]
+----
+echo $PAT | docker login ghcr.io --username <my-gh-username> --password-stdin
+----
+
+====
+
+
+`+helm+` のチャートを使って、{short-project-name} スタックを以下のように展開する：
+
+[subs="+attributes",console]
+----
+helm repo add kubewarden https://charts.kubewarden.io
+----
+
+[subs="+attributes",console]
+----
+helm repo update kubewarden
+----
+
+Kubernetesクラスタの`+kubewarden+` 名前空間に以下のHelmチャートをインストールする：
+
+* `+kubewarden-crds+`{cluster-admission-policy} 、{admission-policy} 、{policy-server} Custom Resource Definitionsを登録する。また、監査スキャナーが使用する{report} カスタムリソース定義。
+* `+kubewarden-controller+`{short-project-name} コントローラーと監査スキャナーをインストールする。
++
+[NOTE]
+====
+
+監査スキャナーのコンポーネントを無効にする必要がある場合は、監査スキャナーのインストール・xref:howtos/audit-scanner.adoc[ドキュメントのページを]確認してください。
+
+====
++
+* `+kubewarden-defaults+`これは`+default+` という`+PolicyServer+` リソースを作成する。また、推奨ポリシーのセットをインストールして、よく知られたベストプラクティスを実施することでクラスタを保護することもできる。
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden --create-namespace kubewarden-crds kubewarden/kubewarden-crds
+----
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden kubewarden-controller kubewarden/kubewarden-controller
+----
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden kubewarden-defaults kubewarden/kubewarden-defaults
+----
+
+[CAUTION]
+====
+
+そのためhttps://github.com/kubewarden/kubewarden-controller/releases/tag/v0.4.0[`+v0.4.0+`]`+default+` という名前の`+PolicyServer+` リソースは、`+kubewarden-controller+` チャートを使用して作成されません。ここで、`+kubewarden-defaults+` という Helm チャートがデフォルトのポリシー・サーバーをインストールする。
+
+つまり、アップグレードまたは削除中に`+kubewarden-controller+`の最新バージョンを使用していない場合、デフォルトポリシーサーバーはアップグレードまたは削除されません。そのため、例えば同じポリシー・サーバー名など、競合する情報を使って`+kubewarden-defaults+` をインストールしようとすると、問題が発生する可能性がある。`+kubewarden-defaults+`Helm チャートの今後のアップグレードをインストールするには、新しいチャートをインストールする前に、`+kubewarden-controller+` で作成された既存の`+PolicyServer+` リソースを削除してください。これで、リソースの競合なしに、Helmアップグレードを使用してポリシーサーバーを更新できる。`+PolicyServer+` を削除すると、それにバインドされているすべてのポリシーも削除される。
+
+====
+
+
+デフォルトのコンフィギュレーション値は、ほとんどのデプロイメントに十分である。https://charts.kubewarden.io/#configuration[]、すべてのオプションについて説明されている。
+
+== 主要部品
+
+{short-project-name} には3つの主要なコンポーネントがあり、それらを操作する：
+
+* について {policy-server}
+* について {cluster-admission-policy}
+* について {admission-policy}
+
+=== `+PolicyServer+`
+
+`+kubewarden-controller+` は{short-project-name} `+PolicyServer+` を管理している。同じKubernetesクラスターに複数の{policy-server}。
+
+`+PolicyServer+` {short-project-name} ポリシーを実行することで、入ってくるリクエストを検証する。
+
+これはデフォルトの`+PolicyServer+` ：
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: reserved-instance-for-tenant-a
+spec:
+  image: ghcr.io/kubewarden/policy-server:v1.3.0
+  replicas: 2
+  serviceAccountName: ~
+  env:
+    - name: KUBEWARDEN_LOG_LEVEL
+      value: debug
+----
+
+[NOTE]
+====
+
+https://github.com/kubewarden/policy-server/pkgs/container/policy-server[最新リリース`+PolicyServer+` バージョン]をチェックし、タグを一致するように変更する。
+
+====
+
+`+PolicyServer+` リソースの属性の概要：
+
+[cols="^,,"]
+|===
+| 必須 | プレースホルダー | 説明
+
+| Y
+| `+image+`
+| コンテナイメージの名前
+
+| Y
+| `+replicas+`
+| 希望するインスタンスの数
+
+| N
+| `+serviceAccountName+`
+| `+PolicyServer+` デプロイメントに使用する`+ServiceAccount+` の名前。指定された値がない場合、インストール・ネームスペースのデフォルトの`+ServiceAccount+` （`+kubewarden-controller+` ）が使用される。
+
+| N
+| `+env+`
+| 環境変数のリスト
+
+| N
+| `+annotations+`
+| 注釈のリスト
+
+|===
+
+これらの属性のいずれかを変更すると、新しい構成で`+PolicyServer+` 。
+
+=== ClusterAdmissionPolicy
+
+{cluster-admission-policy} リソースは{short-project-name}スタックの中核である。ポリシーがどのようにリクエストを評価するかを定義する。
+
+ポリシーの強制は、Kubernetes管理者が行う最も一般的な操作だ。ポリシーはいくつでも宣言でき、それぞれが1つ以上のKubernetesリソース（つまり、`+pods+` 、`+Custom Resource+`、その他）を対象とする。また、対象となるリソースに適用される操作のタイプも指定する。利用可能な操作は、`+CREATE+` 、`+UPDATE+` 、`+DELETE+` 、`+CONNECT+` である。
+
+{cluster-admission-policy} のデフォルト設定：
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-capabilities
+spec:
+  policyServer: reserved-instance-for-tenant-a
+  module: registry://ghcr.io/kubewarden/policies/psp-capabilities:v0.1.9
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  settings:
+    allowed_capabilities:
+      - CHOWN
+    required_drop_capabilities:
+      - NET_ADMIN
+----
+
+{cluster-admission-policy} リソースの属性の概要：
+
+[cols="^,,"]
+|===
+| 必須 | プレースホルダー | 説明
+
+| N
+| `+policy-server+`
+| 既存の`+PolicyServer+` オブジェクトを識別する。この`+PolicyServer+` インスタンスだけがポリシーに応える。`+default+` という名前のポリシーサーバは、明示的な`+PolicyServer+` なしで{cluster-admission-policy} を提供します。
+
+| Y
+| `+module+`
+| {short-project-name} ポリシーの場所。以下の方式が認められている：
+
+| N
+|
+| - `+registry+`:https://github.com/opencontainers/artifacts[]OCI準拠したコンテナレジストリからポリシーをダウンロードする。例 `+registry://<OCI registry/policy URL>+`
+
+| N
+|
+| - `+http+`, `+https+`:通常のHTTP(s)サーバーからのポリシーのダウンロード。
+    例 `+\https://<website/policy URL>+`
+
+| N
+|
+| - `+file+`:コンピュータのファイルシステムにあるファイルからポリシーをロードする。
+    例 `+\file:///<policy WASM binary full path>+`
+
+| Y
+| `+resources+`
+| ポリシーによって評価されるKubernetesリソース
+
+| Y
+| `+operations+`
+| 先に与えられたタイプに対するどのような操作が、評価のためにAPIサーバーによってこのアドミッションポリシーに転送されるべきか。
+
+| Y
+| `+mutating+`
+| 着信リクエストを変更できるポリシーには、このブール値`+true+` を設定します。
+
+| N
+| `+settings+`
+| ポリシーの設定値を含む自由形式のオブジェクト。
+
+| N
+| `+failurePolicy+`
+| ポリシーによって評価されたリクエストがエラーになった場合に取るべきアクション。
+  以下のオプションが許される：
+
+| N
+|
+| -`+Ignore+`: ウェブフックの呼び出しエラーを無視し、APIリクエストを続行します。
+
+| N
+|
+| -`+Fail+`: Webhookの呼び出しエラーにより、入室が失敗し、APIリクエストが拒否される。
+|===
+
+[NOTE]
+====
+
+コントローラは、{cluster-admission-policy} リソース`+*+` Webhook`+scope+` を登録する。これは、登録されたウェブフックが、指定された`+resources+` と`+operations+` にマッチする、名前空間またはクラスタ全体のリソースを転送することを意味します。
+
+====
+
+
+=== アドミッションポリシー
+
+{admission-policy} は名前空間全体のリソースです。ポリシーは、{admission-policy} が定義されたNamespaceを対象とするリクエストのみを処理します。
+それ以外は、{admission-policy} と{cluster-admission-policy} のリソースに機能的な違いはない。
+
+[IMPORTANT]
+====
+
+{admission-policy} Kubernetes 1.21.0以上が必要です。これは、{short-project-name} が Kubernetes 1.21.0 で導入された`+kubernetes.io/metadata.name+` ラベルを使用しているためです。
+
+====
+
+これらのカスタム・リソースの完全なドキュメントは、https://github.com/kubewarden/kubewarden-controller/blob/main/docs/crds/README.asciidoc[ここ]またはhttps://doc.crds.dev/github.com/kubewarden/kubewarden-controller[docs.crds.dev] にあります。
+
+== 例最初のポリシーを実施する
+
+私たちはhttps://github.com/kubewarden/pod-privileged-policy[`+pod-privileged+`]方針で
+このポリシーを実施することで、Kubernetesクラスタ内で特権コンテナが作成されるのを防ぎたい。
+
+そのために{cluster-admission-policy} ：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: privileged-pods
+spec:
+  module: registry://ghcr.io/kubewarden/policies/pod-privileged:v0.2.2
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+EOF
+----
+
+この結果、次のような出力が得られる：
+
+[subs="+attributes",console]
+----
+clusteradmissionpolicy.policies.kubewarden.io/privileged-pods created
+----
+
+{cluster-admission-policy} をインスタンス化した後、ステータスは`+pending+` となり、対象の`+PolicyServer+` を強制的にロールアウトする。この例では、`+default+` という名前の`+PolicyServer+` である。以下のコマンドを実行することで、ロールアウトを監視することができる：
+
+[subs="+attributes",console]
+----
+kubectl get clusteradmissionpolicy.policies.kubewarden.io/privileged-pods
+----
+
+次のような出力が表示されるはずだ：
+
+[subs="+attributes",console]
+----
+NAME              POLICY SERVER   MUTATING   STATUS
+privileged-pods   default         false      pending
+----
+
+新しいポリシーの準備ができたら、`+kubewarden-controller+`、https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#validatingwebhookconfiguration-v1-admissionregistration-k8s-io[ValidatingWebhookConfiguration]オブジェクトを登録し、それを提供する。
+
+`+PolicyServer+` インスタンスごとにデプロイが完了すると、{cluster-admission-policy} のステータスは`+active+` になる。次のコマンドで{validating-webhook-configuration}s を表示する：
+
+[subs="+attributes",console]
+----
+kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io -l kubewarden
+----
+
+次のような出力が表示されるはずだ：
+
+[subs="+attributes",console]
+----
+NAME                          WEBHOOKS   AGE
+clusterwide-privileged-pods   1          9s
+----
+
+{cluster-admission-policy} がアクティブになり、{validating-webhook-configuration} が登録されると、ポリシーをテストできる。
+
+まず、`+privileged+` モードで_ない_コンテナで Pod を作成できます：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unprivileged-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+EOF
+----
+
+この結果、次のような出力が得られる：
+
+[subs="+attributes",console]
+----
+pod/unprivileged-pod created
+----
+
+Podの作成に成功。
+
+これで、少なくとも1つのContainer`+privileged+` フラグを持つPodを作成できる：
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+      securityContext:
+          privileged: true
+EOF
+----
+
+ポリシーはPodの作成を拒否し、以下のメッセージが表示されます：
+
+[subs="+attributes",console]
+----
+Error from server: error when creating "STDIN": admission webhook "clusterwide-privileged-pods.kubewarden.admission" denied the request: Privileged container is not allowed
+----
+
+[NOTE]
+====
+
+どちらの例も、`+namespace+` を定義していない。つまり、`+default+` 名前空間がターゲットだったということだ。しかし、2番目の例でわかるように、ポリシーはまだ適用されている。前述したように、これはスコープがクラスタ全体であり、特定のネームスペースを対象としていないためである。
+
+====
+
+
+== アンインストール
+
+`+helm+` チャートのアンインストールによって作成されたリソースは、以下のように削除できます：
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-defaults
+----
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-controller
+----
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-crds
+----
+
+`+helm+` チャートの削除後、{short-project-name} スタックのデプロイに使用した Kubernetes ネームスペースを削除する：
+
+[subs="+attributes",console]
+----
+kubectl delete namespace kubewarden
+----
+
+[CAUTION]
+====
+
+{short-project-name} には、すべての`+PolicyServer+`と`+kubewarden-controller+`を削除するヘルムプリデリートフックが含まれている。その後、`+kubewarden-controller+` はすべてのリソースを削除するので、helm アンインストールが実行されるときに`+kubewarden-controller+` が実行されていることが重要です。
+
+====
+
+
+{short-project-name} {validating-webhook-configuration}sと{mutating-webhook-configuration}sを削除する。とチェックする：
+
+[subs="+attributes",console]
+----
+kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io -l "kubewarden"
+----
+
+[subs="+attributes",console]
+----
+kubectl get mutatingwebhookconfigurations.admissionregistration.k8s.io -l "kubewarden"
+----
+
+これらのリソースが自動的に削除されない場合は、以下のコマンドを使用して手動で削除してください：
+
+[subs="+attributes",console]
+----
+kubectl delete -l "kubewarden" validatingwebhookconfigurations.admissionregistration.k8s.io
+----
+
+[subs="+attributes",console]
+----
+kubectl delete -l "kubewarden" mutatingwebhookconfigurations.admissionregistration.k8s.io
+----
+
+== まとめ
+
+{cluster-admission-policy} は、クラスタ運用者が管理しなければならない中核的なリソースである。ポリシーの実行に必要な残りのリソースの設定は、`+kubewarden-controller+` モジュールが自動的に行う。
+
+== 次はどうする？
+
+これで、{short-project-name} をデプロイする準備が整った！https://artifacthub.io/packages/search?kind=13[artifacthub.io]、https://github.com/topics/kubewarden-policy[GitHubに]あるポリシーを見てみるか、xref:tutorials/writing-policies/rego/01-intro-rego.adoc[次の章で]示すように既存のRegoポリシーを再利用する。
+
+.ArtifactHubで利用可能なポリシーの全リスト
+[%collapsible,subs="+macros"]
+======
+
+++++
+
+<div class="artifacthub-widget-group" data-url="https://artifacthub.io/packages/search?kind=13&sort=relevance&page=1" data-theme="light" data-header="false" data-stars="false" data-color="#fe7c3f" data-responsive="true" data-loading="true"></div>
+
+++++
+
+======
