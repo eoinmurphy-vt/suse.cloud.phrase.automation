@@ -2,11 +2,11 @@
 :revdate: 2025-09-08
 :page-revdate: {revdate}
 
-Para uma visão geral do ciclo de vida do upgrade e dos componentes, consulte o xref:rancher-os-management/upgrade-lifecycle.adoc[documento relacionado].
+Para obter uma visão geral de alto nível do ciclo de vida e dos componentes do upgrade, consulte o xref:rancher-os-management/upgrade-lifecycle.adoc[documento relacionado].
 
-== Lado do Rancher
+== Lado rancheiro
 
-Neste exemplo, atualizamos os nós do cluster com a seguinte definição de ManagedOSImage:
+Neste exemplo, fizemos o upgrade dos nós do cluster com a seguinte definição de ManagedOSImage:
 
 [,yaml]
 ----
@@ -22,10 +22,10 @@ spec:
     - clusterName: my-cluster
 ----
 
-Uma vez que o `ManagedOSImage` é aplicado, o `elemental-operator` irá verificá-lo e gerar um `Bundle` relacionado.
-O nome do `Bundle` será prefixado com `mos` e, em seguida, o nome do `ManagedOSImage`. Neste caso `mos-my-upgrade`.
+Depois que o `ManagedOSImage` for aplicado, o `elemental-operator` o verificará e gerará um `Bundle` relacionado.
+O nome `Bundle` será prefixado com `mos` e, em seguida, com o nome `ManagedOSImage`. Nesse caso, `mos-my-upgrade`.
 
-Na definição do `Bundle`, você encontrará os detalhes sobre o plano de upgrade e o alvo desejado.
+Na definição de `Bundle`, você encontrará os detalhes sobre o plano de upgrade e o destino desejado.
 Por exemplo:
 
 [,shell]
@@ -34,7 +34,7 @@ Por exemplo:
 kubectl -n fleet-default get bundle mos-my-upgrade -o yaml
 ----
 
-.Clique aqui para ver os detalhes
+.Clique aqui para obter detalhes
 [%collapsible]
 ====
 [,yaml]
@@ -74,26 +74,26 @@ spec:
 ----
 ====
 
-== {elemental-product-name} Lado do Cluster
+== {elemental-product-name} Lado do cluster
 
-Qualquer nó {elemental-product-name} corretamente registrado e parte do cluster alvo irá buscar o pacote e começar a aplicá-lo. +
-Esta operação é realizada pelo `system-upgrade-controller` do Rancher que está rodando no {elemental-product-name} Cluster. +
-Para monitorar o funcionamento correto deste controlador, você pode ler seus logs:
+Qualquer nó do {elemental-product-name} registrado corretamente e que faça parte do cluster de destino buscará o pacote e começará a aplicá-lo. +
+Essa operação é realizada pelo site `system-upgrade-controller` do Rancher em execução no cluster {elemental-product-name}. +
+Para monitorar a operação correta desse controlador, você pode ler seus registros:
 
 [,shell]
 ----
 kubectl -n cattle-system logs deployment/system-upgrade-controller
 ----
 
-Se tudo estiver correto, o `system-upgrade-controller` irá criar um Plano de upgrade no cluster:
+Se tudo estiver correto, o `system-upgrade-controller` criará um plano de upgrade no cluster:
 
 [,shell]
 ----
 kubectl -n cattle-system get plans
 ----
 
-Para cada plano, o controlador irá orquestrar os trabalhos que o aplicarão em cada nó alvo. +
-Os nomes dos trabalhos usarão o nome do plano (`os-upgrader-my-upgrade`) e o nome do host da máquina alvo (`my-host`) para fácil descoberta. +
+Para cada plano, o controlador orquestrará os trabalhos que o aplicarão em cada nó de destino. +
+Os nomes dos trabalhos usarão o nome do Plano (`os-upgrader-my-upgrade`) e o nome do host da máquina de destino (`my-host`) para facilitar a descoberta. +
 Por exemplo: `apply-os-upgrader-my-upgrade-on-my-host-7a25e` +
 Você pode monitorar esses trabalhos com:
 
@@ -102,9 +102,9 @@ Você pode monitorar esses trabalhos com:
 kubectl -n cattle-system get jobs
 ----
 
-Cada trabalho usará um contêiner `privileged: true` com a imagem SLE Micro especificada na definição `ManagedOSImage`. Este contêiner tentará fazer upgrade no sistema e realizar uma reinicialização.
+Cada trabalho usará um contêiner `privileged: true` com a imagem do SLE Micro especificada na definição `ManagedOSImage`. Esse contêiner tentará atualizar o sistema e realizar uma reinicialização.
 
-Se o trabalho falhar, você pode verificar seu status examinando os logs:
+Se o trabalho falhar, você poderá verificar seu status examinando os logs:
 
 [,shell]
 ----
@@ -112,13 +112,13 @@ kubectl -n cattle-system logs job.batch/apply-os-upgrader-my-upgrade-on-my-host-
 ----
 
 [IMPORTANT]
-.Processo de trabalho em duas etapas
+.Processo de trabalho em dois estágios
 ====
 
 Observe que o processo de upgrade é realizado em duas etapas. +
-Você notará que o mesmo trabalho é executado duas vezes e o primeiro termina com o status `Unknown` e não será concluído. +
-*Isso é esperado*, uma vez que {elemental-product-name} depende que o trabalho seja executado novamente após a reinicialização da máquina, para que possa verificar se a nova versão foi instalada corretamente. +
-Você notará uma segunda execução do trabalho, desta vez completando corretamente.
+Você perceberá que o mesmo trabalho é executado duas vezes e o primeiro termina com o status `Unknown` e não é concluído. +
+*Isso é esperado*, pois o {elemental-product-name} depende da execução do trabalho novamente após a reinicialização do computador, para que ele possa verificar se a nova versão foi instalada corretamente. +
+Você notará uma segunda execução do trabalho, dessa vez concluída corretamente.
 
 [,shell]
 ----
@@ -140,6 +140,6 @@ apply-os-upgrader-my-upgrade-on-my-host-zvrff   0/1     Unknown     0           
 
 == Recuperação de falhas
 
-É possível que o processo de upgrade do ManagedOSImage falhe, deixando um ou mais nós em estado de falha. Por exemplo, se a imagem a ser atualizada não for encontrada no registro ou estiver de outra forma corrompida, o trabalho de upgrade em execução nos clusters downstream não terá sucesso.
+É possível que o processo de atualização do ManagedOSImage falhe, deixando um ou mais nós em um estado defeituoso. Por exemplo, se a imagem a ser atualizada não for encontrada no registro ou estiver quebrada, o trabalho de atualização em execução nos clusters downstream não será bem-sucedido.
 
-Quando esse for o caso, os nós que executam o trabalho de upgrade com falha permanecerão cordonados. Você pode atualizar o ManagedOSImage com um `osImage` funcional, ou alternativamente excluí-lo para parar qualquer nova tentativa de upgrade. Em qualquer caso, para restaurá-los e também poder agendar atualizações futuras, os nós afetados precisam ser descordonados manualmente.
+Quando esse for o caso, os nós que estiverem executando o trabalho de upgrade com falha permanecerão isolados. Você pode atualizar a ManagedOSImage com um `osImage` funcional ou, alternativamente, excluí-la para interromper qualquer tentativa de atualização futura. De qualquer forma, para restaurá-los e poder programar também os upgrades seguintes, os nós afetados precisam ser descadastrados manualmente.
