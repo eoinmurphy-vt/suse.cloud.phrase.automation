@@ -1,0 +1,278 @@
+include::partial$variables.adoc[]
+:description: ポリシー・サーバーまたはポリシーを使用してセキュアなコンテナ・イメージ署名を行い、出所と署名を検証するための検証構成フォーマットを構成する。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "verification-config"]
+:doc-type: ["reference"]
+:doctype: book
+:keywords: ["kubewarden"、"kubernetes"、"検証コンフィギュレーション"]]。
+:current-version: {page-origin-branch}
+
+= 検証設定フォーマット
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+
+== はじめに
+
+`+verification-config+` ：
+
+* `+policy-server+` ポリシーモジュールの証明性を検証する
+* `+verify-image-signatures+` クラスタイメージの証明性を検証するポリシー
+
+詳細はxref:/howtos/security-hardening/secure-supply-chain.adoc[セキュア・サプライチェーンを]参照。
+
+== フォーマット
+
+コンフィギュレーションには2つのルート・キーがある：
+
+* `+allOf+`:コンテナ画像が署名済みであることを確認するには、ここに記載されているすべての検証情報を満たす必要があります。
+* `+anyOf+`:コンテナ・イメージを署名済みとして受け入れるには、記載されているすべての検証情報のうち、少なくとも`+anyOf.minimumMatches+` を満たす必要があります。
+
+これら2つのルート・キーは、`+kind+` 型のキーの配列を受け付ける。さまざまなユースケースに基づく使用可能なキーの一覧は以下の通り：
+
+* `+pubKey+`:従来の公開鍵/秘密鍵暗号方式による署名の場合。
+* `+githubAction+`:GitHub Actions内のSigstoreのキーレス・ワークフローで実行された署名の場合、{short-project-name} 、この情報をGitHubのOpenID Connectで作成されたx509証明書拡張`+workflow_repository+` と照合し、`+issuer+` と`+subject+` だけでなく、 。GitHub Actionsを扱う場合は、この`+kind+`。
+* `+genericIssuer+`:Sigstoreのキーレス・ワークフローで実行される署名の場合、ユーザは自分で証明書`+issuer+` 、`+subject+` 。`+subject+` を受け付ける：
+
+** `+equal+`:ここで渡される値は、署名証明書の`+subject+` と正確に一致しなければならない。
+** `+urlPrefix+`:ここで渡される値は、typo-squattingを防ぐために`+/+` で後置修飾され、署名証明書の`+subject+` のプレフィックスでなければならない。
+
+`+kind+` キーには、署名に存在しなければならない、キー値のリストを持つオプションの`+annotations+` キーを受け付ける。
+
+== 例
+
+これは、Sigstoreワークフローを使用して署名を検証するための設定例である：
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: v1
+
+allOf:
+  - kind: githubAction
+    owner: kubewarden   # mandatory
+    repo: policy-server # optional
+    annotations:  # optional
+      env: prod
+
+anyOf: # at least `+anyOf.minimumMatches+` are required to match
+  minimumMatches: 2 # default is 1
+  signatures:
+  - kind: pubKey
+    owner: alice # optional
+    key: | # mandatory
+         -----BEGIN PUBLIC KEY-----
+         MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQiTy5S+2JFvVlhUwWPLziM7iTM2j
+         byLgh2IjpNQN0Uio/9pZOTP/CsJmXoUNshfpTUHd3OxgHgz/6adtf2nBwQ==
+         -----END PUBLIC KEY-----
+    annotations:  # optional
+      env: prod
+  - kind: genericIssuer
+    issuer: https://github.com/login/oauth
+    subject:
+      equal: alice@example.com
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      equal: https://github.com/bob/app-example/.github/workflows/release.yml@refs/heads/main
+    annotations:  # optional
+      env: prod
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/bob # <- it will be post-fixed with `+/+` for security reasons
+----
+
+== シグネチャ設定リファレンス
+
+ファイルに含まれる署名要件を検証することができます。一例を挙げよう：
+
+.署名要件ファイル
+[%collapsible]
+====
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+
+allOf:
+  - kind: githubAction
+    owner: kubewarden   # mandatory
+    annotations:
+      env: prod
+
+anyOf: # at least `+anyOf.minimumMatches+` are required to match
+  minimumMatches: 2 # default is 1
+  signatures:
+  - kind: pubKey
+    owner: flavio # optional
+    key: .... # mandatory
+    annotations:  # optional
+      env: prod
+      foo: bar
+  - kind: pubKey
+    owner: victor # optional
+    key: .... # mandatory
+  - kind: genericIssuer
+    issuer: https://github.com/login/oauth
+    subject:
+      equal: alice@example.com
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      equal: https://github.com/flavio/policy-secure-pod-images/.github/workflows/release.yml@refs/heads/main
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/flavio/
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/kubewarden # <- it will be post-fixed with `+/+` for security reasons
+  - kind: githubAction
+    owner: flavio   # mandatory
+    repo: policy1 # optional
+  - kind: pubKey
+    owner: alice # optional
+    key: .... # mandatory
+----
+====
+
+
+=== 署名検証
+
+先ほどの構成には、`+allOf+` と`+anyOf+` の2つのセクションが含まれている：
+
+* `+allOf+`:すべての署名要件が有効である場合にのみ、ポリシーを信頼する。
+* `+anyOf+`:`+minimumMatches+` の基準が有効であれば、その保険は信頼できる。
+
+この例では、`+minimumMatches+` フィールドは2である。つまり、少なくとも2つのサイン条件を満たす必要がある。`+minimumMatches+`フィールドのデフォルト値は`+1+` 。
+
+署名の検証には、`+allOf+` にあるすべての署名の*要件と、* `+anyOf+` にある最小数を満たす必要がある。
+
+=== 公開鍵の検証
+
+ポリシーが正しい公開鍵署名を持っていることを確認するには、鍵データと鍵の所有者を指定する。この例では、`+kind+` を`+pubKey+` に設定し、`+key+` が公開鍵を持っている。オーナー・フィールドは任意だが、誰がキーの所有者かを明確にするのに便利である。
+
+[subs="+attributes",yaml]
+----
+  - kind: pubKey
+    owner: bob # optional
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+      BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+      -----END PUBLIC KEY-----
+----
+
+=== キーレス署名検証
+
+キーレス・モードで署名されたポリシーは、あなたが検証できる公開鍵を持っていない。署名プロセスで使用されたOpenID Connect（OIDC）データでポリシーを検証することはできます。そのためには、`+genericIssuer+` として署名検証を定義する必要がある。
+
+署名から情報を確認することは可能だ：
+
+* `+issuer+`(必須）：Fulcioが生成した証明書の`+Issuer+` 属性と一致する。これは、ポリシーの署名に使用されたOIDCを示している。
+* `+subject+`フルシオの証明書の`+Subject+` 属性と一致させるために使用されるフィールド。`+Subject+` (Fulcio)フィールドには、OIDCプロバイダーに対する認証に使用されるユーザーが含まれる。検証フィールド、`+subject+` は、2つのサブフィールドのうちの1つを持つことができる：
+
+** `+equal+`証明書の`+Subject+` （Fulcio）は、署名検証の値と等しくなければならない；
+** `+urlPrefix+`証明書の`+Subject+` (Fulcio)フィールドの値の先頭に、署名検証で定義された値を付加しなければならない。
+
+[NOTE]
+====
+
+`+cosign verify+` 、`+kwctl inspect+` 、キーレス署名に関する情報を表示することができる。
+
+====
+
+
+例えば、この設定は、ポリシーがGitHub OIDCを使ったアリスからのキーレス署名を持っていなければならないことを意味する：
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://github.com/login/oauth
+  subject:
+    equal: alice@example.com
+----
+
+この設定には、GitHub ユーザー`+flavio+` が所有するリポジトリの GitHub アクションで署名されたポリシーが必要です：
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://token.actions.githubusercontent.com
+  subject:
+    urlPrefix: https://github.com/flavio
+----
+
+=== GitHub アクション署名検証
+
+kind",`+githubAction+` は、GitHub Actions で署名されたポリシーを検証するためのものです。
+`+genericIssuer+` 。署名要求プロセスを簡素化するために、`+githubAction+` に2つの追加フィールドを使用する：
+
+* `+owner+` (必須）：信頼するユーザーまたは組織のGitHub ID。
+* `+repo+`:信頼するリポジトリの名前。
+
+例えば、最後のスニペットは、`+genericIssuer+` を使って、次のように書き換えることができる：
+
+[subs="+attributes",yaml]
+----
+- kind: githubAction
+  owner: flavio
+----
+
+=== 署名注釈の検証
+
+すべての署名タイプは、他のオプションの検証フィールド、`+annotations+` を持つことができる。
+これらのフィールドは、署名プロセス中に追加されるキー／バリュー・データである。
+
+{short-project-name} を使えば、ポリシー署名が信頼できるユーザーによるもの*であり、*特定の注釈が付されていることを検証できる。
+
+次の検証では、ポリシーの2つの条件をチェックする：
+
+* 特定の鍵で署名されていること
+* には本番環境のアノテーションがある。
+
+[subs="+attributes",yaml]
+----
+- kind: pubKey
+  key: |
+    -----BEGIN PUBLIC KEY-----
+    MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+    BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+    -----END PUBLIC KEY-----
+  annotations:
+    environment: production
+----
+
+=== 署名検証設定ファイルを使用してポリシーOCIアーティファクトをチェックする
+
+検証設定ファイルを使用して、ポリシーが検証に合格するかどうかをテストできます。`kwctl verify`コマンドの`+--verification-config-path+` フラグを使用する。
+
+[subs="+attributes",console]
+----
+$ cat signatures_requirements.yaml
+apiVersion: v1
+allOf:
+  - kind: pubKey
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5Q+cN1Jj2S7N05J4AXnqwP2DyzSg
+      Mc+raYce2Wthrd30MSgFtoh5ADAkCd/nML2Nx8UD9KBuASRb0gG5jXqgMQ==
+      -----END PUBLIC KEY-----
+
+$ kwctl verify --verification-config-path signatures_requirements.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T17:34:37.847169Z  INFO kwctl::verify: Policy successfully verified
+----
+
+この最後の例は、与えられたポリシーが{short-project-name}の組織から来たものかどうかをテストする：
+
+[subs="+attributes",console]
+----
+$ cat kubewarden_signatures.yaml
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+
+$ kwctl verify --verification-config-path kubewarden_signatures.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T18:07:39.062292Z  INFO kwctl::verify: Policy successfully verified
+----
