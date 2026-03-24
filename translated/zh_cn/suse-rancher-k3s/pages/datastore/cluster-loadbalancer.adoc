@@ -1,0 +1,216 @@
+= 群集负载平衡器
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+本节介绍如何在高可用性 (HA) K3s 群集的服务器节点前安装外部负载平衡器。现提供两个例子：Nginx 和 HAProxy。
+
+[TIP]
+====
+外部负载平衡器不应与嵌入式 ServiceLB 混淆，后者是一种嵌入式控制器，可在不部署第三方负载平衡器控制器的情况下使用 Kubernetes LoadBalancer 服务。有关详细信息，请参阅xref:networking/networking-services.adoc#_service_load_balancer[服务负载平衡器]。
+
+外部负载平衡器可用于为注册节点提供固定的注册地址，或用于从外部访问 Kubernetes API 服务器。对于暴露负载平衡器服务，外部负载平衡器可以与 ServiceLB 一起使用，也可以替代 ServiceLB，但在大多数情况下，替代负载平衡器控制器（如 MetalLB 或 Kube-VIP）是更好的选择。
+====
+
+
+== 先决条件
+
+本例中的所有节点都运行 Ubuntu 20.04。
+
+在这两个示例中，假设在 3 个节点上安装xref:datastore/ha-embedded.adoc[了带有嵌入式 etcd 的 HA K3s 集群]。
+
+每个 k3s 服务器都配置有
+
+[,yaml]
+----
+# /etc/rancher/k3s/config.yaml
+token: lb-cluster-gd
+tls-san: 10.10.10.100
+----
+
+节点的主机名和 IP 地址为
+
+* 服务器-1： `+10.10.10.50+`
+* 服务器-2： `+10.10.10.51+`
+* 服务器-3： `+10.10.10.52+`
+
+另外两个用于负载平衡的节点的主机名和 IP 地址分别为
+
+* lb-1： `+10.10.10.98+`
+* lb-2： `+10.10.10.99+`
+
+另外还有三个节点，其主机名和 IP 地址分别为
+
+* 1号特工 `+10.10.10.101+`
+* 2 号特工 `+10.10.10.102+`
+* 3： `+10.10.10.103+`
+
+== 设置负载平衡器
+
+[tabs,sync-group-id=ext-load-balancer]
+======
+代理服务器::
++
+--
+http://www.haproxy.org/[HAProxy]是一个开源选项，可提供 TCP 负载平衡器。它还支持负载平衡器本身的 HA，确保各级冗余。更多信息，请参阅http://docs.haproxy.org/2.8/intro.html[文档] HAProxy。
+
+此外，我们将使用 KeepAlived 生成一个虚拟 IP (VIP)，用于访问群集。更多信息，请参阅https://www.keepalived.org/manpage.html[KeepAlived 文档]。
+
+. 安装 HAProxy 和 KeepAlived：
++
+[,bash]
+----
+sudo apt-get install haproxy keepalived
+----
+
+. 在`+/etc/haproxy/haproxy.cfg+` 的 lb-1 和 lb-2 上添加以下内容：
++
+----
+frontend k3s-frontend
+    bind *:6443
+    mode tcp
+    option tcplog
+    default_backend k3s-backend
+
+backend k3s-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    default-server inter 10s downinter 5s
+    server server-1 10.10.10.50:6443 check
+    server server-2 10.10.10.51:6443 check
+    server server-3 10.10.10.52:6443 check
+----
+
+. 在`+/etc/keepalived/keepalived.conf+` 的 lb-1 和 lb-2 上添加以下内容：
++
+----
+global_defs {
+  enable_script_security
+  script_user root
+}
+
+vrrp_script chk_haproxy {
+    script 'killall -0 haproxy' # faster than pidof
+    interval 2
+}
+
+vrrp_instance haproxy-vip {
+    interface eth1
+    state <STATE> # MASTER on lb-1, BACKUP on lb-2
+    priority <PRIORITY> # 200 on lb-1, 100 on lb-2
+
+    virtual_router_id 51
+
+    virtual_ipaddress {
+        10.10.10.100/24
+    }
+
+    track_script {
+        chk_haproxy
+    }
+}
+----
+
+. 在 lb-1 和 lb-2 上重启 HAProxy 和 KeepAlived：
++
+[,bash]
+----
+systemctl restart haproxy
+systemctl restart keepalived
+----
+
+. 在代理-1、代理-2 和代理-3 上运行以下命令安装 k3s 并加入群集：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.100:6443
+----
+其中`+INSTALL_K3S_ARTIFACT_URL+` 是https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[首要文物 URL]
++
+现在，您可以从服务器节点使用`+kubectl+` 与群集交互。
++
+[,bash]
+----
+root@server-1 $ k3s kubectl get nodes -A
+NAME       STATUS   ROLES                       AGE     VERSION
+agent-1    Ready    <none>                      32s     v1.27.3+k3s1
+agent-2    Ready    <none>                      20s     v1.27.3+k3s1
+agent-3    Ready    <none>                      9s      v1.27.3+k3s1
+server-1   Ready    control-plane,etcd,master   4m22s   v1.27.3+k3s1
+server-2   Ready    control-plane,etcd,master   3m58s   v1.27.3+k3s1
+server-3   Ready    control-plane,etcd,master   3m12s   v1.27.3+k3s1
+----
+--
+
+Nginx::
++
+--
+[WARNING]
+====
+Nginx 本身不支持高可用性（HA）配置。如果要建立 HA 集群，在 K3 前面安装单个负载平衡器会重新产生单点故障。
+====
+
+http://nginx.org/[Nginx 开放源代码]提供了一个 TCP 负载平衡器。更多信息，请参见https://nginx.org/en/docs/http/load_balancing.html[将 nginx 用作 HTTP 负载平衡器]。
+
+. 在 lb-1 上创建`+nginx.conf+` 文件，内容如下：
++
+----
+events {}
+
+stream {
+  upstream k3s_servers {
+    server 10.10.10.50:6443;
+    server 10.10.10.51:6443;
+    server 10.10.10.52:6443;
+  }
+
+  server {
+    listen 6443;
+    proxy_pass k3s_servers;
+  }
+}
+----
+
+. 在 lb-1 上运行 Nginx 负载均衡器：
++
+使用 docker
++
+[,bash]
+----
+docker run -d --restart unless-stopped \
+    -v ${PWD}/nginx.conf:/etc/nginx/nginx.conf \
+    -p 6443:6443 \
+    nginx:stable
+----
++
+或https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/[安装 nginx]，然后运行：
++
+[,bash]
+----
+cp nginx.conf /etc/nginx/nginx.conf
+systemctl start nginx
+----
+
+. 在代理-1、代理-2 和代理-3 上运行以下命令安装 k3s 并加入群集：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.98:6443
+----
++
+现在，您可以从服务器节点使用`+kubectl+` 与群集交互。
++
+[,bash]
+----
+root@server1 $ k3s kubectl get nodes -A
+NAME       STATUS   ROLES                       AGE     VERSION
+agent-1    Ready    <none>                      30s     v1.27.3+k3s1
+agent-2    Ready    <none>                      22s     v1.27.3+k3s1
+agent-3    Ready    <none>                      13s     v1.27.3+k3s1
+server-1   Ready    control-plane,etcd,master   4m49s   v1.27.3+k3s1
+server-2   Ready    control-plane,etcd,master   3m58s   v1.27.3+k3s1
+server-3   Ready    control-plane,etcd,master   3m16s   v1.27.3+k3s1
+----
+--
+======
