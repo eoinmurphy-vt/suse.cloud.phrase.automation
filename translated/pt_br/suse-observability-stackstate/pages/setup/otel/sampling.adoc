@@ -1,0 +1,131 @@
+= Amostragem
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidade do SUSE
+
+A amostragem é usada para reduzir o volume de dados exportados para o SUSE Observability, comprometendo o mínimo possível a qualidade dos dados de telemetria. O principal motivo para aplicar a amostragem é reduzir o custo (de rede, armazenamento, etc.).
+
+Se seus aplicativos geram poucos dados, não há necessidade de amostragem e isso pode até prejudicar a observabilidade devido à falta de dados de telemetria. No entanto, se o seu aplicativo tiver uma quantidade significativa de tráfego, por exemplo, mais de 1.000 spans por segundo, pode fazer sentido aplicar a amostragem.
+
+Há dois tipos principais de amostragem: amostragem de cabeça e amostragem de cauda.
+
+== Amostragem de cabeça
+
+A amostragem principal toma a decisão de amostragem (se os dados devem ser exportados ou não) o mais cedo possível. Portanto, a decisão não pode se basear em todo o rastro, mas apenas nas informações muito limitadas que estão disponíveis. O coletor otel tem o https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/probabilisticsamplerprocessor[processador de amostragem probabilística] que implementa a amostragem de probabilidade consistente. O amostrador é configurável e toma uma decisão de amostragem com base no ID do rastreamento (útil para rastreamentos) ou em um hash de um atributo (útil para registros). Isso garante que todos os períodos de um rastreamento sejam sempre amostrados ou não e que você tenha rastreamentos completos no SUSE Observability.
+
+As vantagens da amostragem de cabeça são:
+
+* Fácil de entender
+* Eficiente
+* Simples de configurar
+
+Mas o lado negativo é que é impossível tomar decisões de amostragem em um traço inteiro, por exemplo, para amostrar todos os traços com falha e apenas uma pequena seleção dos traços bem-sucedidos.
+
+Para ativar a amostragem de cabeçote, configure o processador e inclua-o nos pipelines. Esse exemplo coleta amostras de 1 de 4 traços com base na identificação do traço:
+
+[,yaml]
+----
+processors:
+  probabilistic_sampler:
+    sampling_percentage: 25
+    mode: "proportional"
+----
+
+== Amostragem de cauda
+
+A amostragem de cauda adia a decisão de amostragem até que um rastro esteja (quase) completo. Isso permite que o amostrador de cauda tome decisões de amostragem com base em todo o traço, por exemplo, para sempre amostrar traços com falha e/ou traços lentos. Há muitas outras possibilidades, como a amostragem baseada em atributos específicos ou na participação em serviços.
+
+O OpenTelemetry Collector fornece um https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/tailsamplingprocessor[processador de amostragem de cauda] que pode ser usado para aplicar políticas de amostragem de cauda.
+
+A principal vantagem da amostragem de cauda é a flexibilidade adicional que ela proporciona na tomada de decisões de amostragem com base em dados de rastreamento completos, em vez de informações parciais disponíveis quando são criados períodos individuais.
+
+
+[WARNING]
+====
+Embora vantajosa, a amostragem de cauda tem as seguintes desvantagens:
+
+* Mais difícil de configurar e entender.
+* Deve ter estado para armazenar os intervalos dos rastreamentos até que uma decisão de amostragem seja tomada.
+* Portanto, também (muito) mais uso de recursos
+* O sampler pode não acompanhar o ritmo e precisa de monitoramento e dimensionamento adicionais para isso
+====
+
+Para ativar a amostragem de cauda, configure o processador e inclua-o nos pipelines.
+
+[,yaml]
+----
+processors:
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+    - name: rate-limited-composite
+      type: composite
+      composite:
+        max_total_spans_per_second: 500
+        policy_order: [errors, slow-traces, rest]
+        composite_sub_policy:
+        - name: errors
+          type: status_code
+          status_code:
+            status_codes: [ ERROR ]
+        - name: slow-traces
+          type: latency
+          latency:
+            threshold_ms: 1000
+        - name: rest
+          type: always_sample
+        rate_allocation:
+        - policy: errors
+          percent: 33
+        - policy: slow-traces
+          percent: 33
+        - policy: rest
+          percent: 34
+----
+
+As amostras de exemplo:
+
+* Um máximo de 500 vãos por segundo
+* todos os vãos em traços que têm erros de até 33% do máximo
+* todos os intervalos em rastreamentos mais lentos do que 1 segundo até 33% do máximo
+* outros intervalos até a taxa máxima permitida
+
+Para obter mais detalhes sobre as opções de configuração e as diferentes políticas, use o https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/tailsamplingprocessor[readme].
+
+No entanto, ele não é totalmente do tipo "configure e esqueça". Se o uso de recursos começar a crescer, você precisará expandir para usar vários coletores para lidar com a amostragem de cauda, o que também exigirá https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/connector/routingconnector/README.md[o roteamento] para rotear o tráfego com base na ID do rastreamento.
+
+== Amostragem de traços em combinação com métricas de abrangência
+
+Na seção de introdução, a configuração do coletor não inclui amostragem. Ao adicionar a amostragem, queremos ter o cuidado de manter as métricas que são calculadas a partir dos rastros tão precisas quanto possível. Especialmente a amostragem de cauda pode resultar em métricas muito distorcidas, porque normalmente a quantidade relativa de erros é muito maior. Para evitar isso, dividimos o pipeline de traços em várias partes e as conectamos com o conector de avanço. Modifique a configuração para incluir o conector extra e o processador de amostragem. E modifique os pipelines conforme mostrado aqui:
+
+[,yaml]
+----
+connectors:
+  # enable the forwarder
+  forward:
+processors:
+  # Configure the probabilistic sampler to sample 25% of the traffic
+  probabilistic_sampler:
+    sampling_percentage: 25
+    mode: "proportional"
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [forward]
+    traces/spanmetrics:
+      receivers: [forward]
+      processors: []
+      exporters: [spanmetrics]
+    traces/sampling:
+      receivers: [forward]
+      processors: [probabilistic_sampler, batch]
+      exporters: [debug, otlp/stackstate]
+    metrics:
+      receivers: [otlp, spanmetrics, prometheus]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, otlp/stackstate]
+----
+
+O exemplo usa o amostrador probabilístico configurado para amostrar 25% do tráfego. É provável que você queira ajustar a porcentagem para sua situação ou mudar para o <<_tail_sampling,amostrador de cauda>>. A configuração do pipeline é a mesma para o amostrador de cauda, basta substituir a referência ao `+probabilistic_sampler+` por `+tail_sampling+`.
