@@ -1,0 +1,88 @@
+= 升级生命周期
+:revdate: 2025-11-06
+:page-revdate: {revdate}
+
+image::upgrade-lifecycle.png[升级流程]
+
+== 组件
+
+* https://documentation.suse.com/cloudnative/os-manager/[{elemental-product-name} 操作员]
+
+{elemental-product-name} Operator 支持几种在群集级别配置操作系统版本的方法。 +
+每当定义一个新的`+ManagedOSIMage+` 时，{elemental-product-name} 操作员也会生成一个相关的舰队`+Bundle+` 。
+
+* https://documentation.suse.com/cloudnative/continuous-delivery/[舰队]
+
+在这种情况下，Fleet 用于在`+ManagedOSImage+` 所针对的每个集群上应用`+upgrade.cattle.io/v1+` `+Plan+` 。 +
+`+Plan+` 随后由运行在下游{elemental-product-name} 集群上的`+System Upgrade Controller+` 执行。
+
+* https://github.com/rancher/system-upgrade-controller[系统升级控制器]
+
+系统升级控制器是https://documentation.suse.com/cloudnative/k3s/latest/en/upgrades/automated.html[] K3s 和https://documentation.suse.com/cloudnative/rke2/latest/en/upgrade/automated_upgrade.html[] RKE2 集群使用的升级工具。它应始终自动安装在每个已配置的{elemental-product-name} 集群上。在这种情况下，系统升级控制器负责协调`+upgrade.cattle.io/v1+` `+Plan+` 到{elemental-product-name} 节点的应用。
+
+== 版本和组件生命周期
+
+https://documentation.suse.com/cloudnative/continuous-delivery/[Fleet]和https://github.com/rancher/system-upgrade-controller[系统升级控制器]版本由 Rancher 控制。
+
+在 Rancher 集群上，您可以运行
+
+[,bash]
+----
+kubectl get settings fleet-version system-upgrade-controller-chart-version
+----
+
+有关图表版本的更多信息，请访问https://github.com/rancher/charts[存储库]或阅读https://documentation.suse.com/cloudnative/rancher-manager/latest/en/cluster-admin/helm-charts-in-rancher/helm-charts-in-rancher.html[文档]。
+
+图表版本由 Rancher 决定。 +
+根据 Rancher 的安装方式，可以设置以下环境变量，例如在安装https://documentation.suse.com/cloudnative/rancher-manager/latest/en/installation-and-upgrade/references/helm-chart-options.html#_setting_extra_environment_variables[Helm 图表] Rancher时：
+
+[,bash]
+----
+CATTLE_SYSTEM_UPGRADE_CONTROLLER_CHART_VERSION
+CATTLE_FLEET_VERSION
+----
+
+一般不建议手动更新版本。 +
+还要注意，新的`+CATTLE_SYSTEM_UPGRADE_CONTROLLER_CHART_VERSION+` 会触发所有已配置下游集群的`+system-upgrade-controller+` 图表更新。
+
+== 验证升级是否成功
+
+验证升级工作的正确执行是确保{elemental-product-name} 升级过程完成的基础部分。
+
+要排除整个升级过程中每个步骤的故障，请查阅xref:troubleshooting/troubleshooting-upgrade.adoc[相关文件]。 +
+本节仅介绍在一个目标群集上验证正确应用升级计划所需的最后一个步骤。
+
+* 高于或等于`+system-upgrade-controller+`*v0.13.4*的版本：
++
+[,shell]
+----
+kubectl -n cattle-system describe plan os-upgrader-my-upgrade
+----
++
+一旦计划应用于所有节点，它将具有`+Complete+` 状态条件。
+
+* 旧版本
++
+每个计划都有一个`+latestHash+` 状态值，该值应与每个节点上的计划标签相匹配。 +
+可以使用一个简单的脚本来列出尚未应用计划的所有节点：
++
+[,shell]
+----
+#!/bin/bash
+
+# This script prints a list of all nodes where an upgrade plan was not applied.
+# To further determine the cause of failures, you can analyze the Plan status and the related jobs.
+# For ex: kubectl -n cattle-system get plans,jobs
+
+# Edit this variable according to your ManagedOSImage name.
+MANAGED_OS_IMAGE_NAME=my-upgrade
+
+PLAN_NAME=os-upgrader-$MANAGED_OS_IMAGE_NAME
+LATEST_HASH=$(kubectl -n cattle-system get plan $PLAN_NAME -o=jsonpath='{.status.latestHash}')
+
+printf "Plan '$PLAN_NAME' latest hash is: '$LATEST_HASH'\n"
+
+PLAN_LABEL=plan.upgrade.cattle.io/$PLAN_NAME
+printf "Listing all nodes with mismatching or missing label '$PLAN_LABEL':\n"
+kubectl get nodes -l $PLAN_LABEL!=$LATEST_HASH
+----
