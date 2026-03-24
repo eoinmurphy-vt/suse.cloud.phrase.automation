@@ -1,0 +1,116 @@
+include::partial$variables.adoc[]
+= Criar e executar uma política de OPA para {short-project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Crie uma política OPA personalizada para o seu projeto construindo um pacote de política Rego, compilando-o em um destino WASM e integrando-o ao kwctl.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "build-and-run"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "build and run", "open policy agent", "opa", "rego"]
+:current-version: {page-origin-branch}
+
+Na seção anterior, você escreveu sua política Rego.
+A estrutura tem a seguinte aparência:
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
+
+== Construir
+
+Para construir:
+
+[subs="+attributes",console]
+----
+$ opa build -t wasm -e policy/main policy.rego request.rego
+----
+
+Isso cria a política de rego, com:
+
+* `+target+`: `+wasm+`.
+Você deseja criar a política para o alvo `+wasm+`.
+* `+entrypoint+`: `+policy/main+`.
+O ponto de entrada é a regra `+main+` dentro do pacote `+policy+`.
+* `+policy.rego+`:
+Crie e inclua o arquivo `+policy.rego+`.
+* `+request.rego+`:
+Crie e inclua o arquivo `+request.rego+`.
+
+Após a conclusão da compilação, o site `+opa build+` gerou um arquivo `+bundle.tar.gz+`.
+Você pode extraí-lo:
+
+[subs="+attributes",console]
+----
+$ tar -xf bundle.tar.gz /policy.wasm
+----
+
+Agora a árvore se parece com o seguinte:
+
+[subs="+attributes",console]
+----
+.
+├── bundle.tar.gz
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+├── policy.wasm
+└── request.rego
+
+1 directory, 6 file
+----
+
+Você tem seu arquivo `+policy.wasm+`:
+
+[subs="+attributes",console]
+----
+$ file policy.wasm
+policy.wasm: WebAssembly (wasm) binary module version 0x1 (MVP)
+----
+
+Agora você o executa.
+
+== Executar
+
+Use `+kwctl+` para executar a política:
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/other-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": true
+}
+----
+
+Essa solicitação é aceita pela política, pois é a solicitação que aponta para o namespace `+other+`.
+
+* `+execution-mode+`: `+opa+`.
+As políticas Rego podem ter como alvo o Open Policy Agent ou o Gatekeeper.
+Você deve informar ao `+kwctl+` que tipo de política está adotando.
+* `+request-path+`:
+O local da solicitação registrada para o qual o site `+kwctl+` envia a política para avaliação.
+
+Agora, tente avaliar a solicitação que cria o pod dentro do namespace `+default+`:
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/default-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "it is forbidden to use the default namespace"
+  }
+}
+----
+
+A política está rejeitando a solicitação, fornecendo um motivo ao servidor da API que é retornado ao usuário ou consumidor da API.
