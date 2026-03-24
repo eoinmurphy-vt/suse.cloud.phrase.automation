@@ -1,0 +1,67 @@
+include::partial$variables.adoc[]
+= 使用 Rancher Fleet 管理{project-name} 
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用 Rancher Fleet 和 Kubernetes 自定义资源定义 (CRD) 管理{project-name} Helm 图表，实施 GitOps 方法。
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "rancher-fleet"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}","kubernetes", "kubewarden", "rancher fleet"]
+:sidebar_label: 牧场主舰队
+:sidebar_position: 130
+:current-version: {page-origin-branch}
+
+您可以通过https://fleet.rancher.io/[Fleet] Rancher 管理{project-name} Helm 图表，就像管理其他 Helm 图表一样。
+Rancher Fleet 使用 Kubernetes CRD 来定义管理 Kubernetes 集群的 GitOps 方法。
+为此，它定义了https://fleet.rancher.io/concepts[Fleet Bundles]。
+
+== 安装
+
+{short-project-name} 图表是标准图表，它们相互依存：
+
+`+kubewarden-crds+` ← `+kubewarden-controller+` ← `+kubewarden-defaults+`
+
+更多信息，请参阅xref:/quick-start.adoc[快速入门文档]。
+
+使用 Rancher Fleet，您可以使用`+dependsOn+` 在https://fleet.rancher.io/ref-fleet-yaml[`+fleet.yaml+`]文件中使用
+
+在图表准备就绪之前，您可能会看到瞬时错误，例如
+
+[subs="+attributes",console]
+----
+ErrApplied(1) [Cluster fleet-local/local: dependent bundle(s) are not ready:
+[kubewarden-example-helm-kubewarden-controller]]
+----
+
+这些错误并不表示有问题，一旦图表完成部署，它们就不会再出现。
+
+== 删除
+
+[CAUTION]
+====
+
+删除 GitRepo 时，所有 3 个{short-project-name} 图表都会同时删除。
+这意味着`+kubewarden-crds+` 图表将被删除。
+
+{short-project-name} `+kubewarden-controller+` 图表中使用一个预删除 helm 钩子任务来删除默认策略服务器。
+在删除 PolicyServer 之前，有必要使用此预删除钩子来腾空策略的 Web 钩子。
+任何政策引擎都是如此。
+如果没有，群集可能会有已不存在的策略 webhooks，因此会拒绝一切，处于失败状态。
+
+在删除`+kubewarden-controller+` 图表的同时删除 GitRepo，进而删除`+kubewarden-crds+` 图表，会导致预删除钩子任务失败。
+这意味着清除不彻底，在星团中留下了 "碎片"。
+====
+
+
+任何工具通常都不支持自动卸载 CRD，Rancher Fleet 也不例外。
+
+要执行正确的移除操作，请确保首先从群集中移除 Bundle for`+kubewarden-defaults+` 。
+具体做法是将这些更改提交到存放舰队配置的版本库，然后等待应用。
+然后用同样的方法删除`+kubewarden-controller+` ，最后删除`+kubewarden-crds+` 。
+
+另一种方法是添加 2 个 GitRepos，一个只用于 CRD，另一个用于{short-project-name} 图表的其他部分。
+这样就可以先删除{short-project-name} 图表，最后删除{short-project-name} CRD。
+
+== 示例
+
+有关舰队捆绑包定义的示例，请参阅https://github.com/kubewarden/fleet-example[.com/kubewarden/fleet-example] github。
