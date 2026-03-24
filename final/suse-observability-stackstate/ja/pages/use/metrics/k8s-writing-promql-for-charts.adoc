@@ -1,17 +1,17 @@
-= 代表的なチャート用のPromQLクエリ作成
+= 代表的なチャートのためのPromQLクエリの作成
 :revdate: 2025-07-10
 :page-revdate: {revdate}
 :description: SUSE Observability
 
 == ガイドライン
 
-SUSE Observabilityがチャートにデータを表示する際には、ほぼ常に保存されたデータの解像度を変更して、チャートの利用可能なスペースに収める必要があります。できるだけ代表的なチャートを得るためには、以下のガイドラインに従ってください。
+SUSE Observabilityがデータをチャートに表示する場合、ほとんどの場合、チャートの空きスペースに収まるように保存データの解像度を変更する必要があります。可能な限り代表的なチャートを得るためには、以下のガイドラインに従ってください：
 
-* 生のメトリックをクエリするのではなく、常に時間で集約してください（`*_over_time`または`rate`関数を使用）。
-* 時間での集約の範囲として`${__interval}`パラメータを使用してください。これはチャートの解像度に応じて自動的に調整されます。
-* `rate`集約の範囲として`${__rate_interval}`パラメータを使用してください。これもチャートの解像度に応じて自動的に調整されますが、`rate`の特定の動作を考慮に入れます。
+* 未加工の指標を問い合わせるのではなく、常に（`*_over_time` または`rate` 関数を使って）経時的に集計すること。
+* `${__interval}` パラメータを経時的な集計の範囲として使用する。チャートの解像度に応じて自動的に調整される。
+* `rate` 集計の範囲として、`${__rate_interval}` パラメータを使用する。これは、チャートの解像度に連動して自動的に調整されるが、`rate` の特定の動作を考慮に入れている。
 
-集約を適用することは、メトリックの特定のパターンを他のパターンよりも強調するためにトレードオフが行われることを意味します。例えば、大きな時間ウィンドウでは`max_over_time`がすべてのピークを表示しますが、すべての谷は表示しません。一方、`min_over_time`は正反対のことを行い、`avg_over_time`はピークと谷の両方を滑らかにします。この動作を示すために、ポッドのCPU使用率を使用したメトリックバインディングの例を示します。自分で試すには、これをYAMLファイルにコピーし、xref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[CLIを使用して適用してください]。後で削除できます。
+集計を適用するということは、多くの場合、メトリクスの特定のパターンを他のものよりも強調するというトレードオフが行われることを意味する。例えば、大きな時間窓の場合、`max_over_time` はすべてのピークを表示するが、すべての谷は表示しない。一方、`min_over_time` は正反対で、`avg_over_time` は山と谷の両方を滑らかにする。この動作を示すために、ポッドのCPU使用率を使用したメトリックバインディングの例を示します。自分で試すには、これをYAMLファイルにコピーし、xref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[CLIを使用して]SUSE Observabilityにxref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[適用]します(後で削除できます)。
 
 ----
 nodes:
@@ -43,63 +43,59 @@ nodes:
   scope: (label = "stackpack:kubernetes" and type = "pod")
 ----
 
-適用後、SUSE Observabilityでポッドのメトリクスの視点を開いてください（できればCPU使用率にスパイクと谷があるポッド）。右上隅のアイコンを使用してチャートを拡大すると、より見やすくなります。今、異なる集約の影響を確認するために時間ウィンドウを変更することもできます（例えば、30分と24時間の場合）。
+適用後、SUSE Observabilityでポッドのメトリクス・パースペクティブを開きます(CPU使用率にスパイクと谷があるポッドが望ましい)。右上のアイコンを使ってチャートを拡大すると、より見やすくなります。また、時間窓を変えて、異なる集計による効果を見ることもできる（たとえば30分と24時間）。
 
 [CAUTION]
 ====
-メトリックバインディングが集約を指定しない場合、SUSE Observabilityは自動的に`last_over_time`集約を使用してチャートのデータポイントの数を減らします。説明については、xref:/use/metrics/k8s-writing-promql-for-charts.adoc#_why[なぜこれが必要なのか？]も参照してください。
+メトリックバインディングで集計が指定されていない場合、SUSE Observabilityは自動的に`last_over_time` 集計を使用して、グラフのデータポイント数を減らします。xref:/use/metrics/k8s-writing-promql-for-charts.adoc#_why[これについては、「なぜこれが必要なのか？]
 ====
 
 
-image::k8s/metric-aggregation-differences-30m.png[このメトリックバインディングの過去30分のチャート, there are only a few lines in the chart visible because most time series are on top of each other]
-image::k8s/metric-aggregation-differences-24h.png[同じチャート, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
+image::k8s/metric-aggregation-differences-30m.png[このチャートは過去30mをバインドしている, there are only a few lines in the chart visible because most time series are on top of each other]image::k8s/metric-aggregation-differences-24h.png[同チャート, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
 
-== なぜこれが必要なのですか？
+== なぜこれが必要なのか？
 
-まず第一に、なぜ集約を使用する必要があるのですか？メトリックストアからチャートに収まる以上のデータポイントを取得することは意味がありません。したがって、SUSE Observabilityは、良好な結果を得るために2つのデータポイント間の必要なステップを自動的に決定します。短い時間ウィンドウ（例えば、1時間のデータのみを表示するチャート）の場合、これは小さなステップ（約10秒）になります。メトリックは通常30秒ごとにのみ収集されるため、10秒のステップでは、次の値に変わる前に同じ値が3ステップ繰り返されます。1週間の時間ウィンドウにズームアウトすると、はるかに大きなステップ（約1時間、画面上のチャートの正確なサイズに依存）を必要とします。
+まず、なぜアグリゲーションを使う必要があるのか？チャートに収まる以上のデータポイントをメトリックスストアから取得するのは意味がない。したがって、SUSE Observabilityは、良い結果を得るために必要な2つのデータポイント間のステップを自動的に決定します。短い時間ウィンドウ（例えば1時間分のデータしか表示しないチャート）では、この結果、ステップが小さくなる（約10秒）。メトリクスは30秒ごとにしか収集されないことが多いので、10秒のステップでは、次の値に変わる前に同じ値が3ステップ繰り返される。1週間のタイム・ウィンドウにズーム・アウトするには、もっと大きなステップが必要になる（画面上のチャートの正確なサイズにもよるが、約1時間）。
 
-ステップが収集されたデータポイントの解像度よりも大きくなると、1時間の時間範囲のデータポイントを単一の値に要約する方法を決定する必要があります。クエリにすでに時間に対する集約が指定されている場合、それが使用されます。ただし、集約が指定されていない場合、または集約間隔がステップよりも小さい場合は、`last_over_time`集約が使用され、`step`サイズが間隔として使用されます。その結果、各時間の最後のデータポイントのみが、その時間内のすべてのデータポイントを「要約」するために使用されます。
+ステップが収集されたデータポイントの分解能よりも大きくなった場合、1時間の時間範囲のデータポイントをどのように1つの値にまとめるかを決定する必要がある。クエリで時間に対する集計がすでに指定されている場合は、それを使用する。しかし、集計が指定されていない場合、または集計間隔がステップより小さい場合、`step` サイズを間隔として、`last_over_time` 集計が使用される。その結果、各時間の最後のデータポイントだけが、その時間のすべてのデータポイントを「要約」するために使われる。
 
-要約すると、1週間の時間範囲で1時間のステップのPromQLクエリを実行すると、このクエリ：
+要約すると、PromQLクエリを1週間、1時間のステップで実行した場合、このクエリは次のようになります：
 
 ----
 container_cpu_usage /1000000000
 ----
 
-は自動的に次のように変換されます：
+に自動的に変換される：
 
 ----
 last_over_time(container_cpu_usage[1h]) /1000000000
 ----
 
-https://play.stackstate.com/#_/metrics?promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock_shop%22%2C%20pod_name%3D~%22carts.%2A%22%7D%5B%24%7B%5F%5Finterval%7D%5D%29%20%2F%201000000000&timeRange=LAST_7_DAYS[SUSE Observabilityプレイグラウンド]で自分で試してみてください。
+https://play.stackstate.com/#_/metrics?promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock_shop%22%2C%20pod_name%3D~%22carts.%2A%22%7D%5B%24%7B%5F%5Finterval%7D%5D%29%20%2F%201000000000&timeRange=LAST_7_DAYS[SUSE Observability playgroundで]実際に試してみてください。
 
-image::k8s/k8s-metric-queries-for-chart-last-over-time.png[時間範囲での最後の値]
-image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[固定範囲での最大値]
-image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[自動範囲での最大値]
+image::k8s/k8s-metric-queries-for-chart-last-over-time.png[Last over time]image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[Max over time with fixed range]image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[Max over time with automatic range]
 
-この動作はしばしば意図されていないものであり、どのような集約が必要かを自分で決定する方が良いです。異なる集約関数を使用することで、特定の動作を強調することが可能ですが、その代わりに他の動作が隠れてしまう場合があります。ピーク、谷、滑らかなチャートなどを見ることがより重要ですか？その場合、クエリに使用される`step`サイズで自動的に置き換えられるため、範囲の`${__interval}`パラメータを使用してください。その結果、ステップ内のすべてのデータポイントが使用されます。
+多くの場合、この動作は意図されたものではないので、どのような集約が必要かは自分で判断した方がいい。異なる集計関数を使用することで、（他の振る舞いを隠す代償として）特定の振る舞いを強調することができる。ピークや谷、滑らかなチャートなどを見ることがより重要なのでしょうか？そして、`${__interval}` パラメータを範囲に使用すると、クエリに使用される`step` サイズに自動的に置き換えられます。その結果、そのステップのすべてのデータポイントが使用される。
 
-image::k8s/k8s-metric-queries-small-range.png[固定範囲, shorter than the data resolution]
-image::k8s/k8s-metric-queries-interval-for-range.png[自動範囲, based on step but with a lower limit]
+image::k8s/k8s-metric-queries-small-range.png[固定レンジ, shorter than the data resolution]image::k8s/k8s-metric-queries-interval-for-range.png[自動レンジ, based on step but with a lower limit]
 
-`${__interval}`パラメータは別の問題を防ぎます。`step`のサイズが縮小し、`${__interval}`保存されたメトリックデータの解像度よりも小さくなると、チャートにギャップが生じます。
+`${__interval}` 。`step` 、したがって`${__interval}` 、保存されているメートルデータの解像度よりも小さいサイズに縮小されると、チャートにギャップが生じる。
 
-したがって、`${__interval}`はSUSE Observabilityエージェントのデフォルトのスクレイプ間隔（デフォルトのスクレイプ間隔は30秒）の2倍よりも小さくなることはありません。
+したがって、`${__interval}` 、SUSE Observabilityエージェントのデフォルトのスクレイプ間隔（デフォルトのスクレイプ間隔は30秒）の2*より小さくなることはありません。
 
-最後に、`rate()`関数は、レートを計算するために、少なくとも2つのデータポイントがその間隔に存在する必要があります。2つ未満のデータポイントでは、レートの値は計算できません。したがって、`${__rate_interval}`は常にスクレイプ間隔の4倍以上であることが保証されています。これにより、データが欠落していない限り、レートチャートに予期しないギャップやその他の奇妙な動作が発生しないことが保証されます。
+最後に、`rate()` 関数は、率を計算するために、少なくとも2つのデータ点が区間内にあることを必要とする。データポイントが2つ以下では、レートは値を持たない。従って、`${__rate_interval}` は常に少なくとも4 *スクレイプ間隔であることが保証される。これにより、データが欠落していない限り、レート・チャートに予期せぬギャップやその他の奇妙な動作が発生しないことが保証される。
 
-このことをより詳しく説明している優れたブログ記事がインターネット上にいくつかあります：
+インターネット上には、このことを詳しく説明した優れたブログ記事がいくつかある：
 
-* https://www.robustperception.io/step-and-query_range/[ステップとクエリ範囲]
-* https://www.robustperception.io/what-range-should-i-use-with-rate/[rate()にはどの範囲を使うべきですか？]
+* https://www.robustperception.io/step-and-query_range/[ステップとクエリー範囲]
+* https://www.robustperception.io/what-range-should-i-use-with-rate/[rate()で使用する範囲は？]
 * https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-%5F%5Frate_interval-for-prometheus-rate-queries-that-just-work/[Grafanaにおける__rate_intervalの導入]
 
-== 関連項目
+== 参照
 
-PromQLクエリを理解するためのさらなるリソース：
+PromQLクエリを理解するためのいくつかのリソース：
 
-* https://promlabs.com/blog/2020/06/18/the-anatomy-of-a-promql-query/[PromQLクエリの構造]
-* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[PromQLでのデータの選択]
-* https://iximiuz.com/en/posts/prometheus-vector-matching/[複数のメトリックを結合する方法]
-* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[時間にわたる集約]
+* https://promlabs.com/blog/2020/06/18/the-anatomy-of-a-promql-query/[PromQLクエリーの構造]
+* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[PromQLでデータを選択する]
+* https://iximiuz.com/en/posts/prometheus-vector-matching/[複数のメトリクスを結合する方法]
+* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[時間の経過による集計]
