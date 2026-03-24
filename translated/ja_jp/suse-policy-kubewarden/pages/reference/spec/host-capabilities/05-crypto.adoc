@@ -1,0 +1,73 @@
+include::partial$variables.adoc[]
+= 暗号機能
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用中の PKI 証明書を評価するための、Wasm ホストの暗号化機能と性能について学びます。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "host-capabilities", "cryptographic-capabilities"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"ポリシー仕様"、"暗号機能"]]。
+:sidebar_label: 暗号機能
+:current-version: {page-origin-branch}
+
+執筆時のWasmの制約により、一部の暗号ライブラリはWasmにコンパイルできない。一方、これらのライブラリを必要とする{project-name} ポリシーは、ホスト側で暗号関数を評価するコールバックを実行できる。彼らは結果を受け取り、自分の仕事を続ける。
+
+== 行動
+
+Wasmホストは、x.509およびPKI証明書の実装に`+rustls-wepki+` 。ということだ：
+
+- 主な使い方私たちは、どのようなキーの使用も受け入れることにしました。これは、いくつかのユースケースをカバーするのに役立ちます（いつものように、異なるアプローチについて議論したい場合は、ご連絡ください）。
+- 証明書チェーン：中間 CA の有効期限が切れている場合、証明書は信頼されていないとみなされる。
+- 証明書の有効期限：証明書チェーンが提供された場合、当社は常に証明書の全有効期間を検証する。WepkiはルートCAの有効期限をチェックしない。
+- 私たちは常に証明書を検証し、チェーンが提供されない場合は、MozillaのCAが使用されます。
+
+== WaPCプロトコル契約
+
+独自の言語SDKを実装する場合、これらはホストから公開される暗号チェックを実行する関数である：
+
+=== waPC機能 -`+v1/is_certificate_trusted+` 入力
+
+[,hcl]
+----
+# Certificate:
+{
+  # **mandatory**: Which encoding is used by the certificate
+  # Either the string "Pem" or "Der".
+  "encoding": string,
+  # Actual certificate
+  # The certificate is UTF-8 encoded.
+  # It's an array of bytes of the unicode code pointers of a PEM/DER encoded
+  # certificate string.
+  "data": [byte(int), ..., byte(int)]
+}
+
+{
+  # **mandatory**: PEM-encoded certificate to verify
+  "cert": Certificate,
+  # optional:
+  "cert_chain": [
+      # list of certs, ordered by trust
+      # usage (intermediates first, root last)
+      # If not provided, Mozilla's CA is used.
+      Certificate,
+      ...
+      Certificate,
+    ],
+  # RFC 3339 time format string, to check expiration
+  # against.
+  # If missing, time is now.
+  "not_after": string
+}
+----
+
+=== waPC機能 -`+v1/is_certificate_trusted+` 出力
+
+[,hcl]
+----
+{
+   # true if certificate verified:
+   "trusted": boolean,
+   # empty if trusted == true:
+   "reason": string
+}
+----
