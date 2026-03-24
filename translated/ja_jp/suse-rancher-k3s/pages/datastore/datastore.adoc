@@ -1,0 +1,119 @@
+= クラスターデータストア
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-06-16
+:page-revdate: {revdate}
+
+etcd以外のデータストアを使用してKubernetesを実行する機能により、K3sは他のKubernetesディストリビューションとは一線を画している。この機能はKubernetesオペレータに柔軟性を提供する。利用可能なデータストア・オプションにより、ユースケースに最適なデータストアを選択できます。例えば、こうだ：
+
+* チームにetcdを操作する専門知識がない場合は、MySQLやPostgreSQLのようなエンタープライズグレードのSQLデータベースを選択することができます。
+* CI/CD環境でシンプルで短期間のクラスタを実行する必要がある場合は、組み込みのSQLiteデータベースを使用できます。
+* Kubernetesをエッジにデプロイし、高可用性ソリューションを必要とするが、エッジでデータベースを管理する運用オーバーヘッドを許容できない場合、組み込みetcdの上に構築されたK3sの組み込みHAデータストアを使用することができる。
+
+K3sは以下のデータストアオプションをサポートしています：
+
+* *組み込みhttps://www.sqlite.org/index.html[SQLite]* +
+SQLiteは複数のサーバーを持つクラスタでは使用できません。 +
+SQLiteはデフォルトのデータストアで、他のデータストア構成が存在せず、ディスク上に埋め込みetcdデータベースファイルが存在しない場合に使用されます。
+* *組み込みetcd* +
+複数のサーバーで組み込みetcdを使用する場合の詳細については、xref:datastore/ha-embedded.adoc[高可用性組み込みetcd]ドキュメントを参照してください。
+K3sが新しいetcdクラスタを初期化するように設定されている場合、既存のetcdクラスタに参加する場合、または起動時にetcdデータベースファイルがディスク上に存在する場合、Embedded etcdが自動的に選択されます。
+* *外部データベース* +
+複数のサーバーで外部データストアを使用する場合の詳細については、xref:datastore/ha.adoc[高可用性外部DBの]ドキュメントを参照してください。 +
+以下の外部データストアがサポートされている：
+ ** https://etcd.io/[etcd](バージョン 3.5.21 に対して認証済み)
+ ** https://www.mysql.com/[MySQL]（バージョン5.7および8.0に対して認証済み）
+ ** https://mariadb.org/[MariaDB]（バージョン10.11および11.4に対して認証済み）
+ ** https://www.postgresql.org/[PostgreSQL]（バージョン15.12、16.7、17.3に対して認証済み）
+
+[CAUTION]
+.ステートメント・サポート
+====
+K3sは、DBからの準備されたステートメントのサポートを必要とする。これは、https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-transaction-pooling[]PgBouncerのような接続プーラーは、K3で動作するために追加の設定が必要な場合があることを意味します。
+====
+
+[WARNING]
+.マルチマスター・セットアップ
+====
+`+auto_increment_increment+` または`+auto_increment_offset+` を 1 より大きく設定するマルチマスター・データベースはサポートされていません。Kineは、キーが正常に挿入されると、リビジョンが0から始まり、常にちょうど1進むことを期待している。これはGalera for MySQL/MariaDBなどの製品に影響する。
+====
+
+[#_external_datastore_configuration_parameters]
+== 外部データストア構成パラメータ
+
+PostgreSQL、MySQL、etcdのような外部データストアを使用したい場合は、K3sが接続方法を知っているように、`+datastore-endpoint+` パラメータを設定する必要があります。また、接続の認証と暗号化を設定するパラメータを指定することもできる。以下の表は、CLIフラグまたは環境変数として渡すことができるこれらのパラメーターをまとめたものである。
+
+|===
+| CLI Flag | 環境変数 | 説明
+
+| `+--datastore-endpoint+`
+| `+K3S_DATASTORE_ENDPOINT+`
+| PostgreSQL、MySQL、etcdの接続文字列を指定します。データストアへの接続を表す文字列。この文字列の構造は各バックエンドに固有であり、以下に詳述する。
+
+| `+--datastore-cafile+`
+| `+K3S_DATASTORE_CAFILE+`
+| データストアとの安全な通信に使用されるTLS認証局（CA）ファイル。データストアがカスタム認証局によって署名された証明書を使用してTLS経由でリクエストを提供する場合、K3sクライアントが証明書を適切に検証できるように、このパラメータを使用してそのCAを指定できます。
+
+| `+--datastore-certfile+`
+| `+K3S_DATASTORE_CERTFILE+`
+| データストアへのクライアント証明書ベースの認証に使用するTLS証明書ファイル。この機能を使用するには、クライアント証明書ベースの認証をサポートするようにデータストアを構成する必要があります。このパラメータを指定する場合は、`+datastore-keyfile+` パラメータも指定する必要がある。
+
+| `+--datastore-keyfile+`
+| `+K3S_DATASTORE_KEYFILE+`
+| データストアへのクライアント証明書ベースの認証に使用するTLSキーファイル。詳しくは前回の`+datastore-certfile+` パラメータを参照のこと。
+|===
+
+ベストプラクティスとして、これらのパラメータをコマンドライン引数ではなく環境変数として設定することをお勧めします。そうすれば、データベースの認証情報やその他の機密情報がプロセス情報の一部として公開されることはありません。
+
+[#_datastore_endpoint_format_and_functionality]
+== データストア・エンドポイントの形式と機能
+
+前述のように、`+datastore-endpoint+` パラメータに渡される値のフォーマットは、データストア・バックエンドに依存する。以下は、サポートされる各外部データストアのフォーマットと機能の詳細である。
+
+[tabs,sync-group-id=ext-db]
+======
+PostgreSQL::
++
+--
+最も一般的な形式では、PostgreSQLのdatastore-endpointパラメータは以下の形式になります：
+
+`+postgres://username:password@hostname:port/database-name+`
+
+より高度なコンフィギュレーション・パラメーターも用意されている。これらの詳細については https://godoc.org/github.com/lib/pq.
+
+データベース名を指定してそれが存在しない場合、サーバーはそのデータベースを作成しようとします。
+
+もしエンドポイントとして`+postgres://+` ：
+
+* ユーザー名とパスワードに`+postgres+` を使ってlocalhostに接続する。
+* という名前のデータベースを作成する。 `+kubernetes+`
+--
+
+MySQL / MariaDB::
++
+--
+最も一般的な形式では、MySQLとMariaDBの`+datastore-endpoint+` パラメータは次のような形式です：
+
+`+mysql://username:password@tcp(hostname:3306)/database-name+`
+
+より高度なコンフィギュレーション・パラメーターも用意されている。これらの詳細については https://github.com/go-sql-driver/mysql#dsn-data-source-name
+
+https://github.com/k3s-io/k3s/issues/1093[]K3sのため、`+tls+` パラメータを設定できないことに注意してください。TLS通信はサポートされているが、例えばこのパラメータを "skip-verify "に設定してK3sに証明書の検証をスキップさせることはできない。
+
+データベース名を指定してそれが存在しない場合、サーバーはそのデータベースを作成しようとします。
+
+もしエンドポイントとして`+mysql://+` ：
+
+* `+root+` ユーザーとパスワードなしで、`+/var/run/mysqld/mysqld.sock+` の MySQL ソケットに接続する。
+* という名前でデータベースを作成する。 `+kubernetes+`
+--
+
+etcd::
++
+--
+最も一般的な形式では、etcdの`+datastore-endpoint+` パラメーターは以下のフォーマットである：
+
+`+\https://etcd-host-1:2379,https://etcd-host-2:2379,https://etcd-host-3:2379\+`
+
+上記は典型的な3ノードのetcdクラスタを想定している。このパラメータには、1つ以上のカンマ区切りのetcd URLを指定できる。
+--
+======
