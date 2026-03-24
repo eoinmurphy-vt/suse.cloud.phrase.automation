@@ -1,0 +1,119 @@
+include::partial$variables.adoc[]
+= Distribuer une politique OPA avec {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Annotez votre politique Rego avec des métadonnées pertinentes, puis envoyez-la dans un registre OCI pour préparer son déploiement.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "distribute"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "distribuer", "open policy agent", "opa", "rego"].
+:sidebar_label: Distribuer
+:current-version: {page-origin-branch}
+
+Vous avez rédigé, mis en place et exécuté votre politique Rego.
+Il est maintenant temps de distribuer la politique.
+
+Les politiques doivent être annotées, afin qu'elles puissent être exécutées sur le site `+policy-server+`.
+Le site `+policy-server+` est la partie qui exécute les politiques, lorsqu'il est exécuté dans un cluster Kubernetes.
+
+== Annoter la politique
+
+L'annotation d'une politique est un processus qui permet d'enrichir les métadonnées de la politique avec des informations pertinentes.
+Informations telles que l'auteur, la licence, l'emplacement du code source, les règles, qui décrivent le type de ressources que cette politique comprend et évalue.
+
+Pour annoter votre politique, vous devez écrire un fichier `+metadata.yaml+`:
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: [""]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["CREATE"]
+mutating: false
+contextAware: false
+executionMode: opa
+annotations:
+  io.kubewarden.policy.title: no-default-namespace
+  io.kubewarden.policy.version: 0.1.0 # should match the OCI tag
+  io.kubewarden.policy.description: This policy will reject any resource created inside the default namespace
+  io.kubewarden.policy.author: The {project-name} Authors
+  io.kubewarden.policy.url: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.source: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+      This policy is just an example.
+
+      You can write interesting descriptions about the policy here.
+----
+
+Vous pouvez voir plusieurs détails :
+
+* Règles :
+Quelles sont les ressources visées par cette politique.
+* Mutation :
+Si cette politique est en train de muter.
+Dans ce cas, il s'agit simplement d'une validation.
+* Prise en compte du contexte :
+Si cette politique nécessite un contexte de la part du cluster pour évaluer la demande.
+* Mode d'exécution :
+Puisqu'il s'agit d'une politique de Rego, il est obligatoire de spécifier le mode d'exécution attendu,`+opa+` ou `+gatekeeper+`.
+Cette politique est rédigée dans le style `+opa+` et renvoie un objet entier `+AdmissionReview+`.
+* Annotations : Métadonnées stockées dans la politique elle-même.
+
+Allez-y et annotez votre politique :
+
+[subs="+attributes",console]
+----
+$ kwctl annotate policy.wasm --metadata-path metadata.yaml --output-path annotated-policy.wasm
+----
+
+Vous pouvez maintenant inspecter la politique en exécutant `+kwctl inspect annotated-policy.wasm+`.
+
+== Pousser la politique
+
+Maintenant que la politique est annotée, vous pouvez l'envoyer dans un registre OCI.
+
+[subs="+attributes",console]
+----
+$ kwctl push annotated-policy.wasm registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+Policy successfully pushed
+----
+
+Votre politique Rego, ciblant le framework OPA, a tout ce qu'il faut pour être déployée en production, en créant une page `+ClusterAdmissionPolicy+`.
+Vous pouvez également le préparer.
+Tout d'abord, vous devez faire entrer la police dans le magasin local `+kwctl+`:
+
+[subs="+attributes",console]
+----
+$ kwctl pull registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+pulling policy...
+----
+
+Créez un site `+ClusterAdmissionPolicy+` à partir de celui-ci.
+Cette opération prend en compte les métadonnées dont elle dispose sur la politique :
+
+[subs="+attributes",console]
+----
+$ kwctl manifest registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1 --type ClusterAdmissionPolicy
+---
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: generated-policy
+spec:
+  module: "registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - "*"
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+Vous pouvez maintenant utiliser ce site `+ClusterAdmissionPolicy+` comme base pour cibler les ressources que vous souhaitez, ou déployer sur Kubernetes tel quel.
