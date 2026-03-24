@@ -1,0 +1,70 @@
+include::partial$variables.adoc[]
+= モニターモード
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ClusterAdmissionPoliciesまたはAdmissionPoliciesをモニターモードに設定して、受信リクエストを変更せずにポリシーのアクションを追跡および分析します。
+:doc-persona: ["kubewarden-user"、"kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "monitor-mode"]
+:doc-type: ["reference"]
+:keywords: ["kubernetes"、"kubewarden"、"monitor mode"]。
+:sidebar_label: モニターモード
+:sidebar_position: 50
+:current-version: {page-origin-branch}
+
+ポリシーを定義するとき、その xref:reference/CRDs.adoc#admissionpolicyspec[`+spec.mode+`].
+デフォルトでは、`+mode: protect+` でポリシーを展開する。
+そして、ポリシーはリクエストを受け入れ、拒否し、あるいは変異させる。
+
+モニター・モードでポリシーを展開することもできる。モニターモード：
+
+* ポリシーは、ポリシーがインストールされていないかのように、すべてのリクエストを受け入れる。
+* `+policy-server+` は普通にポリシーをトレースする。リクエストが拒否されたり、ポリシーが変異を提案した場合、トレースにはその詳細が含まれる。
+* `+policy-server+` メトリクスは通常通り更新され、モードはメトリクスの荷物に含まれる。そのため、モード別にポリシーをフィルタリングし、`+monitor+` モードを使用して展開されているポリシーに焦点を当てることは容易である。
+
+`+mode+` は、`+ClusterAdmissionPolicy+` と`+AdmissionPolicy+` リソースに含まれる属性です。`+mode+` 属性には、`+monitor+` と`+protect+` の2つの値があります。`+mode+` 、省略した場合のデフォルトは`+protect+` 。
+
+`+monitor mode+` でポリシーを作成するには、リソースの仕様の一部として`mode: monitor`というステートメントを含める必要がある。例えば、この`+ClusterAdmissionPolicy+` の`+spec+` の部分（➀印）：
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-capabilities
+spec:
+  mode: monitor <1>
+  policyServer: reserved-instance-for-tenant-a
+  module: registry://ghcr.io/kubewarden/policies/psp-capabilities:v0.1.3
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    allowed_capabilities:
+    - CHOWN
+    required_drop_capabilities:
+    - NET_ADMIN
+----
+<1> `+mode: monitor+` 属性は`+spec+` セクションにある。
+
+== ポリシーモードの変更
+
+セキュリティのため、ポリシー・リソースに対して`+UPDATE+` の権限を持つユーザーは、ポリシーをより制限的にすることができます。これは、既存の`+ClusterAdmissionPolicy+` または`+AdmissionPolicy+` の`+mode+` を`+monitor+` から`+protect+` に変更できることを意味する。
+
+ただし、既存の`+ClusterAdmissionPolicy+` や`+AdmissionPolicy+` の`+mode+` を`+protect+` から`+monitor+` に変更することはできない。
+
+したがって、ポリシーの`+mode+` を`+protect+` から`+monitor+` に変更するには、ポリシーを削除して`+monitor+` モードで再作成する必要があります。ポリシーを`+protect+` から`+monitor+` に切り替えることは、ポリシーを削除することと同じであるため、このアプローチでは、ユーザーがポリシーの削除権限を持っていることを前提としています。
+
+== 変異するポリシーに関するメモ
+
+`+monitor+` モードでポリシーを変異させても、リソースに変異は起こらない。
+`+monitor+` モードでは、ポリシーがどのような行動をとったかを記録する。また、`+protect+` モードで生成されたであろう変異パッチも記録される。
+
+[WARNING]
+====
+ミューテーティング・ポリシーが`+monitor+` モードにあるとき、後のポリシーは、ミューテーティング・ポリシーが`+protect+` モードにあるときとは変更されていない、つまり異なるリソースを評価する。
+====
