@@ -1,0 +1,143 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= オープン・テレメトリ・マッピングのトラブルシューティング
+:revdate: 2025-11-26
+:page-revdate: {revdate}
+:description:  オープン・テレメトリ・マッピングのトラブルシューティング
+
+== 概要
+
+xref:/setup/cli/cli-sts.adoc[SUSE Observability CLIを]使用して、Open Telemetryトポロジーの同期のトラブルシューティングを行い、トポロジーデータが正しく取り込まれず、{stackstate-product-name} に表示されない問題を修正できます。このページでは、このような問題をデバッグする際の一般的なトラブルシューティングの手順について説明します。
+
+== 一般的なトラブルシューティングの手順
+
+. xref:/setup/custom-integrations/otelmappings/troubleshooting.adoc#_list_open_telemetry_component_mappings[Open Telemetry マッピングが存在することを確認]します。
+** マッピングが存在しない場合は、Open Telemetry stackpack のインストールを確認します。
+. 特定のタイプのコンポーネントやリレーションが欠落している場合、xref:/setup/custom-integrations/otelmappings/troubleshooting.adoc#_show_an_open_telemetry_component_or_relation_mappings_status[マッピングのステータスを取得する]。
+** データが流れているか、Open Telemetry コレクターとプラットフォーム間の通信にミスがないかを判断するために、レイテンシ・メトリクスをチェックしてください。
+** 一部のトポロジー要素が同期されないために報告されたマッピングエラーを修正しました。
+** マッピングが "静かに "期待通りに処理されない原因として、入力フィールドで適用される条件／フィルタリングが考えられる。例えば、条件が偽の場合、エラーは発生しないが、マッピングは "スキップ "される。
+
+== 便利なCLIコマンド
+
+=== テレメトリ・コンポーネントのマッピングを開く
+
+現在のすべての Open Telemetry マッピングのリストを返します。
+
+[,sh]
+----
+$ sts otel-component-mapping list
+NAME                   | IDENTIFIER
+Database               | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:database
+Function Component     | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:function
+Host Component         | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:host
+Kubernetes Namespace   | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:namespace
+Kubernetes Pod         | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:pod
+OTel Service Component | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service-instance
+OTel Service Instance  | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service
+Task Component         | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:task 
+----
+
+=== オープン・テレメトリ関係マッピングのリスト
+
+現在のすべての Open Telemetry マッピングのリストを返します。
+
+[,sh]
+----
+$ sts otel-relation-mapping list
+NAME                                               | IDENTIFIER
+Database Relation                                  | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:database
+Executes Relation (Function)                       | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:executes-function
+Executes Relation (Host)                           | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:executes-host
+Executes Relation (Task)                           | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:executes-task
+Kubernetes to OTEL Relation                        | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:kubernetes-to-otel
+OTel Async Relation (Consumer -> Peer)             | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:asynchronous-consumer-peer
+OTel Async Relation (Producer -> Consumer)         | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:asynchronous-producer-consumer
+OTel Async Relation (Producer -> Peer)             | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:asynchronous-producer-peer
+OTel Synchronous Relation                          | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:synchronous
+OTel service instance provided-by service relation | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:provided-by
+----
+
+
+=== Open Telemetry コンポーネントまたはリレーションマッピングのステータスを表示します。
+
+Open Telemetry コンポーネント・マッピング・ステータス・コマンドは、集約されたレイテンシー、スループット・メトリクス、および作成されたトポロジー・エレメントの数を返します。これは、トポロジーの特定の部分の同期に時間がかかる理由をデバッグするときに役立つ。出力には、Open Telemetry データにマッピングルールを適用する際に発生する問題を知らせるセクション`+Mapping errors+` が含まれます。
+
+[,sh]
+----
+$ sts otel-component-mapping status --identifier urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service
+
+
+Otel Component Mapping:
+NAME                  | IDENTIFIER                                                           | COMPONENTS | RELATIONS
+OTel Service Instance | urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service | 9          | 0
+
+
+Otel Component Mapping Metrics:
+METRIC          | 500S AGO | 500-1000S AGO | 1000-1500S AGO
+latency seconds | 44.45    | 44.45         | 41.19
+----
+
+同様に、ステータスをマッピングするオープン・テレメトリ関係もある。
+[,sh]
+----
+$ sts otel-relation-mapping status --identifier urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:database
+
+
+Otel Relation Mapping:
+NAME              | IDENTIFIER                                                           | COMPONENTS | RELATIONS
+Database Relation | urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:database | 0          | 2
+
+
+Otel Relation Mapping Metrics:
+METRIC          | 500S AGO | 500-1000S AGO | 1000-1500S AGO
+latency seconds | 43.404   | 43.404        | 39.978
+
+
+Otel Relation Mapping Errors:
+No otel relation mapping errors found.
+----
+
+=== Open Telemetry コンポーネントまたはマッピングを完全に取得する
+
+コンポーネントまたはリレーションシップ・マッピングの完全なマッピング定義を素早く表示するには、`+get+` コマンドを使用します：
+
+[,sh]
+----
+$ sts otel-component-mapping get --identifier urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service
+# Output omitted for brevity
+----
+
+あるいは関係マッピングの場合：
+
+[,sh]
+----
+$ sts otel-relation-mapping get --identifier urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:database
+# Output omitted for brevity
+----
+
+=== Open Telemetry コンポーネントまたはリレーションマッピングの編集
+
+マッピング定義に問題があることに気づいたら、`+edit+` コマンドを使って直接編集してください。デフォルトのテキストエディタでマッピングを開きます。
+
+[,sh]
+----
+$ sts otel-component-mapping edit --identifier urn:stackpack:open-telemetry-2:shared:otel-component-mapping:service
+# Opens the mapping in your default text editor
+----
+
+あるいは関係マッピングの場合：
+
+[,sh]
+----
+$ sts otel-relation-mapping edit --identifier urn:stackpack:open-telemetry-2:shared:otel-relation-mapping:database
+# Opens the mapping in your default text editor
+----
+
+マッピングが変更された場合は、保存してエディタを終了すると変更が適用されます。
+
+[NOTE]
+====
+StackPackソースファイル内のマッピング定義を更新し、CLI経由での変更と同期させることを忘れないでください。
+====
+
+endif::ss-ff-stackpacks2_enabled[]
