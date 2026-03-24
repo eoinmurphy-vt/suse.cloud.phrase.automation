@@ -1,0 +1,87 @@
+= 設定のバックアップ
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+== 概要
+
+SUSE Observabilityには、設定(settings)専用のバックアップメカニズムがあります。これには、インストールされたスタックパックとその設定が含まれますが、ユーザーが作成したその他のカスタマイズも含まれます。例えば、無効化またはカスタマイズされたモニター、カスタムビュー、サービストークンなど。
+
+コンフィギュレーション・バックアップの主な利点は、非常に小さく（通常は数メガバイト）、ダウンタイムを最小限に抑えながら簡単かつ迅速にリストアできることです。コンフィギュレーション・バックアップがリストアされた後、新しいデータは以前と同様に処理され、トポロジー、健全性状態、およびアラートが再作成されます。しかし、トポロジーの履歴（ヘルスを含む）は保存されない。そのためにxref:/setup/data-management/backup_restore/kubernetes_backup.adoc[StackGraphのバックアップが]あるが、これらのバックアップは容量が大きく、作成と復元に時間がかかる。
+
+コンフィギュレーションのバックアップはデフォルトで有効になっている。デフォルトの設定では、毎晩バックアップを作成するが、バックアップは独自のネームスペース内の永続ボリュームにのみ保存され、最大で最新の10個のバックアップが保存される。
+
+== 設定バックアップの操作
+
+コンフィギュレーション・バックアップ(その他のすべてのバックアップも含む)用のスクリプトは、 https://github.com/StackVista/helm-charts/releases/latest[SUSE Observability Helmチャート用の]ダウンロードできます。`+backup-scripts-<version>.tar.gz+` 、ダウンロードして解凍してください。
+
+*スクリプトを使用する前に、* `+kubectl+` バイナリがインストールされ、SUSE Observabilityがインストールされているコンテキストと名前空間が設定されていることを確認してください。例えば、コンテキスト`+observability-cluster+` 、名前空間`+suse-observability+` に接続するには、次のコマンドを実行します：
+
+----
+kubectl config use-context observability-cluster
+kubectl config set-context --current --namespace=suse-observability
+----
+
+バックアップを操作するコマンドラインツールはすべて、クラスタ内でKubernetesジョブを作成し、そのジョブを操作することで動作する。ツール終了後、ジョブは自動的に削除される。ジョブの開始には時間がかかる（dockerイメージのプル、クラスタでのジョブのスケジューリングなど、すべてに時間がかかる）ので、コマンドはすぐに結果を出さない。
+
+=== バックアップの復元
+
+[CAUTION]
+====
+設定バックアップを復元すると、ヘルス状態、アラート、トポロジー履歴を含むすべてのトポロジーが削除されます。また、以前の設定はすべて削除され、API、UI、モニター、通知、トポロジー同期のためのダウンタイムが必要になります（数分に制限することができます）。データの収集と取り込みは、リストア中もアクティブなままである。
+====
+
+
+バックアップを復元するには
+
+. SUSE Observability用のコンテキストとネームスペースに接続していることを確認してください<<_working_with_configuration_backups,。>>
+. を使用して、利用可能なバックアップのリストを取得する。
++
+----
+./list-configuration-backups.sh
+----
+
+. バックアップファイルのリストから、復元したいバックアップを選択します。
+. リストアはまずStackGraphと相互作用するデプロイメントをスケールダウンし、その後バックアップをリストアする。これはrestoreコマンドの出力で追うことができる。以下のコマンドでバックアップをリストアします(`+yes+` に答えて、SUSE Observabilityからすべてのトポロジと設定を消去することを確認します)：
++
+----
+./restore-configuration-backup.sh sts-backup-your-choice.sty
+----
+
+. リストアが完了したら、デプロイメントを手動でスケールアップする必要がある：
++
+----
+./scale-up.sh
+----
+
+. しばらくすると、すべてのデプロイが実行されて準備が整い、SUSE Observabilityを再び使用できるようになります。
+
+=== 手動バックアップのトリガー
+
+バックアップは、サービスを中断することなく、いつでも作成することができます。Githubリポジトリにある`+backup-configuration-now.sh+` スクリプトを使えば、いつでもバックアップをトリガーできる。バックアップは、バックアップの日時を含む標準的な命名規則に従います。
+
+=== 設定バックアップのカスタマイズ
+
+MinIOを設定し、トポロジー、メトリクス、イベント、ログのバックアップを有効にすると、設定のバックアップをオブジェクトストレージに保存できます。xref:/setup/data-management/backup_restore/kubernetes_backup.adoc#_enable_backups[Kubernetesバックアップの]指示に従ってください。
+
+デフォルトでは365日分のバックアップが保持されるが、これはHelmの値で変更できる。また、設定バックアップを完全に無効にしたり、バックアップスケジュールをカスタマイズすることも可能です。バックアップの他の部分もカスタマイズできる：
+
+[,yaml]
+----
+backup:
+  configuration:
+    # backup.configuration.bucketName -- Name of the bucket to store configuration backups (needs to be a globally unique bucket when using Amazon S3).
+    bucketName: 'sts-configuration-backup'
+    # backup.configuration.maxLocalFiles -- The maximum number of configuration backup files stored on the PVC for the configuration backup (which is only of limited size, see backup.configuration.scheduled.pvc.size)
+    maxLocalFiles: 10
+    scheduled:
+      # backup.configuration.scheduled.enabled -- Enable scheduled configuration backups (if `+backup.enabled+` is set to `+true+`).
+      enabled: true
+      #_ backup.configuration.scheduled.schedule __ Cron schedule for automatic configuration backups in [Kubernetes cron schedule syntax](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/#cron-schedule-syntax).
+      schedule: '0 4 * * *'
+      # backup.configuration.scheduled.backupRetentionTimeDelta -- Time to keep configuration backups in object storage. The value is passed to GNU date tool to determine a specific date, and files older than this date will be deleted.
+      backupRetentionTimeDelta: '365 days ago'
+      pvc:
+        # backup.configuration.scheduled.pvc.size -- Size of volume for settings backup in the cluster
+        size: '1Gi'
+----
