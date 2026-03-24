@@ -1,0 +1,203 @@
+include::partial$variables.adoc[]
+
+= Scanner de auditoria - Relatórios de políticas
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Armazene e consulte os resultados da varredura da política do scanner de auditoria usando objetos Report ou ClusterReport em seu cluster Kubernetes.
+:doc-persona: [“kubewarden-user”, “kubewarden-operator”, “kubewarden-policy-developer”, “kubewarden-integrator”]
+:doc-topic: ["explicações", "scanner de auditoria", "relatórios de políticas"]
+:doc-type: ["explicação"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "audit scanner", "policy reports"].
+:sidebar_label: Relatórios de políticas
+:current-version: {page-origin-branch}
+
+Ao usar o {project-name} Audit Scanner, você armazena os resultados das varreduras de políticas usando o https://openreports.io/[OpenReports] Custom Resources.
+
+[CAUTION]
+====
+
+Com o {project-name} 1.33, o recurso Audit Scanner salva os relatórios em CRDs do OpenReports a partir de [openreports.io] (https://openreports.io) por padrão.
+
+Os CRDs dolink:https://htmlpreview.github.io/?https://github.com/kubernetes-sigs/wg-policy-prototypes/blob/045372e558b896695b2daae92e8c7a04d4d40282/policy-report/docs/index.html[PolicyReport]do grupo de trabalho do K8s Policy não são instalados por padrão, estão marcados como obsoletos e serão removidos em uma versão futura.
+
+Os usuários que desejam continuar usando os PolicyReports obsoletos, ou seja, o comportamento anterior à versão 1.33, precisam:- Alterar o valor do gráfico `+kubewarden-crds+` Helm de `+.Values.install.installPolicyReportCRDs+` para `+true+`. - Alterar o valor do gráfico `+kubewarden-controller+` Helm de `+.Values.auditScanner.reportCRDsKind+` de `+openreports+` para `+policyreport+`.
+
+====
+
+
+Esses CRDs do OpenReport oferecem uma maneira estruturada de armazenar e gerenciar os resultados da auditoria.
+
+Você armazena os resultados da verificação da política do scanner de auditoria usando `+Report+` e `+ClusterReport+`.
+O scanner de auditoria cria um `+Report+` ou um `+ClusterReport+` para cada recurso verificado, dependendo do escopo do recurso. Os objetos `+Report+` estão disponíveis no namespace do recurso, enquanto os objetos `+ClusterReport+` estão disponíveis no escopo do cluster.
+
+Os resultados de auditoria gerados pelo scanner incluem:
+
+* a política avaliada
+* o recurso digitalizado
+* o resultado da avaliação (aprovado, reprovado ou ignorado)
+* um registro de data e hora indicando quando a avaliação foi realizada.
+
+Você também pode definir anotações de gravidade e categoria para suas políticas.
+
+Os operadores podem consultar os relatórios usando o site `+kubectl+`. Eles também podem usar a interface de usuário opcional fornecida pelo projeto de código abertohttps://kyverno.github.io/policy-reporter[policy-reporter] para monitoramento e observabilidade dos CRDs do OpenReports.
+
+== Consultando os relatórios
+
+Usando a CLI do kubectl, é possível consultar os resultados da verificação:
+
+Lista os relatórios no namespace padrão:
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get report -o wide
+NAME                                   KIND   NAME            PASS   FAIL   WARN   ERROR   SKIP   AGE
+44da974b-6057-4745-a92c-9dd8a1b01cc4   Pod    nginx-secrets   6      1      0      0       0      33m
+----
+
+Liste os relatórios de todo o cluster:
+
+[source,console,subs="+attributes"]
+----
+$ kubectl get clusterreport -o wide
+NAME                                   KIND        NAME                 PASS   FAIL   WARN   ERROR   SKIP   AGE
+6c66175f-e15f-47e8-8c33-2c63d5ecde3e   Namespace   namespace1           3      1     0       0       0      1h
+d0ffbf4f-7348-4350-af7b-fdbfc079cc49   Namespace   namespace2           0      4     0       0       0      1h
+e48d9bbc-a9c4-4c36-8519-bc7390d9ec64   Namespace   namespace3           4      0     0       0       0      15h
+----
+
+Obtenha os detalhes de um relatório específico:
+
+[source,console,subs="+attributes"]
+----
+kubectl get report 44da974b-6057-4745-a92c-9dd8a1b01cc4 -o yaml
+----
+
+Obtenha os detalhes de um ClusterReport específico:
+
+[source,console,subs="+attributes"]
+----
+kubectl get clusterreport e48d9bbc-a9c4-4c36-8519-bc7390d9ec64 -o yaml
+----
+
+== Exemplo de relatório
+
+O exemplo a seguir mostra um `+Report+` para o recurso `+Deployment+``+deployment1+` no namespace `+default+`. O relatório indica que o `+Pod+`falhou na `+safe-labels+` AdmissionPolicy.
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: PolicyReport
+metadata:
+  creationTimestamp: “2024-02-29T06:55:37Z”
+  generation: 6
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  namespace: default
+  ownerReferences:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: deployment1
+      uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+  resourceVersion: “2685996”
+  uid: c5a88847-d678-4733-8120-1b83fd6330cb
+results:
+  - category: Resource validation
+    message: “The following mandatory labels are missing: cost-center”
+    policy: namespaced-default-safe-labels
+    properties:
+      policy-resource-version: “2684810”
+      policy-uid: 826dd4ef-9db5-408e-9482-455f278bf9bf
+      policy-name: “safe-labels”
+      policy-namespace: “default”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: deployment1
+  namespace: default
+  resourceVersion: “3”
+  uid: 009805e4-6e16-4b70-80c9-cb33b6734c82
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== Exemplo de ClusterReport
+
+O exemplo a seguir mostra um `+ClusterReport+` para o recurso `+Namespace+``+default+` . O relatório indica que o recurso falhou na validação do`+safe-annotations+` ClusterAdmissionPolicy.
+
+[source,yaml,subs="+attributes"]
+----
+apiVersion: wgpolicyk8s.io/v1beta1
+kind: ClusterPolicyReport
+metadata:
+  creationTimestamp: “2024-02-28T14:44:37Z”
+  generation: 3
+  labels:
+    app.kubernetes.io/managed-by: kubewarden
+    kubewarden.io/policyreport-version: v2
+  name: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  ownerReferences:
+    - apiVersion: v1
+      kind: Namespace
+      name: default
+      uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+  resourceVersion: “2403034”
+  uid: 20a3d00e-e955-4f21-a887-317d40f3f052
+results:
+  - category: Resource validation
+    message: “The following mandatory annotations are not allowed: owner”
+    policy: clusterwide-safe-annotations
+    properties:
+      policy-resource-version: “2396437”
+      policy-uid: 46780d6e-e51a-4d65-8572-a6af01380aa7
+      policy-name: “safe-annotations”
+      validating: “true”
+    resourceSelector: {}
+    result: fail
+    scored: true
+    severity: low
+    source: kubewarden
+    timestamp:
+      nanos: 0
+      seconds: 1709294251
+scope:
+  apiVersion: v1
+  kind: Namespace
+  name: default
+  resourceVersion: “37”
+  uid: 261c9492-deec-4a09-8aa9-cd464bb4b8d1
+summary:
+  error: 0
+  fail: 1
+  pass: 0
+  skip: 0
+  warn: 0
+----
+
+== Interface do usuário do Policy Reporter
+
+O Policy Reporter é fornecido como um subgráfico do site `+kubewarden-controller+`. Consulte a página xref:howtos/audit-scanner.adoc[Instalação do scanner de auditoria] para obter mais informações.
+
+A interface de usuário do Policy Reporter fornece um painel que mostra todas as violações. Veja a captura de tela abaixo:
+
+image::policy-reporter_dashboard.png[Exemplo de painel do Policy Reporter]
+
+{short-project-name} envia a interface de usuário do Policy Reporter com um filtro pré-configurado que mostra apenas as políticas do {short-project-name}, juntamente com informações expandidas:
+
+image::policy-reporter_policyreports.png[Exemplo de Policy Reporter PolicyReports]
+
+Outros recursos do Policy Reporter incluem o encaminhamento de resultados para diferentes clientes (como Grafana Loki, Elasticsearch, aplicativos de bate-papo), pontos de extremidade de métricas e muito mais. Consultehttps://kyverno.github.io/policy-reporter[os documentos da comunidade do] para obter mais informações.
