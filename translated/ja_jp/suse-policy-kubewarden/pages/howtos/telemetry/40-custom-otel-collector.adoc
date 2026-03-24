@@ -1,0 +1,322 @@
+include::partial$variables.adoc[]
+
+= カスタムOpenTelemetryコレクター
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} を構成して、クラスタ内に配置されたカスタム OpenTelemetry Collector に安全にテレメトリーデータを送信します。
+:keywords: kubewarden、kubernetes、メトリクス、トレース、opentelemetry
+:doc-persona: キューブウォーデンオペレーター、キューブウォーデンインテグレーター
+:doc-type: ハウツー
+:doc-topic: オペレーターマニュアル、テレメトリ、メトリクス、クイックスタート
+
+このガイドでは、{short-project-name} を設定して、すでにクラスタにデプロイされている OpenTelemetry コレクターにテレメトリーデータを送信する方法を説明します。
+
+クラスタには、https://opentelemetry.io/docs/collector/[OpenTelemetry Collectorの]インスタンスを1つだけデプロイする必要があります。
+
+== 依存関係をインストールする
+
+まず、OpenTelemetry Collector の依存関係をインストールすることから始めます。
+
+{project-name} コンポーネントとコレクター間の暗号化通信が必要である。https://cert-manager.io/[cert-managerを]使えば、安全な通信に必要なすべての証明書を管理できる。
+
+OpenTelemetry Collector のトレースはhttps://www.jaegertracing.io/[] Jaeger インスタンスに送られる。
+
+{short-project-name} スタックは、OpenTelemetry Collector にメトリクスを送信する。
+これはPrometheusのエンドポイントとしてメトリクスを公開するものだ。その後、メトリクスはPrometheusインスタンスによって収集され、データベースに保存される。同じPrometheusインスタンスは、メトリクスを表示して使用するためのUIも公開しています。
+
+作成したリソースは、`+kubewarden+` Namespaceで定義されるか、その存在を期待される。そのため、Namespaceの作成から始める必要がある：
+
+[source,console]
+----
+kubectl create namespace kubewarden
+----
+
+=== cert-managerとOpenTelemetryをインストールする。
+
+この方法でcert-managerとOpenTelemetry operatorをインストールする：
+
+[source,console]
+----
+helm repo add jetstack https://charts.jetstack.io
+helm install --wait \
+  --namespace cert-manager \
+  --create-namespace \
+  --set crds.enabled=true \
+  --version 1.18.2 \
+  cert-manager jetstack/cert-manager
+
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+helm install --wait \
+  --namespace open-telemetry \
+  --create-namespace \
+  --version 0.97.1 \
+  --set "manager.collectorImage.repository=otel/opentelemetry-collector-contrib" \
+  my-opentelemetry-operator open-telemetry/opentelemetry-operator
+----
+
+mTLS を使用して、{short-project-name} コンポーネントと OpenTelemetry Collector の間の通信をセットアップする。
+
+そのためには、公開鍵基盤（PKI）全体を作成する必要がある：
+
+[source,yaml]
+----
+# pki.yaml file
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-client-certificate
+  namespace: kubewarden
+spec:
+  dnsNames:
+  - kubewarden.kubewarden.svc
+  - kubewarden.kubewarden.svc.cluster.local
+  issuerRef:
+  kind: Issuer
+  name: my-selfsigned-issuer
+  secretName: my-client-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-certificate
+  namespace: kubewarden
+spec:
+  dnsNames:
+  - my-collector-collector.kubewarden.svc
+  - my-collector-collector.kubewarden.svc.cluster.local
+  issuerRef:
+  kind: Issuer
+  name: my-selfsigned-issuer
+  secretName: my-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: my-selfsigned-issuer
+  namespace: kubewarden
+spec:
+  selfSigned: {}
+----
+マニフェストを適用する：
+[source,console]
+----
+kubectl apply -f pki.yaml
+----
+
+=== イェーガーとプロメテウスをインストール
+
+その後、https://www.jaegertracing.io/[]Jaegerをインストールして、トレース・イベントを保存し、可視化する。
+
+[source,console]
+----
+helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+helm upgrade -i --wait \
+  --namespace jaeger \
+  --create-namespace \
+  --version 2.57.0 \
+  jaeger-operator jaegertracing/jaeger-operator \
+  --set rbac.clusterRole=true
+
+kubectl apply -f - <<EOF
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: my-open-telemetry
+  namespace: jaeger
+spec: {}
+EOF
+----
+
+OpenTelemetryのクイックスタートでTraefikをインストールした場合は、この`+Ingress+` ：
+
+[yaml]
+----
+kubectl apply -f - <<EOF apiVersion: networking.k8s.io/v1 kind：Ingress metadata: name: my-open-telemetry-query namespace: jaeger spec: ingressClassName: traefik rules：- http: paths: - path：パス: - path: / pathType：プレフィックス backend: service: name: my-open-telemetry-query port: number：16686
+EOF
+----
+
+ここで、https://prometheus.io/[Prometheusを]インストールして、メトリクスの保存と可視化を行う。
+
+[source,console]
+----
+cat <<EOF > kube-prometheus-stack-values.yaml
+prometheus:
+  additionalServiceMonitors:
+  - name: kubewarden
+    selector:
+    matchLabels:
+      app.kubernetes.io/instance: kubewarden.my-collector
+    namespaceSelector:
+    matchNames:
+      - kubewarden
+    endpoints:
+    - port: prometheus
+    interval: 10s
+EOF
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install --wait --create-namespace \
+  --namespace prometheus \
+  --version 77.13.0 \
+  --values kube-prometheus-stack-values.yaml \
+  prometheus prometheus-community/kube-prometheus-stack
+----
+
+[NOTE]
+====
+
+Prometheus サービスモニターは、`+kubewarden+` Namespace で実行されている OpenTelemetry コレクターをスクレイピングすることによって、{short-project-name} メトリクスを取得します。
+
+====
+
+== OpenTelemetryコレクターをインストールする
+
+カスタム OpenTelemetry Collector を`+kubewarden+`Namespace にデプロイできるようになりました。
+
+[source,yaml]
+----
+# otel-collector.yaml file
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: my-collector
+  namespace: kubewarden
+spec:
+  mode: deployment # This configuration is omittable.
+  volumes:
+  - name: server-certificate
+    secret:
+    secretName: my-server-cert
+  - name: client-certificate
+    secret:
+    secretName: my-client-cert
+  volumeMounts:
+  - name: server-certificate
+    mountPath: /tmp/etc/ssl/certs/my-server-cert
+    readOnly: true
+  - name: client-certificate
+    mountPath: /tmp/etc/ssl/certs/my-client-cert
+    readOnly: true
+  config:
+  receivers:
+    otlp:
+    protocols:
+      grpc:
+      tls:
+        cert_file: /tmp/etc/ssl/certs/my-server-cert/tls.crt
+        key_file: /tmp/etc/ssl/certs/my-server-cert/tls.key
+        client_ca_file: /tmp/etc/ssl/certs/my-client-cert/ca.crt
+  processors: {}
+  exporters:
+    debug:
+    verbosity: normal
+    prometheus:
+    endpoint: ":8080"
+    otlp/jaeger:
+    endpoint: "my-open-telemetry-collector.jaeger.svc.cluster.local:4317"
+    tls:
+      insecure: true
+  service:
+    pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: []
+      exporters: [debug, prometheus]
+    traces:
+      receivers: [otlp]
+      processors: []
+      exporters: [debug, otlp/jaeger]
+----
+マニフェストを適用する：
+[source,console]
+----
+kubectl apply -f otel-collector.yaml
+----
+
+このコンフィギュレーションでは、トレース・イベントを受け取り、それをイェーガーに転送するために、些細な処理パイプラインを使っている。また、メトリクスを受け取り、Prometheusによる収集のために公開する。
+
+mTLS を使用して、{short-project-name} スタックと OpenTelemetry Collector 間の通信をセキュアにします。しかし、OpenTelemetry CollectorとJaegerの間の通信は、例の複雑さを軽減するために、セキュリティで保護されていない。
+
+== {short-project-name} スタックをインストールする
+
+OpenTelemetry Collector が起動しているときは、通常の方法で{short-project-name} をデプロイできます。
+
+イベントとメトリクスを OpenTelemetry Collector に送信するように、{short-project-name} コンポーネントを設定する必要があります。
+
+[source,yaml]
+----
+# values.yaml
+telemetry:
+  mode: custom
+  metrics: True
+  tracing: True
+  custom:
+  endpoint: "https://my-collector-collector.kubewarden.svc:4317"
+  insecure: false
+  otelCollectorCertificateSecret: "my-server-cert"
+  otelCollectorClientCertificateSecret: "my-client-cert"
+----
+
+`+otelCollectorCertificateSecret+` キーが参照するシークレットには、`+ca.crt+` というエントリがなければならない。これは、OpenTelemetry Collector が使用する証明書を発行した CA の証明書を保持します。
+
+`+otelCollectorClientCertificateSecret+` キーが参照するシークレットには、`+tls.crt+` キーと`+tls.key+` キーのエントリーがなければならない。これらは、{short-project-name} スタックが OpenTelemetry Collector に対して認証するために使用するクライアント証明書とその鍵である。
+
+暗号化またはmTLSを使用しない場合は、これらの値を空のままにする。
+
+{short-project-name} スタックを取り付ける：
+
+[source,console]
+----
+helm install --wait \
+  --namespace kubewarden --create-namespace \
+  kubewarden-crds kubewarden/kubewarden-crds
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  --values values.yaml \
+  kubewarden-controller kubewarden/kubewarden-controller
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  kubewarden-defaults kubewarden/kubewarden-defaults \
+  --set recommendedPolicies.enabled=True \
+  --set recommendedPolicies.defaultPolicyMode=monitor
+----
+
+これですべてが整った。
+
+== イェーガーのUIを探る
+
+Jaeger のウェブ UI を使って、{short-project-name} が生成したトレースイベントを見ることができます。これらは`+kubewarden-policy-server+` サービスでグループ化されている：
+
+image::jaeger-custom-otel-collector.png[ジャガーのダッシュボード]
+
+TraefikでJaeger UIにアクセスするには、Traefikサービスをポートフォワードしてください：
+
+[source,console]
+----
+kubectl -n traefik port-forward service/traefik 8080:80
+----
+
+ウェブUIは`+\http://localhost:8080+` からアクセスできます。
+
+Traefikをバイパスしたい場合は、Jaeger Queryサービスを直接ポートフォワードしてください：
+
+[source,console]
+----
+kubectl -n jaeger port-forward service/my-open-telemetry-query 16686
+----
+
+ウェブUIは`+\http://localhost:16686+` からアクセスできます。
+
+== プロメテウスのUIを探る
+
+プロメテウスのUIには、ローカルマシンにポートフォワードすることでアクセスできます：
+
+[source,console]
+----
+kubectl port-forward -n prometheus --address 0.0.0.0 svc/prometheus-operated 9090
+----
+
+ウェブUIは`+\http://localhost:9090+` からアクセスできる。
+
