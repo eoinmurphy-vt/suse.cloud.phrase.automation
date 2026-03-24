@@ -1,0 +1,350 @@
+include::partial$variables.adoc[]
+= {project-name} スタックを本番用に設定する
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Kubernetesクラスタの{project-name} スタック内で、最適なスケジューリングと信頼性を実現するための許容範囲とアフィニティルールを設定します。
+:keywords: ["{project-name}", kubewarden, kubernetes, policyservers, production, poddisruptionbudget, affinity, limits, tolerations, priorityclass]。
+:doc-persona: キューブウォーデンオペレーター、キューブウォーデンインテグレーター
+:doc-type: ハウツー
+:doc-topic: operator-manual、policy-servers、production、poddisruptionbudget、affinity、limits、tolerations、priorityclass
+
+{project-name} は、Kubernetesクラスタにおけるコンポーネントの信頼性と正しいスケジューリングのための機能を提供する。このページのいくつかのヒントは、{short-project-name} を大規模に使用している{short-project-name} コミュニティのメンバーから得たものです。
+
+[IMPORTANT]
+====
+{short-project-name} を大規模に稼動させている実例を見たい方は、xref:/howtos/deploy-at-scale.adoc[{short-project-name} in a Large-Scale Environment]のドキュメントページをご覧ください。
+
+====
+
+== トレランスとアフィニティ／アンチアフィニティの設定
+
+`+tolerations+` 、`+affinity+` フィールドを使用することで、オペレータは{short-project-name}スタックのスケジューリングと信頼性を微調整し、特定の配備ニーズと制約を満たすことができる。正確なフィールドとその設定の詳細については、https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/[Kubernetes documentation on Taints and Tolerations]とhttps://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity[Affinity and Anti-Affinity]を参照してください。
+
+{short-project-name} スタックのバージョン 1.15 から、{short-project-name} Helm チャートには 2 つの新しい値が追加されました：
+
+* `+.global.tolerations+`
+* `+.global.affinity+`
+
+これらのHelmチャートの値によって、ユーザはコントローラのデプロイ、監査スキャナのcronjob、デフォルトの`+PolicyServer+` カスタムリソースを含む、{short-project-name} スタックのKubernetesの許容値とアフィニティ/アンチアフィニティの設定を定義できる。
+
+=== 許容範囲
+
+`+tolerations+` 値は、{short-project-name} コンポーネントの Kubernetes 許容値を指定できる配列です。トレレーションによって、ポッドはテイントが一致するノードにスケジューリングされる。これは、特にノードのメンテナンス、専用のワークロード、または特定のハードウェア要件が関係するシナリオで、ポッドをスケジュールできる場所を管理するのに便利です：
+
+[source,yaml]
+----
+global:
+  tolerations:
+    - key: "key1"
+      operator: "Equal"
+      value: "value1"
+      effect: "NoSchedule"
+    - key: "key2"
+      operator: "Equal"
+      value: "value2"
+      effect: "NoExecute"
+----
+
+この例では、定義された許容値は、コントローラデプロイメント、監査スキャナ cronjob、およびデフォルトの`+PolicyServer+` カスタムリソースに適用されます。
+
+=== 親和性／反親和性
+
+`+affinity+` の値により、{short-project-name} コンポーネントに対する Kubernetes アフィニティとアンチアフィニティのルールを定義することができる。アフィニティ・ルールはポッドを特定のノードに拘束し、アンチ・アフィニティ・ルールはポッドが特定のノードや他のポッドに近接してスケジュールされるのを防ぎます。これらの設定は、クラスタ内の高可用性、フォールトトレランス、およびリソース使用の最適化を確保するために役立ちます。
+
+[source,yaml]
+----
+global:
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: security
+                operator: In
+                values:
+                  - S1
+          topologyKey: topology.kubernetes.io/zone
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: security
+                  operator: In
+                  values:
+                    - S2
+            topologyKey: topology.kubernetes.io/zone
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                  - linux
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+              - key: label-1
+                operator: In
+                values:
+                  - key-1
+        - weight: 50
+          preference:
+            matchExpressions:
+              - key: label-2
+                operator: In
+                values:
+                  - key-2
+----
+
+この例では、アフィニティルールは、コントローラデプロイメント、監査スキャナ cronjob、およびデフォルトの`+PolicyServer+` カスタムリソースに適用されます。
+
+`+kubewarden-default+`Helmチャートで利用可能だった以前のアフィニティ・コンフィギュレーションは、`+PolicyServer+` のみのアフィニティ・コンフィギュレーションを定義するために使用されていたが、グローバルな`+affinity+`の値を使用するために削除された。この変更により、すべての{short-project-name} コンポーネントの親和性と反親和性のルールを定義する単一のアプローチが提供され、構成プロセスが簡素化される。
+
+[WARNING]
+====
+`+kubewarden-default+` Helmチャートの古い`+affinity+` コンフィギュレーションは削除されました。ユーザーは、`+.global.affinity+` フィールドを使用して、{short-project-name} スタック全体のアフィニティとアンチアフィニティの設定を行うべきである。
+====
+
+== priorityClasses の設定
+
+priorityClassesを使用することで、オペレータは{short-project-name} スタックのワークロードポッドにスケジューリングの優先順位を強制することができる。これにより、{short-project-name} ワークロードが他のワークロードよりも確実に利用できるようになり、立ち退きを防ぎ、サービスの信頼性を確保する。詳細については、https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/[Kubernetes documentation on Priorityclasses]を参照してください。
+
+{short-project-name} スタックのバージョン 1.25 以降、{short-project-name} Helm チャートは新しい値で出荷されます：
+
+* `+.global.priorityClassName+`
+
+この値でnameで定義したpriorityClassは、コントローラのデプロイメントポッドと、デフォルトの`+PolicyServer+` カスタムリソースのポッドに適用されます。
+
+`+.global.priorityClassName+` の値には、既存の PriorityClass の名前を指定します。例として
+
+[source,yaml]
+----
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: kubewarden-high-priority
+value: 1000000
+globalDefault: false
+description: "This priority class should be used for XYZ service pods only."
+----
+
+Kubernetesには、`+system-cluster-critical+` と`+system-node-critical+` という2つのPriorityClassが同梱されている。これらは一般的なクラスで、https://kubernetes.io/docs/tasks/administer-cluster/guaranteed-scheduling-critical-addon-pods/[重要なコンポーネントが常に最初にスケジュールされるようにする]ために使用される。
+
+[WARNING]
+====
+PriorityClassを削除した場合、削除されたPriorityClassの名前を使用する既存のPodは変更されませんが、削除されたPriorityClassの名前を使用する次のPodはKubernetesによって作成されません。
+====
+
+== `+PolicyServer+` プロダクションコンフィギュレーション
+
+`+PolicyServers+` はクラスターにとって重要である。これらの信頼性は、Validating WebhooksとMutating Webhooksを介してKubernetes API宛てのAdmission Requestsを処理する際に重要である。
+
+他のDynamic Admission Controllersと同様に、このプロセスはリクエストがKubernetes APIサーバーに到達する前に行われる。動的アドミッションコントローラによる遅延やサービスの遅れは、クラスタの不整合、サービス拒否、またはデッドロックを引き起こす可能性があります。
+
+{short-project-name} には、`+PolicyServers+` の信頼性を高める方法がいくつか用意されている。本番環境への配備は実にさまざまであり、ニーズに合わせて配備を構成するのはオペレータ次第である。
+
+=== PodDisruptionBudgets
+
+{short-project-name} コントローラは、`+PolicyServer+` ポッド用に、https://kubernetes.io/docs/tasks/run-application/configure-pdb/[PodDisruptionBudget]（PDB）を作成できる。これにより、`+PolicyServer+` に関連付けられている`+PolicyServer+`Pod レプリカの範囲が制御され、ノードのメンテナンス、スケーリング操作、またはクラスタのアップグレードの際に、高可用性と制御された立ち退きが保証されます。
+
+これは、`+spec.minAvailable+` 、または`+PolicyServer+` リソースの`+spec.maxUnavailable+`を設定することで実現する：
+
+* `+minAvailable+`: 常に利用可能でなければならない`+PolicyServer+` Pods の最小数を指定します。整数またはパーセントを指定する。
+
+  Useful for maintaining the operational integrity of the `+PolicyServer+`,
+  ensuring that policies are continuously enforced without interruption.
+
+* `+maxUnavailable+`: 任意の時点で利用できない`+PolicyServer+` Pods の最大数を指定します。整数またはパーセントを指定する。
+
+  Useful for performing rolling updates or partial maintenance without
+  fully halting the policy enforcement mechanism.
+
+[NOTE]
+====
+指定できるのは、`+maxUnavailable+` と`+minAvailable+` のどちらか一方のみです。
+====
+
+==== minAvailableまたはmaxUnavailableの設定
+
+.例minAvailableを設定する
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  minAvailable: 2 # ensure at least two policy-server Pods are available at all times
+----
+
+.例maxUnavailableを設定する
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  maxUnavailable: "30%" # ensure no more than 30% of policy-server Pods are unavailable at all times
+----
+
+=== 親和性／反親和性
+
+{short-project-name} コントローラーは、`+PolicyServer+` ポッドの親和性を設定できる。これにより、特定のノードに対するPodの制約や、他のPodに対するPodの制約が可能になる。Affinityの詳細については、https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity[Kubernetes docs]を参照。
+
+Kubernetesのアフィニティ設定により、Podをノードに制約したり（`+spec.affinity.nodeAffinity+` 経由）、Podを他のPodに制約したり（`+spec.affinity.podAffinity+` 経由）できる。親和性は、ソフトな制約（`+preferredDuringSchedulingIgnoredDuringExecution+` ）またはハードな制約（`+requiredDuringSchedulingIgnoredDuringExecution+` ）として設定することができる。
+
+ノードのラベル（例：`+topology.kubernetes.io/zone+` を`+antarctica-east1+` に設定）やポッドのラベルなど、特定のラベルに対する親和性/反親和性マッチ。`+PolicyServer+` の定義から作成されたポッドには、ラベル`+kubewarden/policy-server+` が`+PolicyServer+` の名前に設定されます（例：`+kubewarden/policy-server: default+` ）。
+
+[NOTE]
+====
+ポッド間のアフィニティ/アンチアフィニティはかなりの処理量を必要とするため、数百ノード以上のクラスタでは推奨されません。
+====
+
+`+PolicyServer+` にアフィニティを設定するには、`+spec.affinity+`フィールドを設定する。このフィールドは、Podの`+spec.affinity+` の内容と一致するYAMLオブジェクトを受け入れます。
+
+==== アフィニティ／アンチアフィニティの設定
+
+.例`+PolicyServer+` Podsをゾーンとホスト名に分散させる
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: topology.kubernetes.io/zone
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: kubernetes.io/hostname
+----
+
+.例コントロールプレーンノードの`+PolicyServer+` ポッドのみをスケジュールする。
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: node-role.kubernetes.io/control-plane
+----
+
+=== 制限とリクエスト
+
+{short-project-name} コントローラは、`+PolicyServer+` Pods のリソース制限と要求を設定できる。これは、`+PolicyServer+` Podsに関連付けられた各コンテナが必要とする各リソースの量を指定します。`+PolicyServers+` については、`+cpu+` と`+memory+` のリソースのみが関連する。詳しくはリソースユニットに関するhttps://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#resource-units-in-kubernetes[Kubernetes docs] を参照のこと。
+
+これは、以下の`+PolicyServer+` リソースフィールドを設定することで実現する：
+
+* `+spec.limits+`:コンテナ・ランタイムによって強制されるリソースの制限。ランタイムによって制限の実装方法は異なる。
+* `+spec.requests+`:各コンテナに確保するリソース量。コンテナが`+request+` より多くのリソースを使用することは可能であり、許可されている。
+
+  If omitted, it defaults to `+spec.limits+` if that is set (unless
+  `+spec.requests+` of containers is set to some defaults via an admission
+  mechanism).
+
+[NOTE]
+====
+`+PolicyServers+` のリソースのコミット不足は、クラスタの信頼性の問題を引き起こす可能性があります。
+====
+
+==== リミットとリクエストの設定
+
+.例`+PolicyServer+` 各コンテナにハードリミットを設定
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  limits:
+    cpu: 500m
+    memory: 1Gi
+----
+
+=== 優先クラス
+
+{short-project-name} コントローラは、`+PolicyServers+` のポッドに使用する PriorityClass を設定できる。これは、`+PolicyServer+` ワークロードが優先的にスケジューリングされ、立ち退きを防ぎ、サービスの信頼性を確保することを意味する。https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/[Kubernetes docs for more information]を参照のこと。
+
+[WARNING]
+====
+PriorityClassを削除した場合、削除されたPriorityClassの名前を使用する既存のPodは変更されませんが、削除されたPriorityClassの名前を使用する次のPodはKubernetesによって作成されません。
+====
+
+==== PriorityClassesの設定
+
+.例デフォルトの`+system-cluster-critical+` priorityClassを使用：
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  priorityClassName: system-cluster-critical
+----
+
+=== ポリシーのワークロードを分離する
+
+スケール時の安定性と高いパフォーマンスを確保するために、ユーザーは、異なるワークロードを分離するために別々の*`+PolicyServer+`*デプロイメントを実行することができます。
+
+* *コンテクスト・アウェア・ポリシーに`+PolicyServer+` ：*これらのポリシーは、Kubernetes APIサーバーや、Sigstore、OCIレジストリなどの外部サービスに問い合わせるため、よりリソースを消費する。隔離することで、遅いポリシーが他の速いポリシーのボトルネックになるのを防ぐことができる。
+* *All Other Policiesには別の`+PolicyServer+` ：*最も一般的なアドミッションリクエストに対して低レイテンシーを保証するために、通常の自己完結型のポリシーを別のサーバーで実行します。
+
+仕事量をさらに分割することも考えられる。たとえば、実行に時間がかかり、より大きな実行タイムアウトを必要とするポリシーがある場合は、専用の`+PolicyServer+` に移動することを検討してください。こうすることで、ポリシーが他のリクエストを評価するワーカーをブロックしないようにする。
+
+=== リソース配分とスケーリング
+
+高いトラフィックを処理し、可用性を確保するには、十分なリソースを提供し、レプリカをスケールさせる。
+
+* *十分なリソースを割り当てる：*トラフィックの多い環境では、各レプリカに余裕のあるリソースを割り当ててください。CPUやメモリーの不足はリクエストタイムアウトの主な原因なので、`+PolicyServers+` を飢餓状態にしないこと。`+PolicyServers+` 、コントロール・プレーンと{short-project-name} 監査スキャナからのリクエストを受け取ることを覚えておいてほしい。
+* *高可用性のためのスケール：*毎秒数百のリクエストを処理するデプロイメントでは、多数のレプリカを実行する。これにより負荷が効果的に分散され、少数のポッドの障害がクラスタの運用に影響を与えないようになる。
+
+3-5レプリカのベースラインから始め、CPUとメモリの使用量を監視する。必要に応じてレプリカの数を調整する。
+
+=== 規模に応じた効果的な監査
+
+大規模クラスタ上で効率的に監査を実行するには、パフォーマンスと並列性のために監査スキャナを微調整する。
+
+* *定期的に監査を行う：*頻繁にスキャンを実行することで、コンフィギュレーションのドリフトをキャッチすることと、APIサーバーの負荷を最小限に抑えることのバランスをとることができる。
+* *並列性を積極的に調整する：*高速監査の鍵は並列化だ。並列度を高く設定すれば、大規模クラスタの監査時間を1時間強に短縮できる。
+
+[WARNING]
+====
+監査スキャナーは`+PolicyServers+` にリクエストを送ることを覚えておくことが重要だ。したがって、その並列性は`+PolicyServer+`のパフォーマンスに影響を与える可能性がある。大きなクラスタでスキャン時間を短縮するために積極的な並列処理を行いたい場合は、アドミッションコントローラのパフォーマンスに影響を与えないように、利用可能なポリシーサーバリソースを増やす必要があるかもしれません。
+====
+
+ログから監査結果を消費し、クラスタ内のポリシー`+Reports+` や`+ClusterReports+` カスタムリソースを必要としない場合は、`+disableStore: true+` を設定して負荷を軽減します。
