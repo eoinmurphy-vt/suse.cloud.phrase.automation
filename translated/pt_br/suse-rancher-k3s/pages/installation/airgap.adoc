@@ -1,0 +1,255 @@
+= Instalação do Air-Gap
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Este guia o orienta na instalação dos K3s em um ambiente com porta de ar usando um processo de três etapas.
+
+[IMPORTANT]
+====
+Você pode usar qualquer versão do K3s Prime listada no URL do Prime Artifacts para os ativos mencionados nestas etapas. Para saber mais sobre o URL do Prime Artifacts, consulte https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[a documentação exclusiva do Prime em]. A autenticação é necessária. Use suas credenciais https://scc.suse.com/home[do] para fazer login.
+====
+
+== Carregar imagens
+
+Cada método de carregamento de imagem tem requisitos diferentes e é adequado para diferentes cenários de air-gap. Escolha o método que melhor se adapta à sua infraestrutura e aos requisitos de segurança.
+
+[tabs,sync-group-id=airgap-load-images]
+======
+Método de registro privado::
++
+--
+Essas etapas pressupõem que você já criou nós no seu ambiente air-gap, está usando o containerd incluído como tempo de execução do contêiner e tem um registro privado compatível com OCI disponível no seu ambiente.
+
+Se ainda não tiver configurado um registro privado do Docker, consulte a https://docs.docker.com/registry/deploying/#run-an-externally-accessible-registry[documentação oficial do Registro em].
+
+[#_create_the_registry_yaml_and_push_images]
+[pass]
+<h3><a class="anchor" id="_create_the_registry_yaml_and_push_images" href="#_create_the_registry_yaml_and_push_images"></a>Criar o YAML do registro e enviar imagens</h3>
+
+
+. Obtenha o arquivo de imagens para sua arquitetura na página de https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL do] para a versão do K3s que você estará executando.
+. Use `+docker image load k3s-airgap-images-amd64.tar.zst+` para importar imagens do arquivo tar para o docker.
+. Use `+docker tag+` e `+docker push+` para reetiquetar e enviar as imagens carregadas para o seu registro privado.
+. Siga o guia xref:installation/private-registry.adoc[Private Registry Configuration] para criar e configurar o arquivo `+registries.yaml+`.
+. Prossiga para a seção <<_install_k3s,Instalar o K3s>> abaixo.
+--
+
+Método de implantação manual de imagens::
++
+--
+Essas etapas pressupõem que você já tenha criado nós no seu ambiente air-gap, esteja usando o containerd incluído como tempo de execução do contêiner e não possa ou não queira usar um registro privado.
+
+Esse método requer a implantação manual das imagens necessárias em cada nó e é adequado para implantações de borda em que a execução de um registro privado não é prática.
+
+[#_prepare_the_images_directory_and_airgap_image_tarball]
+[pass]
+<h3><a class="anchor" id="_prepare_the_images_directory_and_airgap_image_tarball" href="#_prepare_the_images_directory_and_airgap_image_tarball"></a>Preparar o diretório de imagens e o tarball de imagens do Airgap</h3>
+
+. Em um computador com acesso à Internet, faça o download do arquivo de imagens para a sua arquitetura na página de https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL do] para a versão do K3s que planeja instalar. Por exemplo:
++
+[,bash]
+----
+curl -L -o k3s-airgap-images-amd64.tar.zst "<PRIME-ARTIFACTS-URL>/k3s/v1.35.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+----
+
+. Transfira o arquivo de imagens para os nós do airgap. Coloque-os no diretório de imagens do agente, por exemplo:
++
+[,bash]
+----
+sudo mkdir -p /var/lib/rancher/k3s/agent/images/
+sudo curl -L -o /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst ""https://github.com/k3s-io/k3s/releases/download/v1.33.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst"
+sudo cp k3s-airgap-images-amd64.tar.zst /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+----
+
+. Prossiga para a seção <<_install_k3s,Instalar o K3s>> abaixo.
+ 
+[#_enable_conditional_image_imports]
+[pass]
+<h3><a class="anchor" id="_enable_conditional_image_imports" href="#_enable_conditional_image_imports"></a>Habilitar importações condicionais de imagens</h3>
+
+[IMPORTANT]
+.Versão Gate
+====
+A importação condicional de imagens está disponível a partir das versões de maio de 2025: v1.33.1+k3s1, v1.32.5+k3s1, v1.31.9+k3s1, v1.30.13+k3s1.
+====
+
+Os arquivos de imagem são importados sempre que o k3s é iniciado. Isso é feito para garantir que todas as imagens estejam disponíveis de forma consistente, mesmo que algumas imagens tenham sido removidas ou podadas desde a última inicialização. No entanto, isso atrasa a inicialização, pois o kubelet não é iniciado até que todos os arquivos tenham sido processados. Para aliviar esse atraso, há uma opção para importar apenas os tarballs que foram alterados desde a última importação, mesmo após a reinicialização.
+
+Para ativar esse recurso, crie um arquivo `+.cache.json+` no diretório de imagens:
+
+[,bash]
+----
+touch /var/lib/rancher/k3s/agent/images/.cache.json
+----
+
+O arquivo de cache armazenará os metadados do arquivo à medida que os arquivos forem processados. As reinicializações subsequentes do K3s não importarão as imagens, desde que o tamanho e o tempo de modificação do arquivo permaneçam os mesmos.
+
+[WARNING]
+====
+Quando esse recurso estiver ativado, não será possível garantir que todas as imagens estejam disponíveis sempre que o k3s for iniciado. Se uma imagem foi removida ou podada desde a última inicialização, execute uma ação manual para reimportar a imagem. Ou:
+
+* Importe manualmente o arquivo com `+ctr image import+`.
+* Use `+touch+` para modificar o registro de data e hora do arquivo que contém a imagem.
+* Limpe o conteúdo do arquivo `+.cache.json+` e reinicie o k3s.
+====
+--
+
+Espelho de registro incorporado::
++
+--
+O K3s inclui um espelho de registro em conformidade com a OCI distribuído e incorporado.
+Quando ativadas e configuradas corretamente, as imagens disponíveis no armazenamento de imagens do containerd em qualquer nó podem ser extraídas por outros membros do cluster sem acesso a um registro de imagens externo.
+
+As imagens espelhadas podem ser obtidas de um registro upstream, espelho de registro ou tarball de imagem airgap.
+Para obter mais informações sobre como ativar o espelho de registro distribuído incorporado, consulte a documentação xref:installation/registry-mirror.adoc[do Embedded Registry Mirror].
+--
+======
+
+[#_install_k3s]
+== Instalar o K3s
+
+=== Pré-requisitos
+
+Antes de instalar o K3s, escolha uma das opções xref:#_load_images[Load Images] acima para preencher previamente as imagens que o K3s precisa instalar.
+
+==== Faça o download do binário e do script
+
+* Faça o download do binário do K3s na página de https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL do], correspondendo à mesma versão usada para obter as imagens do airgap. Coloque o binário em `+/usr/local/bin+` em cada nó com air-gap e verifique se ele é executável.
++
+[,bash]
+----
+sudo curl -Lo /usr/local/bin/k3s <PRIME-ARTIFACTS-URL>/k3s/v1.35.1%2Bk3s1/k3s
+sudo chmod +x /usr/local/bin/k3s
+----
+
+* Faça o download do script de instalação do K3s em https://get.k3s.io[get.k3s.io]. Coloque o script de instalação em qualquer lugar em cada nó com air-gap e nomeie-o como `+install.sh+`.
++
+[,bash]
+----
+curl -Lo install.sh https://get.k3s.io
+chmod +x install.sh
+----
+
+.**Set Default Network Route (Definir rota de rede padrão** ) - necessário para nós sem uma rota padrão
+[%collapsible]
+======
+Se os nós não tiverem uma interface com uma rota padrão, uma rota padrão deverá ser configurada; até mesmo uma rota black-hole por meio de uma interface fictícia será suficiente. O K3s requer uma rota padrão para detectar automaticamente o IP primário do nó e para que o roteamento kube-proxy ClusterIP funcione corretamente. Para adicionar uma rota fictícia, faça o seguinte:
+
+[,bash]
+----
+ip link add dummy0 type dummy
+ip link set dummy0 up
+ip addr add 203.0.113.254/31 dev dummy0
+ip route add default via 203.0.113.255 dev dummy0 metric 1000
+----
+======
+
+.**Faça o download do SELinux RPM** - necessário para nós airgapped com o SELinux ativado
+[%collapsible]
+======
+Se estiver executando em um nó air-gapped com o SELinux ativado, você deverá instalar manualmente o RPM k3s-selinux antes de instalar o K3s. Esse RPM inclui as políticas SELinux necessárias para que o K3s seja executado corretamente. A versão mais recente do RPM pode ser encontrada https://github.com/k3s-io/k3s-selinux/releases/latest[em]. Por exemplo, no CentOS 8:
+
+[,bash]
+----
+# On an internet accessible machine:
+curl -LO https://github.com/k3s-io/k3s-selinux/releases/download/v1.6.stable.1/k3s-selinux-1.6-1.el8.noarch.rpm
+
+# Transfer RPM to air-gapped machine
+sudo yum install ./k3s-selinux-1.6-1.el8.noarch.rpm
+----
+
+A instalação do RPM do k3s-selinux requer que as seguintes dependências estejam disponíveis no sistema operacional:
+
+* container-selinux
+* Utilitários de núcleo de política
+* Política do selinux
+
+Consulte a seção xref:advanced.adoc#_selinux_support[SELinux] para obter mais informações.
+======
+
+=== Executando o script de instalação
+
+Você pode instalar o K3s em um ou mais servidores, conforme descrito abaixo.
+
+[tabs,sync-group-id=airgap-install]
+======
+Configuração de servidor único::
++
+--
+Para instalar o K3s em um único servidor, basta fazer o seguinte no nó do servidor:
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true ./install.sh
+----
+
+Para adicionar outros agentes, faça o seguinte em cada nó de agente:
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true K3S_URL=https://<SERVER_IP>:6443 K3S_TOKEN=<YOUR_TOKEN> ./install.sh
+----
+--
+
+Configuração de alta disponibilidade::
++
+--
+Consulte os guias xref:datastore/ha.adoc[Alta disponibilidade com um banco de dados externo] ou xref:datastore/ha-embedded.adoc[Alta disponibilidade com banco de dados incorporado]. Você ajustará os comandos de instalação para especificar `+INSTALL_K3S_SKIP_DOWNLOAD=true+` e executar o script de instalação localmente em vez de via curl. Você também utilizará o site `+INSTALL_K3S_EXEC='args'+` para fornecer quaisquer argumentos aos k3s.
+
+Por exemplo, a etapa dois do guia Alta disponibilidade com um banco de dados externo menciona o seguinte:
+
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server \
+  --token=SECRET \
+  --datastore-endpoint="mysql://username:password@tcp(hostname:3306)/database-name"
+----
+
+Em vez disso, você modificaria esses exemplos como abaixo:
+
+[,bash]
+----
+INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='server --token=SECRET' \
+K3S_DATASTORE_ENDPOINT='mysql://username:password@tcp(hostname:3306)/database-name' \
+./install.sh
+----
+--
+======
+
+[NOTE]
+====
+O sinalizador `+--resolv-conf+` do K3s é transmitido para o kubelet, o que pode ajudar a configurar a resolução de DNS do pod em redes de air gap em que o host não tem servidores de nomes upstream configurados.
+====
+
+== Atualização
+
+[tabs,sync-group-id=airgap-upgrade]
+======
+Atualização manual::
++
+--
+A atualização de um ambiente de air-gap pode ser realizada da seguinte maneira:
+
+. Faça o download das novas imagens de air-gap (arquivo tar) na página de https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL do] para a versão do K3s para a qual você fará a atualização. Coloque o tar no diretório `+/var/lib/rancher/k3s/agent/images/+` em cada nó. Exclua o arquivo tar antigo.
+. Copie e substitua o binário antigo do K3s em `+/usr/local/bin+` em cada nó. Copie o script de instalação em https://get.k3s.io (pois é possível que ele tenha sido alterado desde a última versão). Execute o script novamente da mesma forma que você fez no passado, com as mesmas variáveis de ambiente.
+. Reinicie o serviço do K3s (se não tiver sido reiniciado automaticamente pelo instalador).
+--
+
+Método de upgrades automatizados::
++
+--
+O K3s oferece suporte a xref:upgrades/automated.adoc[upgrades automatizados]. Para habilitar isso em ambientes com air-gap, você deve garantir que as imagens necessárias estejam disponíveis no seu registro privado.
+
+Você precisará da versão do rancher/k3s-upgrade que corresponde à versão do K3s para a qual pretende fazer o upgrade. Observe que a tag de imagem substitui o `+++` na versão K3s por um `+-+` porque as imagens do Docker não são compatíveis com `+++`.
+
+Você também precisará das versões do system-upgrade-controller e do kubectl que estão especificadas no manifesto YAML do system-upgrade-controller que você implantará. Verifique a versão mais recente do system-upgrade-controller https://github.com/rancher/system-upgrade-controller/releases/latest[aqui] e faça o download do system-upgrade-controller.yaml para determinar as versões que você precisa enviar para o seu registro privado. Por exemplo, na versão v0.4.0 do system-upgrade-controller, essas imagens são especificadas no manifesto YAML:
+
+----
+rancher/system-upgrade-controller:v0.4.0
+rancher/kubectl:v0.17.0
+----
+
+Depois de adicionar as imagens rancher/k3s-upgrade, rancher/system-upgrade-controller e rancher/kubectl necessárias ao seu registro privado, siga o guia de xref:upgrades/automated.adoc[upgrades automatizados].
+--
+======
