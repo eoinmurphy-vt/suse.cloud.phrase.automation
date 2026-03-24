@@ -1,0 +1,166 @@
+include::partial$variables.adoc[]
+= 验证入场政策迁移
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 通过 kwctl 命令的迁移步骤将 ValidatingAdmissionPolicy 迁移到{project-name} ，以实现策略的平稳过渡。
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-distributor", "kubewarden-integrator"]
+:doc-topic: ["vap-migration"]
+:doc-type: ["howto"]
+:doctype: book
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "cel", "vap", "validatingadmissionpolicy"]
+:current-version: {page-origin-branch}
+
+从 Kubernetes v1.26 版开始，https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/[ValidatingAdmissionPolicy]提供了一种在 Kubernetes 中编写自定义准入策略的方法。这些策略是用https://cel.dev/[Common Expression Language (CEL)] 编写的，并使用一些https://kubernetes.io/docs/reference/using-api/cel/[Kubernetes 专用扩展进行了扩展]。
+ValidatingAdmissionPolicy 在 Kubernetes v1.30 中达到稳定。
+
+{project-name} 提供的 CEL 策略能够在不做任何修改的情况下运行 Kubernetes VAP 策略。
+有关 CEL 政策的更多信息，请参阅{short-project-name} 文档的xref:../tutorials/writing-policies/CEL/01-intro-cel.adoc[这一部分]。
+xref:tutorials/writing-policies/CEL/01-intro-cel.adoc#_benefits_of_kubewardens_cel_policy_in_comparison_with_validatingadmissionpolicies[本段]介绍了使用{short-project-name} 运行 VAP 策略的好处。
+
+本指南介绍如何使用`+kwctl+` 工具将 VAP 策略迁移到{short-project-name} 。
+
+== 迁移步骤
+
+[NOTE]
+====
+您必须使用`+kwctl+` 1.14.0 或更高版本才能使用本指南。
+====
+
+
+给定一个包含`+ValidatingAdmissionPolicy+` YAML 定义的文件：
+
+.`+ValidatingAdmissionPolicy+` 范围
+[%collapsible]
+======
+[subs="+attributes",yaml]
+----
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: "force-liveness-probe"
+spec:
+  failurePolicy: Fail
+  variables:
+    - name: containers_without_liveness_probe
+      expression: |
+        object.spec.template.spec.containers.filter(c, !has(c.livenessProbe)).map(c, c.name)
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  validations:
+    - expression: |
+        size(variables.containers_without_liveness_probe) == 0
+      messageExpression: |
+        'These containers are missing a liveness probe: ' + variables.containers_without_liveness_probe.join(' ')
+      reason: Invalid
+----
+======
+
+以及一个包含`+ValidatingAdmissionPolicyBinding+` 资源的文件：
+
+.`+ValidatingAdmissionPolicyBinding+` 范围
+[%collapsible]
+======
+[subs="+attributes",shell]
+----
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: "kw-scaffold-demo"
+spec:
+  policyName: "force-liveness-probe"
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        docs.kubewarden.io/vap-migration: enabled
+----
+
+======
+
+您可以按照以下步骤将策略迁移到{short-project-name} ：
+
+.`+kwctl+` 命令进行策略迁移
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+$ kwctl scaffold vap \
+    -p vap.yml \
+    -b vap-binding.yml
+----
+
+======
+
+该命令的输出结果与此类似：
+
+.迁移输出
+[%collapsible]
+======
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: kw-scaffold-demo
+spec:
+  module: ghcr.io/kubewarden/policies/cel-policy:latest
+  settings:
+    failurePolicy: Fail
+    variables:
+      - expression: |
+          object.spec.template.spec.containers.filter(c, !has(c.livenessProbe)).map(c, c.name)
+        name: containers_without_liveness_probe
+    validations:
+      - expression: |
+          size(variables.containers_without_liveness_probe) == 0
+        messageExpression: |
+          'These containers are missing a liveness probe: ' + variables.containers_without_liveness_probe.join(' ')
+        reason: Invalid
+  rules:
+    - apiGroups:
+        - apps
+      apiVersions:
+        - v1
+      resources:
+        - deployments
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+  namespaceSelector:
+    matchLabels:
+      docs.kubewarden.io/vap-migration: enabled
+----
+======
+
+[NOTE]
+====
+
+该命令会警告用户使用`+latest+` 版本的 CEL 策略：
+
+[subs="+attributes",console]
+----
+024-06-24T16:00:16.516062Z  WARN kwctl::scaffold:
+  Using the 'latest' version of the CEL policy could lead to unexpected behavior.
+  It is recommended to use a specific version to avoid breaking changes.
+----
+
+建议使用特定版本，以避免破坏性更改。
+
+您可以使用`+--cel-policy+` 标志这样做：
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold vap \
+    --cel-policy ghcr.io/kubewarden/policies/cel-policy:v1.0.1 \
+    -p vap.yml \
+    -b vap-binding.yml
+----
+
+====
