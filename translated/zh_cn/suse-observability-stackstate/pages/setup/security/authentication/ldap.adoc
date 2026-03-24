@@ -1,0 +1,153 @@
+= LDAP
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 概述
+
+SUSE Observability 可使用 LDAP 服务器（包括 AD）进行身份验证，并从中获取角色/群组。它确实需要一个可访问 SUSE Observability 的正在运行的 LDAP 服务器。
+
+将检查 LDAP 主目录和所有子目录中的用户文件。SUSE Observability 配置中的绑定凭证用于在 LDAP 服务器上验证 SUSE Observability。身份验证后，SUSE Observability 会为要登录 SUSE Observability 的用户传递 LDAP 目录的顶层名称。
+
+== 为 LDAP 配置 SUSE Observability
+
+=== Kubernetes
+
+要配置 SUSE Observability 在 Kubernetes 上使用 LDAP 身份验证服务器进行身份验证，需要在文件`+authentication.yaml+` 中添加 LDAP 详情和用户角色映射。例如
+
+[tabs]
+====
+authentication.yaml::
++
+--
+
+[,yaml]
+----
+stackstate:
+  authentication:
+    ldap:
+      host: sts-ldap
+      port: 10389 # For most LDAP servers 389 for plain, 636 for ssl connections
+      #ssl:
+      #  sslType: ssl
+      #  trustStore: <see below>
+      #  trustCertificates <see below>
+      bind:
+        dn: "cn=admin,ou=employees,dc=acme,dc=com"
+        password: "password"
+      userQuery:
+        parameters:
+          - ou: employees
+          - dc: acme
+          - dc: com
+        usernameKey: cn
+        emailKey: mail
+      groupQuery:
+        parameters:
+          - ou: groups
+          - dc: acme
+          - dc: com
+        rolesKey: cn
+        groupMemberKey: member
+        # to return all nested groups, use:
+        # groupMemberKey: "member:1.2.840.113556.1.4.1941:"
+
+    # map the groups from LDAP to the
+    # standard subjects in SUSE Observability (guest, powerUser and admin)
+    roles:
+      guest: ["ldap-guest-role-for-stackstate"]
+      powerUser: ["ldap-power-user-role-for-stackstate"]
+      admin: ["ldap-admin-role-for-stackstate"]
+----
+
+--
+====
+
+请按照以下步骤配置 SUSE Observability 以使用 LDAP 进行身份验证：
+
+. 在`+authentication.yaml+` 中 - 添加 LDAP 详细信息（见上面的示例）：
+ ** *host*- LDAP 服务器的主机名。
+ ** *port*- LDAP 服务器监听的端口。
+ ** *sslType*- 可选。LDAP 安全连接类型`+ssl+` 或`+startTls+` 。如果使用普通 LDAP 连接，则省略。
+ ** *trustCertificates*- 可选，用于 SSL 的证书文件。支持 PEM、DER 和 PKCS7 格式。
+ ** *trustStore*- 可选，用于 SSL 的 Java 信任存储文件。如果同时指定`+trustCertificates+` 和`+trustStore+` ，则`+trustCertificatesPath+` 优先。
+ ** *bind*- 可选，如果 LDAP 服务器不支持匿名 LDAP 搜索，则用于验证 SUSE Observability 与 LDAP 服务器的身份。
+ ** *userQuery 参数和 groupQuery 参数*- 这组参数与 LDAP 的基本 dn 对应，在 LDAP 中可以找到用户和组。第一个用于在 SUSE Observability 中验证用户身份，第二个用于检索该用户的组，以确定该用户是管理员、高级用户还是访客。
+ ** *usernameKey*- 保存用户名的属性名称，其值与登录屏幕上提供的用户名相匹配。
+ ** *emailKey*- 在 SUSE Observability 中用作电子邮件地址的属性名称。
+ ** *rolesKey*- 保存组名称的属性名称。
+ ** *groupMemberKey*- 表示用户是否为某个组的成员的属性名称。构建的 LDAP 过滤器遵循以下模式：`+<groupMemberKey>=<user.dn>,ou=groups,dc=acme,dc=com+`.要返回所有嵌套组，请使用`+groupMemberKey: "member:1.2.840.113556.1.4.1941:"+` 。
+. 在`+authentication.yaml+` - 将 LDAP 中的用户角色映射到正确的 SUSE Observability 主题（请参阅上面的示例）：
+ ** *角色*- 有关详细信息，请参阅xref:/setup/security/rbac/rbac_permissions.adoc#_predefined_roles[默认 SUSE Observability 角色]。还可以创建更多 SUSE Observability 角色，请参阅xref:/setup/security/rbac/README.adoc[RBAC 文档]。
+. 将文件`+authentication.yaml+` 与 SUSE Observability 安装说明中的`+values.yaml+` 一起保存。
+. 运行 Helm 升级以应用更改。如果使用带有自定义证书的 SSL，则应通过命令行设置连接到 LDAP 时应使用的二进制证书文件，请使用*带有自定义证书的 SSL* 下的命令：
+
+[,text]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values values.yaml \
+  --values authentication.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
+
+*trustCertificates*
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values values.yaml \
+  --values authentication.yaml \
+  --set-file stackstate.authentication.ldap.ssl.trustCertificates=./ldap-certificate.pem \
+suse-observability \
+suse-observability/suse-observability
+----
+
+*trustStore*
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values values.yaml \
+  --values authentication.yaml \
+  --set-file stackstate.authentication.ldap.ssl.trustStore=./ldap-cacerts \
+suse-observability \
+suse-observability/suse-observability
+----
+
+[NOTE]
+====
+*请注意：*
+
+* 首次运行 helm upgrade 命令会导致 pod 重新启动，这可能会造成短暂的可用性中断。
+* 在`+helm upgrade+` 的每次运行中都包含`+authentication.yaml+` 。
+* 身份验证配置存储为 Kubernetes 秘密。
+====
+
+
+=== 使用外部秘密
+
+当ldap 密码来自外部秘密时，请按照以下xref:/setup/security/external-secrets.adoc#_getting_authentication_data_from_an_external_secret[步骤]操作，但要填写以下数据：
+
+[,yaml]
+----
+kind: Secret
+metadata:
+   name: "<custom-secret-name>"
+type: Opaque
+data:
+  ldap_password: <base64 of ldap password>
+----
+
+== 另见
+
+* xref:/setup/security/authentication/authentication_options.adoc[验证选项]
+* xref:/setup/security/rbac/rbac_permissions.adoc#_predefined_roles[预定义 SUSE Observability 角色的权限]
+* xref:/setup/security/rbac/rbac_roles.adoc[创建 RBAC 角色]
+* xref:/setup/security/external-secrets.adoc#_getting_authentication_data_from_an_external_secret[外部秘密]
