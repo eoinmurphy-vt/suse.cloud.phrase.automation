@@ -1,0 +1,66 @@
+include::partial$variables.adoc[]
+= Qu'est-ce que le scanner d'audit ?
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Découvrez le rôle du scanner d'audit dans la vérification continue de la conformité des clusters avec les politiques des contrôleurs d'admission.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-policy-developer", "kubewarden-integrator"].
+:doc-topic: ["explanations", "audit-scanner"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", " kubewarden ", " audit scanner ", " kubernetes "].
+:sidebar_label: Scanner d'audit
+:sidebar_position: 50
+:current-version: {page-origin-branch}
+
+[NOTE]
+====
+
+La fonction Audit Scanner est disponible à partir de la version 1.7.0 de {project-name}.
+
+====
+
+
+Le composant `+audit-scanner+` vérifie en permanence les ressources dans le cluster. Il signale ceux qui n'adhèrent pas aux politiques {short-project-name} déployées dans le cluster.
+
+Les politiques évoluent au fil du temps. Il y a de nouveaux déploiements de politiques et des mises à jour de politiques.
+Les versions et les paramètres de configuration changent. Cela peut conduire à des situations où les ressources déjà présentes dans le cluster ne sont plus conformes. La fonction d'analyse d'audit fournit aux administrateurs Kubernetes un outil qui vérifie en permanence l'état de conformité de leurs clusters.
+
+Pour expliquer l'utilisation du scanner d'audit dans {short-project-name}, considérons le scénario suivant.
+
+Supposons que Bob déploie un pod WordPress dans le cluster. Bob ne connaît pas Kubernetes, fait une erreur et déploie le Pod en tant que conteneur privilégié. À ce stade, aucune politique ne s'y oppose et le pod est donc créé avec succès dans le cluster.
+
+Quelques jours plus tard, Alice, l'administratrice de Kubernetes, applique une politique {short-project-name}qui interdit la création de conteneurs privilégiés. Le pod déployé par Bob continue de fonctionner dans le cluster puisqu'il existe déjà.
+
+Un rapport généré par le scanner d'audit permet à Alice d'identifier toutes les charges de travail qui violent les politiques de création. Cela inclut le pod WordPress créé par Bob.
+
+Le scanner d'audit fonctionne de la manière suivante
+
+* l'identification de toutes les ressources à auditer
+* pour chaque ressource, il construit une demande d'admission synthétique avec les données de la ressource
+* il envoie chaque demande d'admission à un point d'extrémité du serveur de politique qui n'est utilisé que pour les demandes d'audit
+
+Pour la politique d'évaluation de la demande, il n'y a pas de différence entre les demandes réelles et les demandes d'audit. Ce serveur de politique d'audit est équipé d'instruments permettant de collecter des données sur l'évaluation. Les utilisateurs peuvent donc utiliser leurs outils de surveillance pour analyser les données des scanners d'audit.
+
+== Activer le scanner d'audit
+
+Vous pouvez activer l'analyseur d'audit à partir de la version 1.7.0 de {short-project-name}.
+
+Des instructions d'installation détaillées se trouvent dans lexref:howtos/audit-scanner.adoc[guide du scanner d'audit.]
+
+== Politiques
+
+Par défaut, le scanner d'audit évalue chaque politique. Les opérateurs qui souhaitent ignorer l'évaluation d'une politique dans l'analyseur d'audit doivent définir le champ`+spec.backgroundAudit+` sur `+false+` dans la définition de la politique.
+
+En outre, les politiques dans {short-project-name} prennent désormais en charge deux annotations facultatives :
+
+* L'annotation `+io.kubewarden.policy.severity+` vous permet de spécifier le niveau de gravité de la violation de la politique, par exemple `+critical+`, `+high+`, `+medium+`, `+low+` ou `+info+`.
+* L'annotation `+io.kubewarden.policy.category+` vous permet de classer la politique en fonction d'un domaine ou d'un objectif spécifique, tel que `+PSP+`, `+compliance+` ou `+performance+`.
+
+Voir laxref:tutorials/writing-policies/index.adoc[documentation des] auteurs de la politique pour plus d'informations.
+
+== Permissions et comptes de service
+
+Le scanner d'audit dans {short-project-name} nécessite des configurations spécifiques de contrôle d'accès basé sur les rôles (RBAC) pour pouvoir analyser les ressources Kubernetes et enregistrer les résultats. L'installation crée un compte de service par défaut correct avec ces autorisations. L'utilisateur peut créer son propre ServiceAccount pour configurer l'accès aux ressources.
+
+L'analyseur d'audit par défaut `+ServiceAccount+` se lie à l'adresse `+view+` `+ClusterRole+`fournie par Kubernetes. Cette adresse `+ClusterRole+` permet d'accéder en lecture seule à un large éventail de ressources Kubernetes au sein d'un espace de noms. Vous trouverez plus de détails sur ce rôle dans le sitehttps://kubernetes.io/docs/reference/access-authn-authz/rbac/#user-facing-roles[documentation Kubernetes].
+
+L'analyseur d'audit se lie à un site `+ClusterRole+` qui accorde un accès en lecture aux types de ressources {short-project-name} et un accès en lecture-écriture aux CRD`+PolicyReport+`.  Ces autorisations permettent au scanner d'obtenir des ressources pour effectuer des évaluations d'audit et créer des rapports de politique basés sur les résultats de l'évaluation.
