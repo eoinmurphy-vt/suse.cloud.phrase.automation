@@ -1,0 +1,125 @@
+include::partial$variables.adoc[]
+
+= ArgoCDのインストール
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:sidebar_label: ArgoCDのインストール
+:sidebar_position: 35
+:description: 証明書の作成と更新を安全に行うための特定の設定オプションを設定することで、Kubernetesリソースを効率的に管理するArgoCDアプリケーションを構成します。
+:keywords: ["{project-name}", gitops, argocd ]。
+:doc-persona: [kubewarden-operator]
+:doc-type: [ハウツー］
+:doc-topic: [argocd-installation]
+
+ArgoCDを使ってKubernetesリソースを管理している場合は、ArgoCDを使って{project-name} 。これは可能だが、考慮すべき点がある。{short-project-name} v1.17.0以降、cert-managerの依存性は削除された。証明書を自動的に更新する新しい証明書リコンサイルがある。これは、{short-project-name} コントローラーが証明書の作成と更新を代行することを意味する。これには、ルート CA とすべてのウェブフック証明書の両方が含まれる。
+
+最初のルート CA とウェブフック証明書の作成は、利用可能な Helm 機能を使用して Helm チャートのインストール中に行います。そのため、Helmチャートのレンダリング中に、インストールは証明書がすでに作成されているかどうかをチェックし、作成されていなければ作成する。
+
+ArgoCDを使用する場合、Helmはテンプレートのレンダリングのみに使用し、リソースのライフサイクル管理はすべてArgoCDが行うため、この点が問題となる。ArgoCDがHelmチャートをレンダリングしてクラスタアプリケーションがチャート定義から逸脱していないことを確認するたびに、証明書の作成を再度試みます。その結果、証明書を格納するシークレットとウェブフック・コンフィギュレーションが同期されていないとマークされる。
+
+この問題を解決するには、ArgoCDアプリケーションを無視するように設定する必要があります：
+
+* `+data+` 秘密のフィールド
+* の`+caBundle+` 。 `+MutatingWebhookConfiguration+`
+* `+ValidatingWebhookConfiguration+` リソースがある。
+
+これは、ArgoCD アプリケーションに`+ignoreDifferences+` フィールドを追加することで行います：
+
+[subs="+attributes", yaml]
+----
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubewarden-crds
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.kubewarden.io
+    chart: kubewarden-crds
+    targetRevision: 1.13.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubewarden-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubewarden-controller
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.kubewarden.io
+    chart: kubewarden-controller
+    targetRevision: 4.1.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubewarden-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:     # Sync options which modifies sync behavior
+      # When syncing changes, respect fields ignored by the ignoreDifferences configuration
+      - RespectIgnoreDifferences=true
+  # ignoreDifferences is the important configuration to avoid ArgoCD marking
+  # the secrets and # webhook configurations as unsynchronized
+  ignoreDifferences:
+  - group: ""
+    kind: "Secret"
+    name: kubewarden-ca
+    namespace: kubewarden-system
+    jsonPointers:
+      - /data
+  - group: ""
+    kind: "Secret"
+    name: kubewarden-webhook-server-cert
+    namespace: kubewarden-system
+    jsonPointers:
+      - /data
+  - group: ""
+    kind: "Secret"
+    name: kubewarden-audit-scanner-client-cert
+    namespace: kubewarden-system
+    jsonPointers:
+      - /data
+  - group: "admissionregistration.k8s.io"
+    kind: "MutatingWebhookConfiguration"
+    jqPathExpressions:
+      - '.webhooks[]?.clientConfig.caBundle'
+  - group: "admissionregistration.k8s.io"
+    kind: "ValidatingWebhookConfiguration"
+    jqPathExpressions:
+      - '.webhooks[]?.clientConfig.caBundle'
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubewarden-defaults
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.kubewarden.io
+    chart: kubewarden-defaults
+    targetRevision: 2.8.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubewarden-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+----
+
+[NOTE]
+====
+
+この例で重要なのは、{short-project-name} コントローラーアプリケーションの`+ignoreDifferences+` 設定である。残りのコンテンツでは、ArgoCD アプリケーションの設定方法と完全な例について説明します。
+
+====
