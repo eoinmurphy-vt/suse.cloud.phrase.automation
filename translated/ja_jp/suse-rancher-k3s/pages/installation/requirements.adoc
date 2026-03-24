@@ -1,0 +1,407 @@
+= 必要条件
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-12-31
+:page-revdate: {revdate}
+
+K3sは非常に軽量だが、以下のような最低条件がある。
+
+K3sをコンテナで実行するように設定する場合でも、ネイティブのLinuxサービスとして実行する場合でも、K3sを実行する各ノードは以下の最小要件を満たす必要がある。これらの要件は、K3sとそのパッケージコンポーネントのベースラインであり、ワークロード自体によって消費されるリソースは含まれていない。
+
+== 前提条件
+
+2つのノードが同じホスト名を持つことはできません。
+
+複数のノードが同じホスト名を持つ場合、またはホスト名が自動プロビジョニング・システムで再利用される可能性がある場合は、`+--with-node-id+` オプションを使用して各ノードにランダムなサフィックスを付加するか、クラスタに追加する各ノードについて`+--node-name+` または`+$K3S_NODE_NAME+` で渡す一意の名前を考案します。
+
+== 建築
+
+K3sは以下のアーキテクチャで利用可能です：
+
+* x86_64
+* アームフ
+* arm64/aarch64
+
+[CAUTION]
+.ARM64 ページサイズ
+====
+
+2023年5月のリリース（v1.24.14+k3s1、v1.25.10+k3s1、v1.26.5+k3s1、v1.27.2+k3s1）以前の`+aarch64/arm64+` システムでは、カーネルは4kページを使用しなければなりません。*RHEL9*、*Ubuntu*、*Raspberry PI OS*、*SLESは*すべてこの要件を満たしている。
+====
+
+[#_operating_systems]
+== オペレーティング・システム
+
+K3sは、ほとんどの最新のLinuxシステムで動作することが期待されている。
+
+OSによっては、追加のセットアップ要件があります：
+
+[tabs,sync-group-id=os,id=os]
+======
+SUSE Linux Enterprise / openSUSE::
++
+--
+[#_sle_opensuse_firewalld]
+[pass]
+<h3><a class="anchor" id="_sle_opensuse_firewalld" href="#_sle_opensuse_firewalld"></a>ファイアウォルド</h3>
+
+firewalldをオフにすることを推奨する：
+
+[,bash]
+----
+systemctl disable firewalld --now
+----
+
+デフォルトでfirewalldを有効にしておきたい場合は、以下のルールが必要である：
+
+[,bash]
+----
+firewall-cmd --permanent --add-port=6443/tcp #apiserver
+firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 #pods
+firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 #services
+firewall-cmd --reload
+----
+
+あなたのセットアップによっては、さらにポートを開く必要があるかもしれない。詳細は<<_inbound_rules_for_k3s_nodes,インバウンドルールを>>参照。ポッドまたはサービスのデフォルトCIDRを変更する場合は、それに応じてファイアウォールルールを更新する必要があります。
+--
+
+Red Hat Enterprise Linux / CentOS / Fedora::
++
+--
+[#_rhel10]
+[pass]
+<h3><a class="anchor" id="_rhel10" href="#_rhel10"></a>RHEL 10</h3>
+
+RHEL 10では、追加のパッケージが必要です：
+
+[,bash]
+----
+sudo dnf install -y kernel-modules-extra
+----
+
+[#_rhel_centos_fedora_firewalld]
+[pass]
+<h3><a class="anchor" id="_rhel_centos_fedora_firewalld" href="#_rhel_centos_fedora_firewalld"></a>ファイアウォルド</h3>
+
+firewalldをオフにすることを推奨する：
+
+[,bash]
+----
+systemctl disable firewalld --now
+----
+
+デフォルトでfirewalldを有効にしておきたい場合は、以下のルールが必要である：
+
+[,bash]
+----
+firewall-cmd --permanent --add-port=6443/tcp #apiserver
+firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 #pods
+firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 #services
+firewall-cmd --reload
+----
+
+あなたのセットアップによっては、さらにポートを開く必要があるかもしれない。詳細は<<_inbound_rules_for_k3s_nodes,インバウンドルールを>>参照。ポッドまたはサービスのデフォルトCIDRを変更する場合は、それに応じてファイアウォールルールを更新する必要があります。
+
+[WARNING]
+.古いRHEL/CentOSリリース
+====
+RHEL 8.4より前のOSバージョンでは、NetworkManagerにK3のネットワーキングを妨害する既知のバグがあります。古いリリースを使用している場合は、nm-cloud-setupを無効にしてノードを再起動する必要があります：
+
+[,bash]
+----
+systemctl disable nm-cloud-setup.service nm-cloud-setup.timer
+reboot
+----
+====
+--
+
+Ubuntu / Debian::
++
+--
+[#_ubuntu_debian_ufw]
+[pass]
+<h3><a class="anchor" id="_ubuntu_debian_ufw" href="#_ubuntu_debian_ufw"></a>UFW</h3>
+
+古い Debian リリースでは、既知の iptables のバグに悩まされている可能性があります。xref:known-issues.adoc#_iptables[既知の問題を]参照してください。
+
+ufw（簡易ファイアウォール）をオフにすることをお勧めします：
+
+[,bash]
+----
+ufw disable
+----
+
+デフォルトでufwを有効にしておきたい場合は、以下のルールが必要です：
+
+[,bash]
+----
+ufw allow 6443/tcp #apiserver
+ufw allow from 10.42.0.0/16 to any #pods
+ufw allow from 10.43.0.0/16 to any #services
+----
+
+あなたのセットアップによっては、さらにポートを開く必要があるかもしれない。詳細は<<_inbound_rules_for_k3s_nodes,インバウンドルールを>>参照。ポッドまたはサービスのデフォルトCIDRを変更する場合は、それに応じてファイアウォールルールを更新する必要があります。
+--
+
+[#os_tab_raspberry_pi]
+ラズベリーパイ::
++
+--
+ラズベリーパイOSはDebianベースであり、既知のiptablesのバグに悩まされている可能性がある。xref:known-issues.adoc#_iptables[既知の問題を]参照してください。
+
+[#_cgroups]
+[pass]
+<h3><a class="anchor" id="_cgroups" href="#_cgroups"></a>Cグループ</h3>
+
+標準的なRaspberry Pi OSのインストールは、`+cgroups+` が有効な状態では開始されません。**K3Sは**、systemdサービスを開始するために`+cgroups+` 。`+cgroups+`は、`+cgroup_memory=1 cgroup_enable=memory+` を`+/boot/firmware/cmdline.txt+` に追加することで有効にすることができる。
+
+[NOTE]
+====
+Debian 11 およびそれ以前の Pi OS リリースでは、cmdline.txt は`+/boot/cmdline.txt+` にあります。
+====
+
+cmdline.txtの例：
+
+----
+console=serial0,115200 console=tty1 root=PARTUUID=58b06195-02 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait cgroup_memory=1 cgroup_enable=memory
+----
+
+[#_ubuntu_vxlan_module]
+[pass]
+<h3><a class="anchor" id="_ubuntu_vxlan_module" href="#_ubuntu_vxlan_module"></a>Ubuntu Vxlanモジュール</h3>
+
+Ubuntu 21.10からUbuntu 23.10で、Raspberry Piのvxlanサポートは別のカーネルモジュールに移動しました。このステップはUbuntu 24.04以降では必要ありません。
+
+[,bash]
+----
+sudo apt install linux-modules-extra-raspi
+----
+--
+======
+
+Rancherが管理するK3sクラスタでテストされたOSの詳細については、https://rancher.com/support-maintenance-terms/[]Rancherの参照してください。
+
+== ハードウェア
+
+ハードウェア要件は、導入規模に応じて拡張できます。最低条件は以下の通り：
+
+|===
+| ノード | CPU | RAM
+
+| サーバー
+| 2コア
+| 2 GB
+
+| 代理店
+| 1コア
+| 512 MB
+|===
+
+xref:reference/resource-profiling.adoc[リソースのプロファイリングは]、K3sエージェント、ワークロードを持つK3sサーバー、および1つのエージェントを持つK3sサーバーの最小リソース要件を決定するためのテストと分析の結果をキャプチャします。
+
+=== ディスク
+
+K3の性能はデータベースの性能に依存する。最適な速度を確保するため、可能な限りSSDを使用することをお勧めします。
+
+K3s を Raspberry Pi やその他の ARM デバイスに展開する場合は、外付け SSD を使用することをお勧めします。etcd は書き込み集中型であり、SD カードや eMMC では IO 負荷を処理できません。
+
+=== サーバーサイジングガイド
+
+サーバー（コントロールプレーン＋etcd）ノードのCPUとRAMに制限がある場合、標準的なワークロード条件下で参加できるエージェントノードの量には制限があります。
+
+|===
+| サーバーCPU | サーバーRAM | 代理店数
+
+| 2
+| 4 GB
+| 0-350
+
+| 4
+| 8 GB
+| 351-900
+
+| 8
+| 16 GB
+| 901-1800
+
+| 16+
+| 32 GB
+| 1800+
+|===
+
+[TIP]
+.高可用性サイジング
+====
+3つのサーバーノードからなる高可用性セットアップを使用する場合、エージェントの数は上記の表よりもおよそ~50%多くスケールすることができます。例えば、4 vCPU/8 GB のサーバ 3 台で~1200 エージェントに拡張できます。
+====
+
+ノード参加時にスパイクが発生するため、CPUの空き容量を確保するために、エージェントノードの参加は50以下のバッチで行うことを推奨します。255ノードを超える場合は、デフォルトの`+cluster-cidr+` ！
+
+xref:reference/resource-profiling.adoc#_server_sizing_requirements_for_k3s[リソース・プロファイリングには]、これらの推奨事項がどのように発見されたのかについての詳細が記載されている。
+
+[#_networking]
+== ネットワーキング
+
+K3sサーバーは、すべてのノードからアクセス可能なポート6443が必要です。
+
+ノードは、Flannel VXLANバックエンドを使用する場合はUDPポート8472経由で、Flannel WireGuardバックエンドを使用する場合はUDPポート51820（IPv6を使用する場合は51821）経由で他のノードに到達できる必要があります。ノードは他のポートをリッスンしてはならない。K3sは、ノードがサーバーへのアウトバウンド接続を行い、すべてのkubeletトラフィックがそのトンネルを通過するようなリバース・トンネリングを使用する。しかし、Flannelを使用せず、独自のカスタムCNIを提供する場合、Flannelで必要とされるポートはK3sでは必要とされません。
+
+メトリクス・サーバーを使用する場合は、すべてのノードがポート 10250 で相互にアクセスできる必要があります。
+
+組み込みetcdで高可用性を実現する場合、サーバーノードはポート2379と2380で互いにアクセスできなければならない。
+
+[TIP]
+.重要
+====
+ノードのVXLANポートは、クラスタ・ネットワークを誰でもアクセスできるようにするため、世界中に公開すべきではありません。ポート8472へのアクセスを無効にするファイアウォール/セキュリティグループの後ろでノードを実行します。
+====
+
+
+[WARNING]
+====
+Flannelは、https://www.cni.dev/plugins/current/main/bridge/[Bridge CNIプラグインに]依存して、トラフィックを切り替えるL2ネットワークを構築する。`+NET_RAW+` 、そのL2ネットワークを悪用してARPスプーフィングなどの攻撃を仕掛けることができる。したがって、https://kubernetes.io/docs/concepts/security/pod-security-standards/[] Kubernetesのドキュメントに記載されているように、信頼できないポッドで`+NET_RAW+` を無効にする制限付きプロファイルを設定してください。
+====
+
+[#_inbound_rules_for_k3s_nodes]
+=== K3sノードのインバウンドルール
+
+|===
+| プロトコル | ポート | ソース | 目的地 | 説明
+
+| TCP
+| 2379-2380
+| サーバー
+| サーバー
+| etcdを組み込んだHAにのみ必要
+
+| TCP
+| 6443
+| 代理店
+| サーバー
+| K3sスーパーバイザーとKubernetes APIサーバー
+
+| UDP
+| 8472
+| 全ノード
+| 全ノード
+| フランネルVXLANにのみ必要
+
+| TCP
+| 10250
+| 全ノード
+| 全ノード
+| Kubeletメトリクス
+
+| UDP
+| 51820
+| 全ノード
+| 全ノード
+| IPv4対応Flannel Wireguardのみ必要です。
+
+| UDP
+| 51821
+| 全ノード
+| 全ノード
+| IPv6対応Flannel Wireguardのみ必要です。
+
+| TCP
+| 5001
+| 全ノード
+| 全ノード
+| 埋め込み分散レジストリにのみ必要（Spegel）
+
+| TCP
+| 6443
+| 全ノード
+| 全ノード
+| 埋め込み分散レジストリにのみ必要（Spegel）
+|===
+
+通常、すべてのアウトバウンド・トラフィックが許可される。
+
+使用するOSによっては、ファイアウォールの追加変更が必要な場合があります。
+
+== 大規模クラスター
+
+ハードウェア要件は、K3sクラスタのサイズに基づいています。本番クラスタや大規模クラスタでは、外部データベースを使用した高可用性セットアップを使用することをお勧めします。本番環境の外部データベースでは、以下のオプションを推奨します：
+
+* MySQL
+* PostgreSQL
+* etcd
+
+=== CPUとメモリ
+
+以下は、高可用性K3sサーバーのノードに最低限必要なCPUとメモリです：
+
+[cols="^,^,^,^"]
+|===
+| 展開サイズ | ノード | ブイシーピーユー | RAM
+
+| 小さい
+| 最大10
+| 2
+| 4 GB
+
+| ミディアム
+| 最大100
+| 4
+| 8 GB
+
+| 大型
+| 最大250
+| 8
+| 16 GB
+
+| Xラージ
+| 最大500
+| 16
+| 32 GB
+
+| XX-ラージ
+| 500+
+| 32
+| 64 GB
+|===
+
+=== ディスク
+
+クラスタの性能はデータベースの性能に依存する。最適な速度を確保するため、K3sクラスタのバックアップには常にSSDディスクを使用することをお勧めします。クラウドプロバイダーでは、最大IOPSを可能にする最小サイズも使用したい。
+
+=== ネットワーク
+
+ポッド用のIPが不足しないように、クラスタCIDRのサブネット・サイズを増やすことを検討する必要があります。K3サーバーの起動時に、`+--cluster-cidr+` オプションを渡すことで可能です。
+
+=== データベース
+
+K3sはMySQL、PostgreSQL、MariaDB、etcdを含む様々なデータベースをサポートしています。 詳細はxref:datastore/datastore.adoc[クラスター・データストアを]参照してください。
+
+以下は、大規模クラスタを実行するために必要なデータベース・リソースのサイジング・ガイドです：
+
+[cols="^,^,^,^"]
+|===
+| 展開サイズ | ノード | ブイシーピーユー | RAM
+
+| 小さい
+| 最大10
+| 1
+| 2 GB
+
+| ミディアム
+| 最大100
+| 2
+| 8 GB
+
+| 大型
+| 最大250
+| 4
+| 16 GB
+
+| Xラージ
+| 最大500
+| 8
+| 32 GB
+
+| XX-ラージ
+| 500+
+| 16
+| 64 GB
+|===
