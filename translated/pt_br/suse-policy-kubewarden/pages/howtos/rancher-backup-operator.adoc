@@ -1,0 +1,126 @@
+include::partial$variables.adoc[]
+
+= Backup e restauração com o Rancher Backup Operator
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure e gerencie backups e restaurações usando o operador rancher-backup em qualquer cluster Kubernetes.
+:keywords: "{project-name}", kubernetes, kubewarden, operador de backup do rancher, backup, restauração
+:doc-persona: kubewarden-operator, kubewarden-integrator
+:doc-type: howto
+:doc-topic: manual do operador, rancher-backup-operator
+:current-version: {page-origin-branch}
+
+O operador `+rancher-backup+` pode ser usado para fazer backup e restaurar o Rancher em qualquer cluster do Kubernetes.
+
+Desde a versão `+v9.0.0+`, `+rancher-backup+` tem suporte para {project-name}. Isso inclui:
+
+- O Rancher Namespace padrão `+cattle-kubewarden-system+` (ou `+cattle-kubewarden-*+`) e o {short-project-name} Namespace padrão `+kubewarden+`.
+- {short-project-name} Os recursos necessários são instalados por meio dos gráficos do Helm.
+- {short-project-name} CRDs, que são reconciliados após a restauração pelo controlador {short-project-name}.
+- O subgráfico `+policy-reporter+` do gráfico `+kubewarden-controller+`, para seus valores padrão. Isso não inclui a integração com o Grafana nem outros plug-ins.
+
+== Segredos do usuário
+
+O processo de backup não inclui segredos criados pelo usuário, como os usados paraxref:/howtos/policy-servers/02-private-registry.adoc#_creating_the_secret[configurar PolicyServers para registros privados], a menos que estejam corretamente identificados. Para isso, rotule os segredos de uma das seguintes maneiras. Ou:
+
+[source,shell]
+----
+kubectl label secret secret-ghcr-docker app.kubernetes.io/part-of=kubewarden
+----
+
+Ou:
+
+[source,shell]
+----
+kubectl label secret secret-ghcr-docker resources.cattle.io/backup=true
+----
+
+== Instalação do Rancher Backup Operator
+
+Siga o \link: \https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/back-up-restore-and-disaster-recovery.html[Rancher Manager] documentation. Para uma instalação do Minikube usando o PersistentVolumes do tipo `+hostPath+` denominado `+standard+`, compatível com o Minikube desde o início.
+
+É preciso instruir o operador de backup a também fazer o backup de {short-project-name}CRs definidos pelo usuário, definindo o valor `+optionalResources.kubewarden.enabled+` para`+true+`.
+
+A instalação seria a seguinte:
+
+[source,console]
+----
+helm repo add rancher-charts https://charts.rancher.io
+helm repo update
+helm install --wait --create-namespace -n cattle-resources-system \
+    rancher-backup-crd rancher-charts/rancher-backup-crd
+helm install --wait -n cattle-resources-system \
+    rancher-backup rancher-charts/rancher-backup \
+    --set persistence.enabled=true --set persistence.storageClass=standard \
+    --set optionalResources.kubewarden.enabled=true
+----
+
+== Backup
+
+Use o `+rancher-resource-set-full+` para fazer backup dos segredos do {short-project-name}.
+Isso inclui os segredos TLS que são criados na instalação do Helm.
+
+Se você preferir usar o site `+rancher-resource-basic+`, lembre-se de fazer backup ou criar manualmente os segredos TLS necessários.
+
+Aqui está um exemplo de execução de um backup não criptografado no local padrão com o endereço `+rancher-resource-set-full+`:
+
+[source,shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: resources.cattle.io/v1
+kind: Backup
+metadata:
+  name: default-location-backup
+spec:
+  resourceSetName: rancher-resource-set-full
+EOF
+backup.resources.cattle.io/default-location-backup created
+----
+
+Os registros `+rancher-backup+` ou o backup mostram a criação do arquivo de backup:
+
+[source,shell]
+----
+kubectl logs -n cattle-resources-system -l app.kubernetes.io/name=rancher-backup -f
+...
+INFO[2025/06/26 10:07:48] Processing backup default-location-backup
+INFO[2025/06/26 10:07:48] For backup CR default-location-backup, filename: default-location-backup-32d64f39-d3c7-4331-9101-8ca493bd9d2e-2025-06-26T10-07-48Z
+...
+INFO[2025/06/26 10:07:49] Done with backup
+----
+
+Você também pode ver seu status descrevendo o recurso:
+
+[source,shell]
+----
+kubectl get backups
+NAME                      LOCATION   TYPE       LATEST-BACKUP                                                                              RESOURCESET                 AGE    STATUS
+default-location-backup   PV         One-time   default-location-backup-43f3ccb7-5624-4eed-9c3b-1c15d287080e-2025-06-26T15-53-27Z.tar.gz   rancher-resource-set-full   111s   Completed
+----
+
+Consulte a documentação do Rancher para obter maislink:https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/configuration/examples.html#_backup[exemplos de backup em].
+
+== Restaurar
+
+Para restaurar o backup não criptografado do local padrão, use o nome de arquivo da coluna LATEST-BACKUP ao exibir o recurso de backup para criar um recurso de restauração:
+
+[source,shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: resources.cattle.io/v1
+kind: Restore
+metadata:
+  name: restore-default
+spec:
+  backupFilename: default-location-backup-32d64f39-d3c7-4331-9101-8ca493bd9d2e-2025-06-26T10-07-48Z.tar.gz
+EOF
+restore.resources.cattle.io/restore-default created
+
+kubectl get restores
+NAME              BACKUP-SOURCE   BACKUP-FILE                                                                                AGE   STATUS
+restore-default   PV              default-location-backup-43f3ccb7-5624-4eed-9c3b-1c15d287080e-2025-06-26T15-53-27Z.tar.gz   6s    Completed
+----
+
+Consulte a documentação do Rancher para obter maislink:https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/configuration/examples.html#_restore[exemplos de restauração em].
+
+
