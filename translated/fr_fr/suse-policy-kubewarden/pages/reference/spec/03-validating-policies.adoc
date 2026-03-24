@@ -1,0 +1,234 @@
+include::partial$variables.adoc[]
+= Validation des politiques
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Évaluez vos demandes de validation à l'aide de paramètres spécifiques à la politique pour déterminer l'acceptation ou le rejet des objets AdmissionReview de Kubernetes.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["politiques de rédaction", "spécifications", "politiques de validation"].
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "policy specification", "policy validation"].
+:sidebar_label: Validation des politiques
+:current-version: {page-origin-branch}
+
+Le serveur de politique {project-name} reçoit :
+
+* Kuberneteshttps://godoc.org/k8s.io/api/admission/v1#AdmissionReview[`+AdmissionReview+`]à partir du serveur API Kubernetes.
+Il transmet ensuite la valeur de son attribut `+request+`, de typehttps://godoc.org/k8s.io/api/admission/v1#AdmissionRequest[`+AdmissionRequest+`]à la politique pour évaluation.
+
+ou :
+
+* Un attribut JSON `+request+` contenant le document de demande libre, dans le cas d'une politique brute. Consultez la section xref:../../howtos/raw-policies.adoc[Politiques brutes]pour plus de détails.
+
+La politique évalue le site `+request+` et indique si elle doit l'accepter ou non. En cas de rejet d'une demande, la politique peut fournir un message d'explication et un code d'erreur à afficher à l'utilisateur final.
+
+Par convention, dans le projet `+policy-server+`, l'invité doit exposer une fonction nommée `+validate+`, via le SDK invité waPC, afin que`+policy-server+` (hôte waPC) puisse l'invoquer.
+
+La fonction `+validate+` reçoit un objet JSON `+ValidationRequest+` et renvoie un objet JSON `+ValidationResponse+`.
+
+== L'objet `+ValidationRequest+` 
+
+`+ValidationRequest+` est un objet JSON reçu par la fonction `+validate+`.
+On dirait que.. :
+
+[subs="+attributes",yaml]
+----
+{
+  "request": <AdmissionReview.request data> | <RawReviewRequest.request data>,
+  "settings": {
+    # your policy configuration
+  }
+}
+----
+
+La clé `+settings+` pointe vers un document JSON de forme libre contenant les paramètres spécifiques de la politique. Le chapitre précédent s'est concentré sur les politiques et les paramètres.
+
+== Un exemple
+
+Étant donné le Kubernetes suivant `+AdmissionReview+`:
+
+.Agrandir pour voir `+AdmissionReview+`
+[%collapsible]
+======
+
+[subs="+attributes",yaml]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    # Random uid uniquely identifying this admission call
+    "uid": "705ab4f5-6393-11e8-b7cc-42010a800002",
+
+    # Fully-qualified group/version/kind of the incoming object
+    "kind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified
+    "resource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    "subResource": "scale",
+
+    # Fully-qualified group/version/kind of the incoming object in the original request to the API server.
+    # This only differs from `+kind+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestKind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified in the original request to the API server.
+    # This only differs from `+resource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestResource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    # This only differs from `+subResource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestSubResource": "scale",
+
+    # Name of the resource being modified
+    "name": "my-deployment",
+    # Namespace of the resource being modified, if the resource is namespaced (or is a Namespace object)
+    "namespace": "my-namespace",
+
+    # operation can be CREATE, UPDATE, DELETE, or CONNECT
+    "operation": "UPDATE",
+
+    "userInfo": {
+      # Username of the authenticated user making the request to the API server
+      "username": "admin",
+      # UID of the authenticated user making the request to the API server
+      "uid": "014fbff9a07c",
+      # Group memberships of the authenticated user making the request to the API server
+      "groups": ["system:authenticated","my-admin-group"],
+      # Arbitrary extra info associated with the user making the request to the API server.
+      # This is populated by the API server authentication layer and should be included
+      # if any SubjectAccessReview checks are performed by the webhook.
+      "extra": {
+        "some-key":["some-value1", "some-value2"]
+      }
+    },
+
+    # object is the new object being admitted.
+    # It is null for DELETE operations.
+    "object": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # oldObject is the existing object.
+    # It is null for CREATE and CONNECT operations.
+    "oldObject": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # options contains the options for the operation being admitted, like meta.k8s.io/v1 CreateOptions, UpdateOptions, or DeleteOptions.
+    # It is null for CONNECT operations.
+    "options": {"apiVersion":"meta.k8s.io/v1","kind":"UpdateOptions",...},
+
+    # dryRun indicates the API request is running in dry run mode and will not be persisted.
+    # Webhooks with side effects should avoid actuating those side effects when dryRun is true.
+    # See http://k8s.io/docs/reference/using-api/api-concepts/#make-a-dry-run-request for more details.
+    "dryRun": false
+  }
+}
+----
+
+======
+
+L'objet `+ValidationRequest+` se présente comme suit :
+
+.Développez pour voir les `+ValidationRequest+`
+[%collapsible]
+======
+
+[subs="+attributes",yaml]
+----
+{
+  "request": {
+    # Random uid uniquely identifying this admission call
+    "uid": "705ab4f5-6393-11e8-b7cc-42010a800002",
+
+    # Fully-qualified group/version/kind of the incoming object
+    "kind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified
+    "resource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    "subResource": "scale",
+
+    # Fully-qualified group/version/kind of the incoming object in the original request to the API server.
+    # This only differs from `+kind+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestKind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified in the original request to the API server.
+    # This only differs from `+resource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestResource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    # This only differs from `+subResource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestSubResource": "scale",
+
+    # Name of the resource being modified
+    "name": "my-deployment",
+    # Namespace of the resource being modified, if the resource is namespaced (or is a Namespace object)
+    "namespace": "my-namespace",
+
+    # operation can be CREATE, UPDATE, DELETE, or CONNECT
+    "operation": "UPDATE",
+
+    "userInfo": {
+      # Username of the authenticated user making the request to the API server
+      "username": "admin",
+      # UID of the authenticated user making the request to the API server
+      "uid": "014fbff9a07c",
+      # Group memberships of the authenticated user making the request to the API server
+      "groups": ["system:authenticated","my-admin-group"],
+      # Arbitrary extra info associated with the user making the request to the API server.
+      # This is populated by the API server authentication layer and should be included
+      # if any SubjectAccessReview checks are performed by the webhook.
+      "extra": {
+        "some-key":["some-value1", "some-value2"]
+      }
+    },
+
+    # object is the new object being admitted.
+    # It is null for DELETE operations.
+    "object": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # oldObject is the existing object.
+    # It is null for CREATE and CONNECT operations.
+    "oldObject": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # options contains the options for the operation being admitted, like meta.k8s.io/v1 CreateOptions, UpdateOptions, or DeleteOptions.
+    # It is null for CONNECT operations.
+    "options": {"apiVersion":"meta.k8s.io/v1","kind":"UpdateOptions",...},
+
+    # dryRun indicates the API request is running in dry run mode and will not be persisted.
+    # Webhooks with side effects should avoid actuating those side effects when dryRun is true.
+    # See http://k8s.io/docs/reference/using-api/api-concepts/#make-a-dry-run-request for more details.
+    "dryRun": false
+  },
+  "settings": {
+    # policy settings
+  }
+}
+----
+
+======
+
+== L'objet `+ValidationResponse+` 
+
+La fonction `+validate+` renvoie le résultat de sa validation à l'aide d'un objet`+ValidationResponse+`.
+
+Le site `+ValidationResponse+` a cette structure :
+
+[subs="+attributes",yaml]
+----
+{
+  # mandatory
+  "accepted": <boolean>,
+
+  # optional, ignored if accepted - recommended for rejections
+  "message": <string>,
+
+  # optional, ignored if accepted
+  "code": <integer>,
+
+  # optional, used by mutation policies
+  "mutated_object": <string>
+}
+----
+
+Vous pouvez spécifier ces attributs `+message+` et `+code+` lorsque la demande n'est pas acceptée. Le `+message+` est une erreur textuelle libre et le `+code+` représente un code d'erreur HTTP.
+
+Le serveur API Kubernetes ignore les valeurs `+message+` et `+code+` lors de l'acceptation de la demande.
+
+En cas de refus de la demande et si les adresses `+message+` ou `+code+` sont présentes, le serveur API Kubernetes renvoie ces informations. L'information fait partie du corps de l'erreur et le serveur la renvoie au client de l'API Kubernetes qui a émis la demande rejetée.
+
+Le champ `+mutated_object+` est facultatif et n'est utilisé que par les politiques de mutation.
+C'est le sujet du prochain chapitre.
