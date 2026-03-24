@@ -1,0 +1,66 @@
+include::partial$variables.adoc[]
+= ¿Qué es el escáner de auditoría?
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Conozca el papel del Audit Scanner en la verificación continua del cumplimiento de las políticas del controlador de admisión en todos sus clústeres.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["explanations", "audit-scanner"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "audit scanner", "kubernetes"]
+:sidebar_label: Escáner de auditoría
+:sidebar_position: 50
+:current-version: {page-origin-branch}
+
+[NOTE]
+====
+
+La función Audit Scanner está disponible a partir de la versión {project-name} 1.7.0
+
+====
+
+
+El componente `+audit-scanner+` comprueba constantemente los recursos del clúster. Señala los que no se adhieren a las políticas {short-project-name} desplegadas en el clúster.
+
+Las políticas evolucionan con el tiempo. Hay nuevos despliegues de políticas y actualizaciones de políticas.
+Las versiones y los ajustes de configuración cambian. Esto puede dar lugar a situaciones en las que los recursos que ya están dentro del clúster dejen de ser conformes. La función de escaneado de auditorías proporciona a los administradores de Kubernetes una herramienta que verifica constantemente el estado de cumplimiento de sus clústeres.
+
+Para explicar el uso del escáner de auditoría en {short-project-name}, considere el siguiente escenario.
+
+Supongamos que Bob está desplegando un Pod de WordPress en el clúster. Bob es nuevo en Kubernetes, comete un error y despliega el Pod ejecutándose como un contenedor privilegiado. En este punto, no hay ninguna política que lo impida, por lo que el Pod se crea con éxito en el clúster.
+
+Unos días más tarde, Alice, la administradora de Kubernetes, aplica una política de {short-project-name}que prohíbe la creación de contenedores con privilegios. El Pod desplegado por Bob sigue funcionando en el clúster, puesto que ya existe.
+
+Un informe generado por el escáner de auditoría permite a Alice identificar todas las cargas de trabajo que infringen las políticas de creación. Esto incluye el WordPress Pod creado por Bob.
+
+El escáner de auditoría funciona mediante:
+
+* identificar todos los recursos que deben auditarse
+* para cada recurso, elabora una solicitud de admisión sintética con los datos del recurso
+* envía cada solicitud de admisión a un punto final del servidor de políticas que es sólo para solicitudes de auditoría
+
+Para la política que evalúa la solicitud, no hay diferencias entre solicitudes reales o de auditoría. Este punto final del servidor de políticas de auditoría dispone de instrumentación para recopilar datos sobre la evaluación. Así, los usuarios pueden utilizar sus herramientas de supervisión para analizar los datos del escáner de auditoría.
+
+== Activar el escáner de auditoría
+
+Puede activar el escáner de auditoría a partir de la versión {short-project-name} 1.7.0.
+
+Encontrará instrucciones detalladas de instalación en laxref:howtos/audit-scanner.adoc[guía del escáner de auditoría].
+
+== Políticas
+
+Por defecto, el escáner de auditoría evalúa cada política. Los operadores que deseen omitir la evaluación de una política en el escáner de auditoría deben establecer el campo`+spec.backgroundAudit+` en `+false+` en la definición de la política.
+
+Además, las políticas en {short-project-name} ahora admiten dos anotaciones opcionales:
+
+* La anotación `+io.kubewarden.policy.severity+` permite especificar el nivel de gravedad de la infracción de la política, como `+critical+`, `+high+`, `+medium+`, `+low+` o `+info+`.
+* La anotación `+io.kubewarden.policy.category+` le permite categorizar la política en función de un dominio o propósito específico, como `+PSP+`, `+compliance+`, o `+performance+`.
+
+Consultexref:tutorials/writing-policies/index.adoc[la documentación] de los autores de las políticas para obtener más información.
+
+== Permisos y ServiceAccounts
+
+El escáner de auditoría en {short-project-name} requiere configuraciones específicas de control de acceso basado en roles (RBAC) para poder escanear los recursos de Kubernetes y guardar los resultados. La instalación crea una cuenta de servicio predeterminada correcta con esos permisos. El usuario puede crear su propia ServiceAccount para configurar el acceso a los recursos.
+
+El escáner de auditoría predeterminado `+ServiceAccount+` se vincula a `+view+` `+ClusterRole+`proporcionado por Kubernetes. Este `+ClusterRole+` permite el acceso de sólo lectura a una amplia gama de recursos de Kubernetes dentro de un espacio de nombres. Puede encontrar más detalles sobre este rol enhttps://kubernetes.io/docs/reference/access-authn-authz/rbac/#user-facing-roles[documentación de Kubernetes].
+
+El escáner de auditoría se vincula a un `+ClusterRole+` que concede acceso de lectura a los tipos de recursos {short-project-name} y acceso de lectura-escritura a los CRD`+PolicyReport+`.  Estos permisos permiten al escáner obtener recursos para realizar evaluaciones de auditoría y crear informes políticos basados en los resultados de la evaluación.
