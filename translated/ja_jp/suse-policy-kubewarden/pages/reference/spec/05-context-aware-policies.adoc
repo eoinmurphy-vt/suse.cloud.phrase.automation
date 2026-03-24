@@ -1,0 +1,166 @@
+include::partial$variables.adoc[]
+= コンテキストを意識したポリシー
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ポリシー評価を最適化するために、リソースアクセスやキャッシングを含むアドミッション・コントロールにおけるコンテキストを考慮したポリシー機能を探求する。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "context-aware-policies"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"policy specification"、"context aware policies"]。
+:sidebar_label: コンテキストを意識したポリシー
+:current-version: {page-origin-branch}
+
+`+policy-server+` 、ポリシーにクラスタ情報を公開する機能があり、ポリシーは、アドミッション要求によって提供された詳細だけでなく、他の既存のリソースに基づいて決定を下すことができる。
+
+ポリシーをホストするPolicy ServerはKubernetesリソースを取得する。Policy Server Service Accountに適用されるRBACルールは、Kubernetesへのアクセスを規制する。
+
+{project-name} Helm chartsによってデプロイされた`+default+` Policy Serverは、以下のKubernetesリソースにアクセスできる：
+
+* 名前空間
+* サービス
+* イングレス
+
+[CAUTION]
+====
+
+ポリシーサーバーは、Kubernetes APIサーバーから取得した結果のキャッシュを実行し、Kubernetesのこのコア部分の負荷を軽減する。つまり、情報が古かったり、欠けていたりする可能性があるということだ。
+
+====
+
+
+== サポート・マトリックス
+
+[cols=",^,"]
+|===
+| ポリシーの種類 | サポート | 備考
+
+| 伝統的なプログラミング言語
+| ✅
+| -
+
+| レゴ
+| ✅
+| {short-project-name} 1.9リリース以降
+
+| WASI
+| ✅
+| {short-project-name} 1.10.0 リリース以降、Go SDK のみ
+|===
+
+== 制約条件
+
+{short-project-name}{short-project-name} は2つの制約を考慮する：
+
+* メモリ使用量：Policy Serverプロセスは、Kubernetesから取得したデータをメモリにキャッシュする。フェッチされるデータが多ければ多いほど、Policy Server Pods はメモリを消費します。
+* 一貫性：Policy Serverが保持するキャッシュに古いデータが含まれている可能性があります。新しいリソースが見つからないかもしれないし、削除されたリソースがまだ利用可能かもしれないし、変更されたリソースが古いデータを持っているかもしれない。これは政策評価に影響を与える可能性がある。
+
+=== 複数のリソースをリストアップする
+
+{short-project-name} ポリシーは複数のリソースを同時にフェッチできる。たとえば、「`+default+`名前空間の中で定義された、ラベル`+color+` が``+green+`` に設定されているすべての Pod を取得する」というようなクエリを作ることができます。
+
+このようなクエリで、Policy Serverはユーザの条件に一致するすべてのリソースを取得します。リソースのフェッチは、Kubernetes APIサーバーの負荷を軽減するためにバッチで行われる。リソースをメモリに保存する前に、Policy Serverは各リソースの`+managedFields+` 属性を削除して、消費されるメモリ量を削減します。この属性はポリシーには役に立たず、かなりの量のメモリを消費する。
+
+その後、Policy Serverはhttps://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes[Kubernetes watch]を作成し、キャッシュされたオブジェクトのリストを更新し続ける。Policy Serverは、Kubernetes API Serverがリソースの変更に関する通知を送信する速度を制御できない。これは、Kubernetes APIサーバーに対して作成されたウォッチの数やその負荷など、さまざまな外部要因に依存する。
+
+最後に、現在のコードには次のような制限がある。この2つのクエリが与えられた：
+
+* `+kubectl get pods -n default+`
+* `+kubectl get pods -n default -l color=green+`
+
+Policy Serverは2つのウォッチを作成し、2つ目のクエリのすべてのPodを複製します。この制限は、{short-project-name} の将来のリリースで削除される予定です。
+
+=== 特定のリソースを取得する
+
+{short-project-name} ポリシーは、クラスター内部で定義された特定のリソースを取得することができる。
+たとえば、「`+db+` 名前空間で定義された`+psql-0+` という名前のポッドを取得する」というようなクエリーを作ることができる。
+
+デフォルトでは、このクエリはオブジェクトをフェッチし、5秒間インメモリキャッシュに保存します。この5秒間、ポリシーはキャッシュされたデータを受け取る。
+
+ポリシー作成者は、キャッシュをスキップして直接クエリーを行うことを決定することもできる。
+常に新鮮なデータが提供される。このため、Kubernetes APIサーバーの負荷が高くなり（ポリシーのトリガー頻度による）、アドミッション要求を評価するレイテンシが発生する。
+
+ダイレクト（キャッシュ）クエリの動作は、ポリシー作成者が{short-project-name} SDK を使用してクエリごとに設定します。
+
+== ClusterAdmissionPolicies
+
+ClusterAdmissionPoliciesには、https://doc.crds.dev/github.com/kubewarden/kubewarden-controller/policies.kubewarden.io/ClusterAdmissionPolicy/v1#spec-contextAwareResources[spec.contextAwareResources].ClusterAdmissionPoliciesというフィールドがあります。
+このフィールドは、ポリシーがアクセスする必要がある`+GroupVersionKind+` リソースのリストを提供する。これにより、ポリシー作成者は、ポリシーが必要とする「パーミッション」をポリシーと一緒に発送することができる。さらに、これにより、ポリシーのオペレータは、デプロイ時にポリシーが必要とする「パーミッション」をレビューすることができる。
+
+=== コンテキストを意識したポリシーをローカルでテストする
+
+エンドツーエンドのテストのためにクラスタでポリシーを実行する以外に、`+kwctl+` CLI ユーティリティを使用してクラスタに対してポリシーとモックリクエストを実行できます。
+
+そのために、`+kwctl run+` 、まずクラスターとのやりとりをすべてファイルに記録することができる：
+
+[subs="+attributes",console]
+----
+kwctl run \
+    --allow-context-aware \
+    -r request.json \
+    --record-host-capabilities-interactions replay-session.yml \
+    annotated-policy.wasm
+----
+
+これは次の`+replay-session.yml+` ：
+
+[subs="+attributes",yaml]
+----
+# replay-session.yml
+---
+- type: Exchange
+  request: |
+    !KubernetesGetResource
+    api_version: /v1
+    kind: Pod
+    name: p-testing
+    namespace: local
+    disable_cache: true
+  response:
+    type: Success
+    payload: '{"apiVersion":"","kind":"Pod", <snipped> }'
+----
+
+リプレイ・セッションを使用することで、クラスタがなくてもクラスタの相互作用をシミュレートできるようになった。これはCIやエンドツーエンドのテストに最適である：
+
+[subs="+attributes",console]
+----
+kwctl run \
+    --allow-context-aware \
+    -r request.json \
+    --replay-host-capabilities-interactions replay-session.yml \
+    annotated-policy.wasm
+----
+
+== 言語SDK
+
+クラスタ・コンテキストをサポートする言語SDKは、ポリシーがクラスタの現在の状態を取得できるようにする関数を公開している。
+
+[TIP]
+====
+
+SDKで使用されるwaPC関数に関する詳細情報が必要な場合は、xref:reference/spec/host-capabilities/06-kubernetes.adoc[Kubernetes capabilities]reference documentationを確認してください。
+
+====
+
+
+=== さび
+
+この機能を公開している関数については、https://docs.rs/kubewarden-policy-sdk/0.8.7/kubewarden_policy_sdk[Rust SDK reference documentation]を参照してください。
+
+=== 行く
+
+この機能を公開している関数については、https://pkg.go.dev/github.com/kubewarden/policy-sdk-go[Go SDK reference documentation]を参照してください。
+
+== レゴの方針
+
+=== ゲートキーパー
+
+コンテキストを意識した情報公開は、ゲートキーパーのように`+data.inventory+` 。
+
+`+spec.contextAwareResources+` 、ポリシーがアクセスできるリソースをインベントリに登録する。
+
+=== オープン・ポリシー・エージェント
+
+コンテキストを意識した情報の公開は、`+data.kubernetes+` キーの下にある。https://github.com/open-policy-agent/kube-mgmt[`+kube-mgmt+`]デフォルトではそうなっている。
+
+`+spec.contextAwareResources+` 、ポリシーがアクセスできるリソースをインベントリに登録する。
