@@ -1,0 +1,121 @@
+= ネットワークサービス
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+
+このページでは、CoreDNS、Traefik Ingressコントローラ、Network Policyコントローラ、ServiceLBロードバランサコントローラがK3s内でどのように動作するかを説明します。
+
+Flannelのコンフィギュレーション・オプションとバックエンドの選択、または独自のCNIのセットアップ方法の詳細については、xref:networking/basic-network-options.adoc[インストール・ネットワーク・オプションの]ページを参照してください。
+
+K3用にどのポートを開く必要があるかについては、xref:installation/requirements.adoc#_networking[ネットワーク要件を]参照してください。
+
+== CoreDNS
+
+CoreDNSは、サーバー起動時に自動的に展開されます。これを無効にするには、クラスタ内のすべてのサーバーに`+--disable=coredns+` 。
+
+CoreDNSをインストールしない場合は、クラスタDNSプロバイダを自分でインストールする必要があります。
+
+== Traefik Ingressコントローラー
+
+https://traefik.io/[Traefikは]、マイクロサービスを簡単にデプロイするために作られた、最新のHTTPリバースプロキシとロードバランサーです。アプリケーションの設計、デプロイ、実行中にネットワークの複雑さを簡素化します。
+
+Traefikのイングレスコントローラは、ポート80と443を使用するLoadBalancer Serviceを展開し、管理するイングレスリソースのステータスにLoadBalancer Serviceの外部IPをアドバタイズします。
+
+デフォルトでは、ServiceLB は Traefik LoadBalancer Service をホストするためにクラスタ内のすべてのノードを使用します。つまり、ポート 80 と 443 は他の HostPort や NodePort ポッドでは使用できず、Ingress リソースの Status にはすべてのクラスタメンバーのノード IP が表示されます。
+
+Traefikによって使用されるノード、ひいてはIngress StatusでアドバタイズされるノードIPを制限するには、以下の「<<_controlling_servicelb_node_selection,ServiceLBノード選択の制御>>」セクションの指示に従って、ServiceLBが実行されるノードを制限するか、いくつかのノードをLoadBalancerプールに追加し、Traefik HelmChartConfigで一致するラベルを設定することによって、Traefikサービスをそのプールに制限することができます。
+
+Traefikはサーバー起動時にデフォルトでデプロイされる。デフォルトのチャート値は`+/var/lib/rancher/k3s/server/manifests/traefik.yaml+` にありますが、K3sは起動時にファイルをデフォルトに置き換えるので、このファイルを手動で編集するべきではありません。代わりに、`+/var/lib/rancher/k3s/server/manifests+` に`+HelmChartConfig+` マニフェストを追加作成することで Traefik をカスタマイズする必要があります。詳細と例については、xref:add-ons/helm.adoc#_customizing_packaged_components_with_helmchartconfig[HelmChartConfigによるパッケージコンポーネントのカスタマイズを]参照してください。可能な設定値の詳細については、K3sのバージョンに同梱されているhttps://github.com/k3s-io/k3s-charts/tree/main/charts/traefik[Traefik Helm Chartの] `+values.yaml+` 。
+
+クラスタからTraefikを削除するには、全てのサーバを`+--disable=traefik+` フラグで起動します。詳細については、xref:installation/packaged-components.adoc[パッケージ・コンポーネントの管理を]参照してください。
+
+K3sに含まれるTraefikの特定のバージョンの詳細については、お使いのバージョンのリリースノートを参照してください。
+
+* **1.32から**始まるK3sのバージョンにはTraefik v3が含まれています。Traefik v2の既存のインストールは、K3sがアップグレードされると自動的にv3にアップグレードされます。
+  Traefik v3はv2からの設定と互換性があるはずです。詳細については、アップストリームのhttps://doc.traefik.io/traefik/migrate/v2-to-v3/[]vドキュメントを参照してください。
+* K3sバージョン**1.21から** **1.31には**Traefik v2が含まれていますが、Traefik v1がインストールされている場合は、Traefikはv2にアップグレードされていません。
+* K3sのバージョン**1.20** **以前には**Traefik v1が含まれています。
+
+== ネットワーク・ポリシー・コントローラー
+
+K3sには、ネットワークポリシーコントローラーが組み込まれています。基礎となる実装は、https://github.com/cloudnativelabs/kube-router[]kube-netpolコントローラー・ライブラリーで（他のkube-router機能は存在しない）、https://github.com/k3s-io/k3s/tree/main/pkg/agent/netpol[routerの] 。
+
+これを無効にするには、各サーバーを`+--disable-network-policy+` フラグで起動する。
+
+[NOTE]
+====
+ネットワークポリシーのiptablesルールは、K3sの設定がネットワークポリシーコントローラーを無効にするように変更されても削除されません。ネットワークポリシーコントローラを無効にした後、設定済みのkube-routerネットワークポリシールールをクリーンアップするには、`+k3s-killall.sh+` スクリプトを使用するか、`+iptables-save+` および`+iptables-restore+` を使用してクリーンアップします。これらの手順は、クラスタ内のすべてのノードで手動で実行する必要があります。
+
+----
+iptables-save | grep -v KUBE-ROUTER | iptables-restore
+ip6tables-save | grep -v KUBE-ROUTER | ip6tables-restore
+----
+====
+
+[#_service_load_balancer]
+== サービス・ロードバランサー
+
+どのLoadBalancerコントローラもK3sクラスタにデプロイできます。デフォルトでは、K3sはhttps://github.com/k3s-io/klipper-lb[ServiceLB]（旧Klipper LoadBalancer）として知られるロードバランサーを提供し、利用可能なホストポートを使用します。
+
+Upstream Kubernetesでは、LoadBalancerタイプのServicesを作成することができるが、デフォルトのロードバランサ実装は含まれていないため、これらのサービスは、ロードバランサがインストールされるまで、`+pending+` 。多くのホスト型サービスでは、Amazon EC2やMicrosoft Azureなどのクラウドプロバイダーが外部ロードバランサーの実装を提供する必要がある。対照的に、K3s ServiceLBは、クラウドプロバイダーや追加設定なしでロードバランサーサービスを使用することができます。
+
+=== ServiceLBの仕組み
+
+ServiceLBコントローラは、`+spec.type+` フィールドが`+LoadBalancer+` に設定された Kuberneteshttps://kubernetes.io/docs/concepts/services-networking/service/[Services を]監視する。
+
+各 LoadBalancer Service に対して、link:https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/[DaemonSet]が`+kube-system+` 名前空間に作成される。このDaemonSetは順番に、各ノード上に`+svc-+` プレフィックスを持つServiceLB Podを作成します。これらのポッドは、サービス・ポートを使用してhostPortを活用するため、そのポートが利用可能なノードにのみデプロイされます。利用可能なポートを持つノードがない場合、LBはペンディングのままとなる。異なるポートを使用する限り、同じノード上で複数のサービスを公開することが可能であることに注意。
+
+外部IPが設定されたノード上でServiceLBポッドが実行されると、そのノードの外部IPがサービスの`+status.loadBalancer.ingress+` アドレスリストに`+ipMode: VIP+` 。そうでない場合は、ノードの内部IPが使われる。
+
+外部IPへのトラフィックがlink:https://en.wikipedia.org/wiki/Network_address_translation[Network Address Translation（NAT）の]対象となる場合（たとえばパブリッククラウドでノードのパブリックIPを外部IPとして使用する場合）、トラフィックはhostPort経由でServiceLBポッドにルーティングされる。そしてポッドはiptablesを使って、サービスのClusterIPアドレスとポートにトラフィックを転送する。トラフィックがNATの対象ではなく、LoadBalancerアドレスに一致する宛先アドレスで到着した場合、トラフィックは（通常はkube-proxy iptablesチェーンまたはipvsによって）遮断され、サービスのClusterIPアドレスとポートに転送されます。
+
+=== 使用方法
+
+K3sに https://kubernetes.io/docs/concepts/services-networking/service/#loadbalancer[LoadBalancerタイプの]作成する。
+
+[WARNING]
+.既知の問題
+====
+外部トラフィックがNATを使用してノードに到達し（パブリッククラウドなど）、クライアントのソースIP保存などの目的で`+externalTrafficPolicy=local+` 、正しく動作しないため、どのノードに対してもk3s config`+node-external-ip+` を定義しないでください。
+====
+
+=== ServiceLBノード選択の制御
+
+1つまたは複数のノードに`+svccontroller.k3s.cattle.io/enablelb=true+` ラベルを追加すると、ServiceLB コントローラは許可リストモードに切り替わり、そのラベルを持つノードだけが LoadBalancer ポッドをホストする資格があります。ラベルが貼られていないノードは、ServiceLBによる使用から除外されます。
+
+[NOTE]
+====
+デフォルトでは、ノードにはラベルが付けられていない。すべてのノードがラベル付けされていない限り、利用可能なポートを持つすべてのノードがServiceLBによって使用される。
+====
+
+
+=== ServiceLBノードプールの作成
+
+ロードバランサーのポッドをホストするノードの特定のサブセットを選択するには、希望のノードに`+enablelb+` ラベルを追加し、ノードとサービスに一致する`+lbpool+` ラベル値を設定します。例えば、こうだ：
+
+. ノードAとノードBに`+svccontroller.k3s.cattle.io/lbpool=pool1+` 、ラベルを付ける。 `+svccontroller.k3s.cattle.io/enablelb=true+`
+. ノードCとノードDに`+svccontroller.k3s.cattle.io/lbpool=pool2+` 、ラベルを付ける。 `+svccontroller.k3s.cattle.io/enablelb=true+`
+. ポート443にLoadBalancer Serviceを1つ、ラベル`+svccontroller.k3s.cattle.io/lbpool=pool1+` 。このサービスのDaemonSetは、ノードAとノードBにのみPodをデプロイします。
+. ポート443に、`+svccontroller.k3s.cattle.io/lbpool=pool2+` のラベルを持つ別のLoadBalancer Serviceを作成する。DaemonSetはノードCとノードDにのみPodをデプロイします。
+
+=== ServiceLBの無効化
+
+ServiceLBを無効にするには、クラスタ内のすべてのサーバに`+--disable=servicelb+` フラグを設定します。
+
+これは、MetalLBなど別のLBを実行したい場合に必要です。
+
+== 外部クラウドコントローラマネージャの展開
+
+K3sは、以下のことを行う組み込みのクラウドコントローラマネージャ（CCM）を提供する：
+
+* <<_service_load_balancer, サービスロードバランサーの>>ロードバランサーコントローラーをホストします。
+* `+node.cloudprovider.kubernetes.io/uninitialized+` の汚れを落とす。
+* `+--node-ip+` 、`+--node-external-ip+` 、`+--node-internal-dns+` 、`+--node-external-dns+` のフラグに基づいてノード・アドレス・フィールドを設定する。
+
+外部CCMをデプロイする前に、組み込みCCMを無効にするために、`+--disable-cloud-controller+` フラグですべてのK3sサーバーを起動する必要があります。外部CCMを使用する場合、ノードアドレスはK3sフラグ値の代わりに、クラウドプロバイダのインスタンスメタデータAPIから提供される。
+
+[NOTE]
+====
+ビルトインCCMを無効にし、外部の代用品を配備して適切に設定しないと、ノードは汚染されたままとなり、検査できなくなる。
+====
+
