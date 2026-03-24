@@ -1,0 +1,203 @@
+= Webhook
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidade do SUSE
+
+Webhooks são retornos de chamada HTTP personalizados que você define e executa. Eles podem realizar qualquer ação necessária sempre que uma notificação for aberta ou fechada. Por exemplo, ao criar um tíquete em um sistema de tíquetes que não seja compatível nativamente com o SUSE Observability. Ou simplesmente gravando as mensagens de notificação em um bucket S3 para referência futura.
+
+O canal webhook envia os dados das notificações como <<_webhook_requests_and_payload,JSON por HTTP>>.
+
+== Configurar um webhook
+
+image::k8s/notifications-webhook-channel-configuration.png[Configurar um webhook]
+
+Para configurar um webhook, preencha os campos:
+
+. URL - digite o URL do ponto de extremidade do webhook. O URL deve ser codificado em porcentagem se tiver caracteres especiais.
+. Token secreto - um token secreto que o SUSE Observability incluirá em cada solicitação para <<_validate_the_requests,validá-la>>
+. Metadados - adicione pares de chave/valor extras que são incluídos na carga útil. Isso pode ser usado quando o mesmo endpoint lida com vários webhooks do SUSE Observability e precisa de algumas informações adicionais
+. Ativar verificação SSL - (padrão ativado) ativa a validação do certificado SSL. Desativar somente quando estiver usando certificados autoassinados ou autoridades de certificação não compatíveis com o SUSE Observability
+
+Por fim, selecione "Add channel" (Adicionar canal). O canal do webhook aparecerá à direita. Para testar se o webhook funciona, envie uma mensagem de teste clicando no botão "Test".
+
+== Solicitações de webhook e carga útil
+
+O canal Webhook envia dados como solicitações HTTP POST. O ponto de extremidade e a carga útil estão documentados em uma https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[especificação].
+
+=== Exemplo de carga útil para uma solicitação de abertura de notificação
+
+----
+{
+    "component": {
+        "identifier": "urn:kubernetes:/k8s-demo-cluster:sock-shop:service/catalogue",
+        "link": "https://play.stackstate.com/#/components/urn%3Akubernetes%3A%2Fk8s-demo-cluster%3Asock-shop%3Aservice%2Fcatalogue?timeRange=1702624556757_1702646156757&timestamp=1702635356757",
+        "name": "catalogue",
+        "tags": [
+            "app.kubernetes.io/component:catalogue",
+            "app.kubernetes.io/instance:sock-shop",
+            "app.kubernetes.io/managed-by:Helm",
+            "app.kubernetes.io/name:sock-shop",
+            "app.kubernetes.io/version:0.3.5",
+            "cluster-name:k8s-demo-cluster",
+            "cluster-type:kubernetes",
+            "component-type:kubernetes-service",
+            "domain:business",
+            "extra-identifier:catalogue",
+            "helm.sh/chart:sock-shop",
+            "name:catalogue",
+            "namespace:sock-shop",
+            "service-type:ClusterIP",
+            "stackpack:kubernetes"
+        ],
+        "type": "service"
+    },
+    "event": {
+        "state": "CRITICAL",
+        "title": "HTTP - response time - is above 3.0 seconds",
+        "triggeredTimeMs": 1702635356757,
+        "type": "open"
+    },
+    "monitor": {
+        "identifier": "urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:http-response-time",
+        "link": "https://play.stackstate.com/#/monitors/urn%3Astackpack%3Akubernetes-v2%3Ashared%3Amonitor%3Akubernetes-v2%3Ahttp-response-time",
+        "name": "HTTP - response time - is above 3 seconds",
+        "tags": []
+    },
+    "notificationConfiguration": {
+        "identifier": "urn:system:default:notification-configuration:testing-2",
+        "link": "https://play.stackstate.com/#/notifications/urn%3Asystem%3Adefault%3Anotification-configuration%3Atesting-2",
+        "name": "Test Notification"
+    },
+    "notificationId": "836f628c-1258-4500-b1c7-23884e00f439",
+    "metadata": {
+        "team": "Team A"
+    }
+}
+----
+
+As seções na carga útil do `+open+` são:
+
+. Componente: o componente do SUSE Observability ao qual a notificação se aplica. Isso inclui o nome, o identificador, o tipo e as tags dos componentes. Ele também tem um link para a interface do usuário do SUSE Observability que abrirá o componente no momento da alteração do estado de integridade
+. Evento: o evento que acionou essa notificação. Ele pode ser do tipo `+open+` ou `+close+` (consulte a próxima seção). Um estado `+open+` significa que o monitor ainda está em um estado crítico (ou de desvio) para o componente especificado. Um estado `+close+` significa que o monitor estava aberto antes, mas que o problema foi resolvido. O estado e o tempo acionado estão incluídos. Também está incluído um `+title+`, que é uma breve descrição do problema, conforme fornecido pelo monitor; é o mesmo título mostrado na página de destaques do componente, que pode ser diferente e mais detalhado do que o nome do monitor.
+. Monitor: o monitor que acionou a notificação. Ao lado do nome do monitor, das tags e do identificador, também é incluído um link. O link abrirá o monitor na interface do usuário do SUSE Observability.
+. Configuração de notificação: A configuração da notificação para essa notificação. Inclui um nome, um identificador e um link. O link abrirá a configuração da notificação na interface do usuário do SUSE Observability.
+. Identificação da notificação: Um identificador exclusivo para essa notificação. Consulte também o <<_notification_life_cycle,ciclo de vida da notificação>>
+. Metadados: É possível especificar metadados em um canal de webhook. Os metadados são reproduzidos aqui como um conjunto de pares de chave/valor.
+
+=== Exemplo de carga útil para uma solicitação de fechamento de notificação
+
+----
+{
+    "component": {
+        "identifier": "urn:kubernetes:/gke-demo-dev.gcp.stackstate.io:sock-shop:service/catalogue",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/components/urn%3Akubernetes%3A%2Fgke-demo-dev.gcp.stackstate.io%3Asock-shop%3Aservice%2Fcatalogue?timeRange=1702624556757_1702646156757&timestamp=1702635356757",
+        "name": "catalogue",
+        "tags": [
+            "app.kubernetes.io/component:catalogue",
+            "app.kubernetes.io/instance:sock-shop",
+            "app.kubernetes.io/managed-by:Helm",
+            "app.kubernetes.io/name:sock-shop",
+            "app.kubernetes.io/version:0.3.5",
+            "cluster-name:gke-demo-dev.gcp.stackstate.io",
+            "cluster-type:kubernetes",
+            "component-type:kubernetes-service",
+            "domain:business",
+            "extra-identifier:catalogue",
+            "helm.sh/chart:sock-shop",
+            "name:catalogue",
+            "namespace:sock-shop",
+            "service-type:ClusterIP",
+            "stackpack:kubernetes"
+        ],
+        "type": "service"
+    },
+    "event": {
+        "reason": "HealthStateResolved",
+        "type": "close"
+    },
+    "monitor": {
+        "identifier": "urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:http-response-time",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/monitors/urn%3Astackpack%3Akubernetes-v2%3Ashared%3Amonitor%3Akubernetes-v2%3Ahttp-response-time",
+        "name": "HTTP - response time - is above 3 seconds",
+        "tags": []
+    },
+    "notificationConfiguration": {
+        "identifier": "urn:system:default:notification-configuration:testing-2",
+        "link": "https://stac-20533-webhook-channel-management-api.preprod.stackstate.io/#/notifications/urn%3Asystem%3Adefault%3Anotification-configuration%3Atesting-2",
+        "name": "Test Notification"
+    },
+    "notificationId": "836f628c-1258-4500-b1c7-23884e00f439",
+    "tags": {
+        "team": "Team A"
+    }
+}
+----
+
+As seções do payload `+close+` são as mesmas do payload `+open+`, exceto a `+event+`. O `+type+` agora é `+close+` e há apenas um campo `+reason+` indicando o motivo pelo qual a notificação foi encerrada. O valor nesse campo é um enum, a https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[especificação] documenta os valores possíveis.
+
+== Ciclo de vida da notificação
+
+Como pode ser visto na carga útil, cada notificação é identificada exclusivamente por seu endereço `+notificationId+`. É possível, e até comum, receber mais de uma mensagem para a mesma notificação, mas elas sempre serão enviadas de acordo com esse ciclo de vida.
+
+Uma notificação é criada pela primeira vez quando o estado de um monitor muda para desviante ou crítico (se o desvio é aplicável depende das xref:/use/alerting/notifications/configure.adoc#_configure_when_to_notify[configurações da notificação]). Uma mensagem com o tipo de evento `+open+` é enviada para o webhook.
+
+Uma notificação pode ser atualizada quando o `+state+` ou o `+title+` do evento for alterado. As alterações no componente e em outras partes da mensagem serão incluídas, mas, por si só, não acionarão uma atualização. Uma atualização de notificação também envia uma mensagem com o tipo de evento `+open+` para o webhook. A mensagem terá o mesmo endereço `+notificationId+` que pode ser usado para atualizar os dados no sistema externo (em vez de criar uma nova notificação).
+
+Por fim, uma notificação é fechada quando o estado do monitor volta a ser um estado não crítico (ou de desvio). Uma mensagem com o tipo de evento `+close+` é enviada para o webhook. Essa também é a última vez que o site `+notificationId+` específico é usado.
+
+Observe que uma notificação pode ser aberta e fechada por motivos diferentes de uma alteração de estado de saúde:
+
+* Uma tag é adicionada a um componente ou monitor. Isso pode fazer com que algum estado crítico de integridade do monitor corresponda aos critérios de seleção em uma configuração de notificação, e as notificações correspondentes serão abertas.
+* Pelo mesmo motivo, a remoção de uma tag de um componente ou monitor pode fechar uma notificação, mesmo que o estado de saúde ainda seja crítico.
+* As alterações na configuração da própria notificação também podem resultar na abertura ou fechamento de muitas novas notificações.
+
+== Validar as solicitações
+
+O token secreto especificado na configuração do canal é incluído nas solicitações de webhook no cabeçalho `+X-StackState-Webhook-Token+`. Seu endpoint de webhook pode verificar o valor para verificar se as solicitações são legítimas.
+
+== Novas tentativas
+
+O canal de webhook tentará novamente solicitar uma notificação até receber uma resposta de status 200 OK (o corpo da resposta é ignorado). Se o webhook não conseguir processar a mensagem (por exemplo, porque um banco de dados não pode ser acessado no momento), ele poderá simplesmente responder com um código de status 500. O SUSE Observability reenviará a mesma mensagem dentro de alguns segundos, na esperança de que o problema já tenha sido resolvido.
+
+Se uma notificação foi atualizada ou fechada, a mensagem antiga será descartada e a nova mensagem, atualizada, será enviada e novamente tentada até que seja bem-sucedida.
+
+== Exemplo de webhook
+
+Para testar como os webhooks funcionam, você pode usar este simples script Python que inicia um servidor HTTP e grava a carga recebida na saída padrão.
+
+. Salve esse script Python como `+webhook.py+`:
+```python
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import sys
+
+class WebhookHTTPRequestHandler(BaseHTTPRequestHandler):
+
+ def do_POST(self):
+     content_len = int(self.headers.get('content-length', 0))
+     notification = json.loads(self.rfile.read(content_len))
+     print("Notification received: ", json.dumps(notification, indent = 2))
+     self.send_response(200)
+     self.end_headers()
+
+httpd = HTTPServer(('', int(sys.argv[1])), WebhookHTTPRequestHandler)
+httpd.serve_forever()
+```
+
+. Execute o servidor de webhook em uma porta não utilizada (por exemplo, 8000): `+python3 webhook.py 8000+`
+. Configure o webhook no SUSE Observability com o URL do seu servidor de webhook `+http://webhook.example.com:8000+`
+. Clique em `+test+` no canal do webhook
+
+[NOTE]
+====
+O URL do seu webhook deve ser acessível pelo SUSE Observability, portanto, um endereço localhost ou um endereço IP local não será suficiente.
+====
+
+
+O exemplo não autentica a solicitação, que pode ser adicionada verificando o valor do <<_validate_the_requests,cabeçalho do token>>.
+
+Em vez de implantar isso manualmente, também é possível usar a https://github.com/StackVista/stackstate-openapi/tree/master/spec_webhook[especificação] para gerar uma implementação de servidor em qualquer uma das linguagens compatíveis com o https://openapi-generator.tech/[OpenAPI].
+
+== Relacionado
+
+* xref:/use/alerting/notifications/troubleshooting.adoc[Solução de problemas]
