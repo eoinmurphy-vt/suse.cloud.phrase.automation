@@ -1,0 +1,234 @@
+include::partial$variables.adoc[]
+= ポリシーの検証
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ポリシー固有の設定を使用して検証リクエストを評価し、Kubernetes AdmissionReviewオブジェクトの受け入れまたは拒否を決定します。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "validating-policies"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"policy specification"、"policy validation"]。
+:sidebar_label: ポリシーの検証
+:current-version: {page-origin-branch}
+
+{project-name} ポリシーサーバーが受信する：
+
+* Kuberneteshttps://godoc.org/k8s.io/api/admission/v1#AdmissionReview[`+AdmissionReview+`]オブジェクトをKubernetes APIサーバーから取得します。
+そして、`+request+` 属性の値を、評価のためにポリシーに転送する。https://godoc.org/k8s.io/api/admission/v1#AdmissionRequest[`+AdmissionRequest+`]の値をポリシーに転送します。
+
+あるいは
+
+* 生のポリシーの場合、自由形式のリクエスト文書を含む JSON`+request+` 属性。詳しくは「xref:../../howtos/raw-policies.adoc[生ポリシー]」の項をご覧ください。
+
+ポリシーは、`+request+` を評価し、それを受け入れるべきかどうかを表明する。リクエストが拒否されたとき、ポリシーはエンドユーザーに表示する説明メッセージとエラーコードを提供するかもしれない。
+
+`+policy-server+` プロジェクトの慣例として、ゲストはwaPCゲストSDKを通して`+validate+` という関数を公開し、`+policy-server+` (waPCホスト)がそれを呼び出せるようにしなければなりません。
+
+`+validate+` 関数は、`+ValidationRequest+` JSON オブジェクトを受け取り、`+ValidationResponse+` JSON オブジェクトを返す。
+
+== `+ValidationRequest+` オブジェクト
+
+`+ValidationRequest+` は、`+validate+` 関数が受け取ったJSONオブジェクトである。
+そのようだ：
+
+[subs="+attributes",yaml]
+----
+{
+  "request": <AdmissionReview.request data> | <RawReviewRequest.request data>,
+  "settings": {
+    # your policy configuration
+  }
+}
+----
+
+`+settings+` キーは、ポリシー固有の設定を保持する自由形式の JSON ドキュメントを指す。前章ではポリシーとセッティングに焦点を当てた。
+
+== 一例
+
+以下のKubernetes`+AdmissionReview+` が与えられている：
+
+.拡大して見る `+AdmissionReview+`
+[%collapsible]
+======
+
+[subs="+attributes",yaml]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    # Random uid uniquely identifying this admission call
+    "uid": "705ab4f5-6393-11e8-b7cc-42010a800002",
+
+    # Fully-qualified group/version/kind of the incoming object
+    "kind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified
+    "resource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    "subResource": "scale",
+
+    # Fully-qualified group/version/kind of the incoming object in the original request to the API server.
+    # This only differs from `+kind+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestKind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified in the original request to the API server.
+    # This only differs from `+resource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestResource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    # This only differs from `+subResource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestSubResource": "scale",
+
+    # Name of the resource being modified
+    "name": "my-deployment",
+    # Namespace of the resource being modified, if the resource is namespaced (or is a Namespace object)
+    "namespace": "my-namespace",
+
+    # operation can be CREATE, UPDATE, DELETE, or CONNECT
+    "operation": "UPDATE",
+
+    "userInfo": {
+      # Username of the authenticated user making the request to the API server
+      "username": "admin",
+      # UID of the authenticated user making the request to the API server
+      "uid": "014fbff9a07c",
+      # Group memberships of the authenticated user making the request to the API server
+      "groups": ["system:authenticated","my-admin-group"],
+      # Arbitrary extra info associated with the user making the request to the API server.
+      # This is populated by the API server authentication layer and should be included
+      # if any SubjectAccessReview checks are performed by the webhook.
+      "extra": {
+        "some-key":["some-value1", "some-value2"]
+      }
+    },
+
+    # object is the new object being admitted.
+    # It is null for DELETE operations.
+    "object": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # oldObject is the existing object.
+    # It is null for CREATE and CONNECT operations.
+    "oldObject": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # options contains the options for the operation being admitted, like meta.k8s.io/v1 CreateOptions, UpdateOptions, or DeleteOptions.
+    # It is null for CONNECT operations.
+    "options": {"apiVersion":"meta.k8s.io/v1","kind":"UpdateOptions",...},
+
+    # dryRun indicates the API request is running in dry run mode and will not be persisted.
+    # Webhooks with side effects should avoid actuating those side effects when dryRun is true.
+    # See http://k8s.io/docs/reference/using-api/api-concepts/#make-a-dry-run-request for more details.
+    "dryRun": false
+  }
+}
+----
+
+======
+
+`+ValidationRequest+` ：
+
+.拡大して見る `+ValidationRequest+`
+[%collapsible]
+======
+
+[subs="+attributes",yaml]
+----
+{
+  "request": {
+    # Random uid uniquely identifying this admission call
+    "uid": "705ab4f5-6393-11e8-b7cc-42010a800002",
+
+    # Fully-qualified group/version/kind of the incoming object
+    "kind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified
+    "resource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    "subResource": "scale",
+
+    # Fully-qualified group/version/kind of the incoming object in the original request to the API server.
+    # This only differs from `+kind+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestKind": {"group":"autoscaling","version":"v1","kind":"Scale"},
+    # Fully-qualified group/version/kind of the resource being modified in the original request to the API server.
+    # This only differs from `+resource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestResource": {"group":"apps","version":"v1","resource":"deployments"},
+    # subresource, if the request is to a subresource
+    # This only differs from `+subResource+` if the webhook specified `+matchPolicy: Equivalent+` and the
+    # original request to the API server was converted to a version the webhook registered for.
+    "requestSubResource": "scale",
+
+    # Name of the resource being modified
+    "name": "my-deployment",
+    # Namespace of the resource being modified, if the resource is namespaced (or is a Namespace object)
+    "namespace": "my-namespace",
+
+    # operation can be CREATE, UPDATE, DELETE, or CONNECT
+    "operation": "UPDATE",
+
+    "userInfo": {
+      # Username of the authenticated user making the request to the API server
+      "username": "admin",
+      # UID of the authenticated user making the request to the API server
+      "uid": "014fbff9a07c",
+      # Group memberships of the authenticated user making the request to the API server
+      "groups": ["system:authenticated","my-admin-group"],
+      # Arbitrary extra info associated with the user making the request to the API server.
+      # This is populated by the API server authentication layer and should be included
+      # if any SubjectAccessReview checks are performed by the webhook.
+      "extra": {
+        "some-key":["some-value1", "some-value2"]
+      }
+    },
+
+    # object is the new object being admitted.
+    # It is null for DELETE operations.
+    "object": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # oldObject is the existing object.
+    # It is null for CREATE and CONNECT operations.
+    "oldObject": {"apiVersion":"autoscaling/v1","kind":"Scale",...},
+    # options contains the options for the operation being admitted, like meta.k8s.io/v1 CreateOptions, UpdateOptions, or DeleteOptions.
+    # It is null for CONNECT operations.
+    "options": {"apiVersion":"meta.k8s.io/v1","kind":"UpdateOptions",...},
+
+    # dryRun indicates the API request is running in dry run mode and will not be persisted.
+    # Webhooks with side effects should avoid actuating those side effects when dryRun is true.
+    # See http://k8s.io/docs/reference/using-api/api-concepts/#make-a-dry-run-request for more details.
+    "dryRun": false
+  },
+  "settings": {
+    # policy settings
+  }
+}
+----
+
+======
+
+== `+ValidationResponse+` オブジェクト
+
+`+validate+` 関数は、`+ValidationResponse+` オブジェクトを使って検証結果を返す。
+
+`+ValidationResponse+` 、このような構造になっている：
+
+[subs="+attributes",yaml]
+----
+{
+  # mandatory
+  "accepted": <boolean>,
+
+  # optional, ignored if accepted - recommended for rejections
+  "message": <string>,
+
+  # optional, ignored if accepted
+  "code": <integer>,
+
+  # optional, used by mutation policies
+  "mutated_object": <string>
+}
+----
+
+これらの`+message+` 、`+code+` 属性は、リクエストが受け入れられないときに指定できます。`+message+` は自由形式のテキストエラーで、`+code+` はHTTPエラーコードを表す。
+
+Kubernetes APIサーバーは、リクエスト受付時に`+message+` と`+code+` の値を無視します。
+
+リクエストが拒否され、`+message+` または`+code+` が存在する場合、Kubernetes API サーバーはこの情報を返します。この情報はエラーのボディの一部であり、サーバーは拒否されたリクエストを発行したKubernetes APIクライアントにそれを返す。
+
+`+mutated_object+` は、ミューティング・ポリシーでのみ使用されるオプション・フィールドである。
+これが次章のテーマである。
