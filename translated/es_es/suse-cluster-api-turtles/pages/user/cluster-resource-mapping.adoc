@@ -1,0 +1,123 @@
+= Relaciones de recursos de clúster en {product_name}
+:revdate: 2026-01-06
+:page-revdate: {revdate}
+
+== Visión general
+
+Rancher integra varios componentes que definen sus propios recursos personalizados `+Cluster+`.{product_name} se basa en esta base utilizando Cluster API y Fleet, lo que puede llevar a confusión sobre cómo interactúan estos recursos `+Cluster+` y qué deben editar los usuarios.
+
+Este documento explica la finalidad, el comportamiento y las relaciones entre los siguientes recursos del clúster:
+
+* `+clusters.cluster.x-k8s.io+` (Grupo CAPI)
+* `+clusters.fleet.cattle.io+` (Grupo de flotas)
+* `+clusters.provisioning.cattle.io+` (Clúster de aprovisionamiento)
+* `+clusters.management.cattle.io+` (Grupo de Gestión)
+
+== Resumen de recursos
+
+|===
+| Grupo API | Recursos del clúster | Papel
+
+| `+cluster.x-k8s.io+`
+| Grupo CAPI
+| Define el ciclo de vida y la topología del clúster. Actúa como fuente de la verdad en las Tortugas.
+
+| `+fleet.cattle.io+`
+| Grupo de flotas
+| Se utiliza para la orientación de paquetes de GitOps y la sincronización de aplicaciones a través de Fleet.
+
+| `+provisioning.cattle.io+`
+| Clúster de aprovisionamiento
+| La anterior abstracción de clúster de propósito general de Rancher. Encapsula tanto la configuración agnóstica de la infraestructura como la específica del proveedor, y es necesaria para generar tokens y manifiestos de registro de clústeres. En {product_name}, este recurso se ha utilizado para envolver grupos CAPI importados, pero se está eliminando progresivamente.
+
+| `+management.cattle.io+`
+| Grupo de Gestión
+| Representación actual de clústeres de Rancher. `+management.cattle.io/v3+` clústeres son ahora el recurso por defecto creado y gestionado por Tortugas. Esto no debe confundirse con los clústeres gestionados por CAPI, donde "gestionado" se refiere a la gestión del ciclo de vida de la API de clúster, no al grupo API de Rancher `+management.cattle.io+`.
+|===
+
+== Relaciones
+
+=== Clúster CAPI → Clúster de flotas
+
+Cuando el Cluster API Add-on Provider for Fleet (CAAPF) está activado, propaga etiquetas y anotaciones desde la CAPI `+Cluster+` a la correspondiente Fleet `+Cluster+`. Esto permite orientar los paquetes GitOps mediante selectores de etiquetas. CAAPF crea el correspondiente recurso Fleet `+Cluster+` después de que el CAPI `+Cluster+` alcance la condición `+ControlPlaneInitialized+`.
+
+=== Clúster CAPI → Clúster de aprovisionamiento (heredado)
+
+Se puede crear un `+provisioning.cattle.io.Cluster+` para envolver el Cluster CAPI y exponer los campos específicos del Rancher (por ejemplo, nombre para mostrar, configuración RKE). Sin embargo, en la mayoría de los flujos de trabajo de {product_name} se está eliminando progresivamente y no se requiere que el usuario interactúe con este recurso.
+
+=== Clúster de gestión → Clúster de aprovisionamiento
+
+En el caso de los clusters heredados, puede generarse un `+provisioning.cattle.io/v1.Cluster+` a partir de un `+management.cattle.io/v3.Cluster+`. Este objeto es utilizado por la interfaz de usuario y las API de Rancher y no está destinado a ser modificado directamente por los usuarios.
+Los nuevos clústeres gestionados únicamente a través de Tortugas no crean automáticamente un clúster `+provisioning.cattle.io+`.
+
+== Comportamiento de la propagación
+
+|===
+| De → A | Propagación | Notas
+
+| CAPI → Flota
+| Sí
+| Propagada por CAAPF
+
+| CAPI → Aprovisionamiento
+| No
+| No se crea automáticamente; sólo se genera a través de Turtles para los clusters heredados
+
+| CAPI → Gestión
+| No
+| Sólo a través de Provisioning Cluster para clusters heredados
+
+| Aprovisionamiento → Flota
+| No
+| No se admite
+
+| Flota → CAPI
+| No
+| No se admite
+
+| Gestión → Aprovisionamiento
+| Condicional
+| Sólo para clústeres heredados; los nuevos clústeres gestionados por Turtles no generan clústeres de aprovisionamiento.
+|===
+
+== ¿Qué deben editar los usuarios?
+
+=== Recomendado: `+cluster.x-k8s.io.Cluster+`
+
+El Cluster CAPI es el recurso autorizado para la definición de clusters en {product_name}.
+Las etiquetas deben colocarse en el objeto Cluster CAPI. Se propagarán automáticamente al clúster de flotas, permitiendo que los selectores de paquetes basados en etiquetas funcionen como se espera.
+
+=== Condicional: `+provisioning.cattle.io.Cluster+`
+
+Sólo es necesario cuando se utilizan funciones de aprovisionamiento nativas de Rancher (por ejemplo, `+spec.rkeConfig+`, flujos basados en la interfaz de usuario). Evite la edición a menos que se requiera explícitamente.
+
+=== Evítalo: `+fleet.cattle.io.Cluster+`
+
+Las agrupaciones de flotas se gestionan automáticamente. Se desaconsejan las ediciones a menos que se trabaje en el interior de la flota.
+
+=== Evítalo: `+management.cattle.io.Cluster+`
+
+Estos recursos son internos y están totalmente gestionados por Rancher. No los modifique.
+
+[NOTE]
+====
+* El **Grupo CAPI** es la fuente de la verdad.
+* Las agrupaciones **de flotas** se generan automáticamente a partir de agrupaciones CAPI mediante CAAPF.
+* **Los clústeres de** **aprovisionamiento** y **gestión** *no* son *necesarios* a menos que se trate del aprovisionamiento de Rancher.
+====
+
+[TIP]
+====
+Utilice las etiquetas del clúster CAPI para impulsar el despliegue de paquetes de flotas. El controlador CAAPF se encarga de sincronizar esas etiquetas con el objeto Fleet Cluster.
+====
+
+== Referencias
+
+* https://github.com/rancher/cluster-api-addon-provider-fleet[Proveedor de complementos de API de clúster para flotas (CAAPF)]
+ifeval::["{build-type}" == "product"]
+* https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/index.html[Documentación de la flota]
+endif::[]
+ifeval::["{build-type}" == "community"]
+* https://fleet.rancher.io[Documentación de la flota]
+endif::[]
+* https://extensions.rancher.io/internal/code-base-works/cluster-management-resources#cluster-resources[Funcionamiento interno de Rancher Cluster]
