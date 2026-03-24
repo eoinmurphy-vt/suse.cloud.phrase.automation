@@ -1,0 +1,83 @@
+= 认证
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+认证发生在机器上机期间，即机器_注册_到{elemental_operator_name} 时。
+
+{elemental-product-name} 默认情况下，主机通过_可信平台模块_（TPM）进行身份验证：机器通过_验证_进行身份验证，即机器通过其 TPM 设备证明自己的身份。
+
+为了使_认证_发挥作用，每台上机计算机都*必须有一个 TPM 2.0 设备*，否则将无法使用安全 TPM 身份验证进行注册。
+
+== TPM 替代品
+
+*官方支持的唯一注册方法是基于 TPM 认证，要求设备启用 TPM 2.0。*
+
+如果要绕过安全身份验证注册没有 TPM 2.0 芯片的设备，有多种方法可以唯一_识别_这些机器并允许注册：
+
+* 通过简单的软件实现仿真 TPM 设备
+* 通过网络 MAC 地址识别自己的身份
+* 使用其 SMBIOS UUID 识别自己的身份
+
+身份验证/识别方法可在机器注册资源的xref:references/machineregistration-reference.adoc#_config_elemental_registration[config:elemental:registration:auth 字段]中指定。
+
+[CAUTION]
+====
+{elemental-product-name} 中唯一安全且官方支持的*身份验证*方法是基于 TPM 认证的默认方法。
+TPM 替代方案可用于演示或本地部署，但不建议用于生产，因为无法安全地验证上载机器的身份。
+====
+
+=== TPM 仿真
+
+TPM 仿真使用模仿 TPM 行为的软件执行身份验证，该软件嵌入在{elemental_register_name} 中。
+仿真 TPM 设备的密钥都是由单个种子以确定的方式生成的：相同的种子会生成相同的 TPM 密钥，因此每个注册主机都应提取不同的种子。
+
+通过配置`+MachineRegistration+` 配置中的`+emulate-tpm+` 和`+emulated-tpm-seed+` 字段，可启用 TPM 仿真（详情请参见xref:references/machineregistration-reference.adoc#_config_elemental_registration[机器注册参考资料中的 config:elemental:registration 部分]）。
+
+.使用 TPM 仿真进行机器注册的示例
+[,yaml]
+----
+include::example$authentication/registration-emulate-tpm.yaml[]
+----
+
+TPM 仿真配置详见xref:operator-operational-tasks/tpm.adoc#_add_tpm_emulation_to_bare_metal_machine[TPM 仿真配置部分]。
+
+=== MAC 地址识别
+
+使用 MAC 地址识别时，主机使用其网络接口卡（NIC）上的 MAC 地址作为标识符注册到{elemental_operator_name} 。
+如果机器有多个网络接口，MAC 地址将按词典顺序排列，并选择第一个。
+
+要使用 MAC 地址识别取代 TPM 身份验证，只需将`+mac+` 值设置为xref:references/machineregistration-reference.adoc#_config_elemental_registration[机器注册引用中 config:elemental:registration 部分]的`+auth+` 字段即可。
+
+.使用 MAC 地址作为机器标识符的机器注册示例
+[,yaml]
+----
+include::example$authentication/registration-mac.yaml[]
+----
+
+[CAUTION]
+====
+{elemental_operator_name} 认为 MAC 地址是唯一的。
+对于物理设备来说是如此，而如果使用来自不同管理程序和不同网段的虚拟机，则需要管理员确保注册的虚拟机具有唯一的 MAC 地址。
+====
+
+
+=== SMBIOS UUID 识别
+
+系统管理 BIOS（SMBIOS）规范定义了可用于读取主机 BIOS 生成的管理信息的数据结构。
+
+当使用`+sys-uuid+` 值作为xref:references/machineregistration-reference.adoc#_config_elemental_registration[机器注册中 config:elemental:registration 部分]的`+auth+` 字段时，主机将使用主机 SMBIOS 数据`+System Information+` 表中的`+UUID+` 值注册到{elemental_operator_name} 。
+
+.使用 SMBIOS 系统信息表中的 UUID 作为机器标识符的机器注册示例
+[,yaml]
+----
+include::example$authentication/registration-sys-uuid.yaml[]
+----
+
+[CAUTION]
+====
+SMBIOS`+System information/UUID+` 值应由硬件供应商填写，作为主机的唯一 UUID。
+
+SMBIOS 数据并不总是可靠的。这取决于制造商。您可能会遇到 UUID 丢失或同一 UUID 被应用于同一批次中的多个设备的情况。
+
+管理员应确保机器具有唯一的`+System information/UUID+` SMBIOS 值（`+dmidecode+` 工具可提供帮助），否则机器将不断覆盖相同的`+MachineInventory+` 资源，而{elemental-product-name} 的调配将失败。
+====
