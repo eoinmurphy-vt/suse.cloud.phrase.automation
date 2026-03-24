@@ -1,0 +1,57 @@
+= Einbindung von Cloud-Konfigurationsdateien von Wechseldatenträgern
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} nodes unterstützt das Laden von xref:references/cloud-config-reference.adoc[Cloud-Konfigurationsdateien] von bestimmten Blockgeräten.
+Unterstützt wird insbesondere das Laden von cloud-config-Dateien von einem ISO mit `+CIDATA+` als Volume-ID oder einem vFAT-formatierten Gerät mit `+CIDATA+`. Wenn ein Gerät, das diesen Kriterien entspricht, beim ersten Start gefunden wird, liest der {elemental-product-name} -Client es und sucht in seinem Stammverzeichnis nach einer `+user-data+` -Datei.
+
+Als Beispiel kann ein ISO mit einer Cloud-Konfigurationsdatei auf einem Linux-Host mit dem folgenden Verfahren erstellt werden.
+
+Erstellen Sie eine `+user-data+` Datei mit den Cloud-Konfigurationsdaten darin. Im folgenden Beispiel wird einfach ein Proxy gesetzt:
+
+.Benutzerdaten
+[,yaml]
+----
+#cloud-config
+write_files:
+
+* path: /etc/sysconfig/proxy
+append: true
+content: |
+  PROXY_ENABLED="yes"
+  HTTP_PROXY=http://some.domain.org:8080
+  HTTPS_PROXY=https://some.domain.org:8080
+  NO_PROXY="localhost, 127.0.0.1"
+----
+
+Sobald die Datei `+user-data+` existiert, erstellen Sie eine ISO-Datei, die nur diese Datei enthält, indem Sie das Linux-Dienstprogramm `+mkisofs+` verwenden:
+
+[,bash]
+----
+mkisof -o cidata.iso -V CIDATA -J -r user-data
+----
+
+Das Ergebnis ist eine ISO-Datei, die mit `+CIDATA+` gekennzeichnet ist und die Datei `+user-data+` enthält.
+
+Beim Booten wird die Datei `+user-data+` unverändert nach `+/oem/user-data+` kopiert, und falls sie Cloud-Config-Daten enthält, wird eine zusätzliche Kopie als `+/oem/user-data.yaml+` hinzugefügt. Die Datei `+/oem/user-data.yaml+` wird in einer späteren Phase der Cloud-Initierung geparst.
+
+Da die Daten auf `+/oem+` kopiert werden, sind sie beständig, so dass der Wechseldatenträger bei nachfolgenden Neustarts nicht mehr vorhanden sein muss. Wenn sie bei nachfolgenden Neustarts immer noch vorhanden ist, überschreibt sie einfach alle bereits vorhandenen Daten.
+
+== Nicht-Cloud-Konfigurationsdaten einbeziehen
+
+Wenn `+user-data+` keine Cloud-Konfigurationsdaten enthält, kopiert der {elemental-product-name} -Client sie einfach so wie sie sind auf `+/oem/user-data+`. Nur `+*.yaml+` Dateien werden bei der Ausführung von cloud-init-Stufen geparst, so dass die Datei in diesem Fall von cloud-init-Diensten ignoriert wird.
+
+Wenn die `+user-data+` ein Skript enthält, versucht der {elemental-product-name} -Client zusätzlich, dieses auszuführen. Die Art und Weise, wie{elemental-product-name} client feststellt, ob `+user-data+` ein Skript ist oder nicht, ist das Vorhandensein eines _Shebang_ in der ersten Zeile. Die vorherige Datei `+user-data+` könnte zum Beispiel so umgeschrieben werden:
+
+.Benutzerdaten
+[,bash]
+----
+#!/bin/bash
+
+cat <<EOF >> /etc/sysconfig/proxy
+PROXY_ENABLED="yes"
+HTTP_PROXY=http://some.domain.org:8080
+HTTPS_PROXY=https://some.domain.org:8080
+NO_PROXY="localhost, 127.0.0.1"
+EOF
+----
