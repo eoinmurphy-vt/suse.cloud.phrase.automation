@@ -1,0 +1,50 @@
+= 动态阈值监测器
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 概述
+
+对于随时间变化很大且因服务而异的指标，动态阈值监控器可提供简单而有效的异常检测。 除近期数据外，它还使用 1、2 或 3 周前的数据作为当前数据的对比背景。
+
+利用安德森-达林测试法，将 "检查窗口 "的数据与历史背景提供的数据进行比较。 这对数据分布的假设要求很低。 该检验对分布上下两端的异常值特别敏感。 指标可以是平滑的，也可以是尖峰的，或者有几个 "等级"\--由于数据值是直接比较的，不需要任何模型拟合，因此动态阈值监控器非常稳健。
+
+对于随时间平滑变化的指标（如 5 分钟），有效数据点的数量要少于原始数据点的数量。 DT 可以对此进行补偿，因此同一个监视器可用于多种指标，而无需调整其参数。
+
+监控功能可以设置几个参数：
+
+* `+falsePositiveRate+``+!!float 1e-8+` - 监视器对偏差行为的敏感度。 较低的值会抑制更多（假）阳性结果，但也可能导致假阴性结果（未察觉的异常）。
+* `+checkWindowMinutes+`例如`+10+` 分钟 - 检查窗口需要在快速警报（数值小）和正确识别异常（数值大）之间取得平衡。 少数几个数据点在实践中效果很好。
+* `+historicWindowMinutes+`例如：`+120+` （2 小时）\--以当前时间为括号，然后是一个或多个星期之前的时间\--因此从当前时间之前 1 小时到之后 1 小时。 此外，还使用了检查窗口前的 2 个小时。 动态阈值监控器将此历史数据的分布与检查窗口中的数据点进行比较。
+* `+historySizeWeeks+`例如：`+2+` - 从历史数据中提取的周数。 可以是`+1+`, `+2+` 或`+3+` 。
+* `+removeTrend+`平均值：对于具有趋势行为的指标（如请求数），其绝对值每周都不同，这种趋势（平均值）可以考虑在内。
+* `+includePreviousDay+`：通常为`+false+` - 对于没有每周模式而只有每日模式的指标，可以使用较新的数据
+
+== 动态阈值监控器示例
+
+使用动态阈值功能实现的监控器如下所示：
+
+----
+  - _type: "Monitor"
+    name: "<name of the monitor>"
+    identifier: "urn:custom:monitor:<identifier for the monitor>"
+    status: "DISABLED"
+    description: "<description>"
+    function: {{ get "urn:stackpack:aad-v2:shared:monitor-function:dt" }}
+    arguments:
+      telemetryQuery:
+        query: "<metric to bind to component>"
+        unit: s
+        aliasTemplate: "<name for the metric>"
+      topologyQuery: <topology query for the components to bind to>
+      falsePositiveRate: <floating point number, e.g. !!float 1e-8>
+      checkWindowMinutes: <integer, e.g. 10>
+      historicWindowMinutes: <integer, e.g. 120>
+      historySizeWeeks: <integer: 1, 2 or 3>
+      includePreviousDay: <boolean>
+      removeTrend: <boolean>
+    intervalSeconds: 60
+    remediationHint: "<how to remediate deviating states>"
+----
+
+xref:/use/alerting/k8s-add-monitors-cli.adoc[使用 CLI 向组件添加阈值监控器的]指南来实施监控器
