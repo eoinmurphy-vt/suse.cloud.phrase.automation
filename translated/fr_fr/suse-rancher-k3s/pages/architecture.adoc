@@ -1,0 +1,65 @@
+= Architecture
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-01-06
+:page-revdate: {revdate}
+
+== Serveurs et agents
+
+* Un nœud de serveur est défini comme un hôte exécutant la commande `+k3s server+`, les composants du plan de contrôle et du magasin de données étant gérés par les K3.
+* Un nœud d'agent est défini comme un hôte exécutant la commande `+k3s agent+`, sans aucun composant de datastore ou de control-plane.
+* Les serveurs et les agents exécutent tous deux le kubelet, le moteur d'exécution du conteneur et la CNI. Voir la documentation sur les xref:advanced.adoc#_running_agentless_servers_experimental[options avancées] pour plus d'informations sur l'exécution de serveurs sans agent.
+
+image:how-it-works-k3s-revised.svg[]
+
+== Installation d'un seul serveur avec une base de données intégrée
+
+Le diagramme suivant montre un exemple de cluster comprenant un serveur K3s à nœud unique avec une base de données SQLite intégrée.
+
+Dans cette configuration, chaque nœud d'agent est enregistré auprès du même nœud de serveur. Un utilisateur K3s peut manipuler les ressources Kubernetes en appelant l'API K3s sur le nœud du serveur.
+
+image:k3s-architecture-single-server.svg[Architecture K3s avec un seul serveur]
+
+[#_high_availability_k3s]
+== K3 à haute disponibilité
+
+Les clusters de serveurs uniques peuvent répondre à divers cas d'utilisation, mais pour les environnements où le temps de disponibilité du plan de contrôle Kubernetes est critique, vous pouvez exécuter les K3 dans une configuration HA. Un cluster HA K3s comprend
+
+[tabs]
+======
+DB embarquée::
++
+--
+* Trois *nœuds de serveur* ou plus qui serviront l'API Kubernetes et exécuteront d'autres services du plan de contrôle.
+* Un *datastore etcd intégré* (par opposition au datastore SQLite intégré utilisé dans les configurations à serveur unique).
+
+image:k3s-architecture-ha-embedded.svg[Architecture K3s avec serveurs à haute disponibilité]
+--
+
+DB externe::
++
+--
+* Deux *nœuds de serveur* ou plus qui serviront l'API Kubernetes et exécuteront d'autres services du plan de contrôle.
+* Un *magasin de données externe* (tel que MySQL, PostgreSQL ou etcd)
+
+image:k3s-architecture-ha-external.svg[Architecture K3s avec des serveurs à haute disponibilité et une base de données externe]
+--
+======
+
+== Adresse d'enregistrement fixe pour les nœuds d'agents
+
+Dans la configuration de serveur à haute disponibilité, chaque nœud peut également s'enregistrer auprès de l'API Kubernetes en utilisant une adresse d'enregistrement fixe, comme le montre le diagramme ci-dessous.
+
+Après l'enregistrement, les nœuds agents établissent une connexion directe avec l'un des nœuds serveurs.
+
+image:k3s-production-setup.svg[Enregistrement de l'agent HA]
+
+[#_how_agent_node_registration_works]
+== Fonctionnement de l'enregistrement des nœuds d'agents
+
+Les nœuds d'agent sont enregistrés avec une connexion websocket initiée par le processus `+k3s agent+`, et la connexion est maintenue par un équilibreur de charge côté client fonctionnant dans le cadre du processus d'agent. Initialement, l'agent se connecte au superviseur (et à kube-apiserver) via le load-balancer local sur le port 6443. L'équilibreur de charge tient à jour une liste des points d'extrémité disponibles auxquels se connecter. Le point de terminaison par défaut (et initialement le seul) est alimenté par le nom d'hôte de l'adresse `+--server+`. Une fois connecté au cluster, l'agent récupère une liste d'adresses kube-apiserver à partir de la liste des points de terminaison du service Kubernetes dans l'espace de noms par défaut. Ces points d'extrémité sont ajoutés à l'équilibreur de charge, qui maintient ensuite des connexions stables avec tous les serveurs de la grappe, en fournissant une connexion à l'apériteur kube qui tolère les pannes des serveurs individuels.
+
+Les agents s'enregistrent auprès du serveur en utilisant le secret du groupe de nœuds ainsi qu'un mot de passe généré de manière aléatoire pour le nœud, stocké à l'adresse `+/etc/rancher/node/password+`. Le serveur stockera les mots de passe pour les nœuds individuels en tant que secrets Kubernetes, et toutes les tentatives ultérieures doivent utiliser le même mot de passe. Les secrets de mot de passe des nœuds sont stockés dans l'espace de noms `+kube-system+` avec des noms utilisant le modèle `+<host>.node-password.k3s+`. Cela permet de protéger l'intégrité des identifiants de nœuds.
+
+Si le répertoire `+/etc/rancher/node+` d'un agent est supprimé ou si vous souhaitez rejoindre un nœud en utilisant un nom existant, le nœud doit être supprimé du cluster. Ceci nettoiera l'ancienne entrée du nœud et le secret du mot de passe du nœud, et permettra au nœud de (re)rejoindre le cluster.
+
+Si vous réutilisez fréquemment les noms d'hôtes, mais que vous ne pouvez pas supprimer les secrets des mots de passe des nœuds, un ID de nœud unique peut être automatiquement ajouté au nom d'hôte en lançant les serveurs ou les agents K3s à l'aide de l'option `+--with-node-id+`. Lorsque cette option est activée, l'ID du nœud est également stocké dans `+/etc/rancher/node/+`.
