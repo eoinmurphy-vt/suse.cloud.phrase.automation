@@ -1,0 +1,61 @@
+include::partial$variables.adoc[]
+= Registro em log
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure os recursos de registro para a sua política usando a integração do site {project-name} com a biblioteca SLOG e inicializando.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "logging"]
+:doc-type: ["tutorial"]
+:keywords: ["{project-name}", kubewarden, "kubernetes", "logging"]
+:sidebar_label: Registro em log
+:current-version: {page-origin-branch}
+
+Você pode fazer com que sua política execute o registro em log.
+O `+policy-server+` ou `+kwctl+` encaminha essas entradas de registro com as informações apropriadas.
+
+A biblioteca de registro escolhida para o Rust SDK éhttps://github.com/slog-rs/slog[`+slog+`].
+É uma grade popular e bem conhecida e se integra perfeitamente ao site {project-name}.
+
+== Inicializar o registrador
+
+O projeto recomenda que você crie um sumidouro global para o qual possa fazer logon, de onde for necessário em sua política.
+Para isso, use a caixa `+lazy_static+`:
+
+[subs="+attributes",rust]
+----
+use slog::{o, Logger};
+
+lazy_static! {
+    static ref LOG_DRAIN: Logger = Logger::root(
+        logging::KubewardenDrain::new(),
+        o!("policy" => "sample-policy")
+    );
+}
+----
+
+== Consumir o registrador
+
+Agora, nas funções `+validate+` ou `+validate_settings+`, você pode registrar usando as macros exportadas por `+slog+` que correspondem a cada nível de registro suportado:
+
+[subs="+attributes",rust]
+----
+use slog::{info, o, warn, Logger};
+
+fn validate(payload: &[u8]) -> CallResult {
+    // ...
+    info!(LOG_DRAIN, "starting validation");
+    // ...
+    warn!(
+        LOG_DRAIN, "structured log";
+        "some_resource_name" => &some_resource_name
+    );
+    // ...
+}
+----
+
+A biblioteca `+slog+` envia todos os registros para o dreno inicializado na variável global.
+Isso é sincronizado com o avaliador de políticas que está executando a política.
+É o `+kwctl+` ou o `+policy-server+`.
+Em seguida, o avaliador de políticas registra essas informações, acrescentando outras informações contextuais conhecidas, como a solicitação do Kubernetes `+uid+`.
+
+Mais informações sobre ashttps://docs.rs/slog/2.7.0/slog/macro.log.html[macros de registro]oferecidas pelo slog estão nahttps://docs.rs/slog/2.7.0/slog/index.html[].
