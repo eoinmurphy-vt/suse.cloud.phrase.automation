@@ -1,0 +1,512 @@
+include::partial$variables.adoc[]
+= Démarrage rapide
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Comprendre la pile {project-name} en apprenant à déployer et à gérer ses principaux composants, notamment les ressources PolicyServers et ClusterAdmissionPolicy.
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["quick-start"]
+:doc-type: ["tutorial"]
+:keywords: ["{project-name}", " installation ", " démarrage rapide ", " policyserver ", " clusteradmissionpolicy ", " admissionpolicy "].
+:sidebar_label: Démarrage rapide
+:sidebar_position: 20
+:current-version: {page-origin-branch}
+
+++++
+<head>
+<script async src="https://artifacthub.io/artifacthub-widget.js"></script>
+</head>
+++++
+
+La pile {project-name} comprend
+
+* Une ou plusieurs ressources {cluster-admission-policy}: cela définit les politiques pour les clusters Kubernetes.
+* Une ou plusieurs ressources {policy-server}: représentant un déploiement d'une ressource {short-project-name} `+PolicyServer+` . Le site {short-project-name} `+PolicyServer+` charge et évalue les politiques de votre administrateur.
+* Une ou plusieurs ressources {admission-policy}: politiques pour un espace de noms défini.
+* Un déploiement de `+kubewarden-controller+`: ce contrôleur surveille les ressources {cluster-admission-policy} et interagit avec les composants {short-project-name} {policy-server} .
+
+[TIP]
+====
+
+{short-project-name} décrit ses définitions de ressources personnalisées (CRD) Kubernetesxref:reference/CRDs.adoc[ici.]
+
+{short-project-name} Les CRD mentionnés dans ce tutoriel et dans le reste de la documentation ont des noms courts, plus faciles à utiliser. Il s'agit des noms abrégés des CRD :
+
+[cols="1,1"]
+|===
+| Ressources | shortName
+
+| AdmissionPolicies
+| *ap*
+
+| ClusterAdmissionPolicies
+| *capuchon*
+
+| AdmissionPolicyGroups
+| *apg*
+
+| ClusterAdmissionPolicyGroups
+| *capg*
+
+| Serveurs de politique
+| *ps*
+
+|===
+
+====
+
+
+== Installation
+
+[IMPORTANT]
+.Authentification
+====
+
+:gh-pat-url: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+
+Vous pouvez récupérer les politiques {short-project-name} à partir du registre de conteneurs GitHub à l'adressehttps://ghcr.io.. Vous avez besoin d'une authentification pour utiliser le référentiel avec le CLI{short-project-name}, un {gh-pat-url}[GitHub personal access token] (PAT). Leur documentation vous guide pour en créer un si vous ne l'avez pas encore fait.
+Ensuite, vous vous authentifiez à l'aide d'une commande telle que :
+
+[subs="+attributes",console]
+----
+echo $PAT | docker login ghcr.io --username <my-gh-username> --password-stdin
+----
+
+====
+
+
+Déployez la pile {short-project-name} en utilisant les diagrammes `+helm+` comme suit :
+
+[subs="+attributes",console]
+----
+helm repo add kubewarden https://charts.kubewarden.io
+----
+
+[subs="+attributes",console]
+----
+helm repo update kubewarden
+----
+
+Installez les cartes Helm suivantes dans l'espace de noms `+kubewarden+` de votre cluster Kubernetes :
+
+* `+kubewarden-crds+`qui enregistre les définitions de ressources personnalisées {cluster-admission-policy}, {admission-policy} et {policy-server}. De même, le site {report} Custom Resource Definitions (Définitions de ressources personnalisées) utilisé par l'analyseur d'audit.
+* `+kubewarden-controller+`qui installe le contrôleur {short-project-name} et l'analyseur d'audit
++
+[NOTE]
+====
+
+Si vous devez désactiver le composant de l'analyseur d'audit, consultez la xref:howtos/audit-scanner.adoc[page de documentation sur l]'installation de l'analyseur d'audit.
+
+====
++
+* `+kubewarden-defaults+`qui crée une ressource `+PolicyServer+` nommée `+default+`. Il peut également installer un ensemble de politiques recommandées pour sécuriser votre cluster en appliquant les meilleures pratiques connues.
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden --create-namespace kubewarden-crds kubewarden/kubewarden-crds
+----
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden kubewarden-controller kubewarden/kubewarden-controller
+----
+
+[subs="+attributes",console]
+----
+helm install --wait -n kubewarden kubewarden-defaults kubewarden/kubewarden-defaults
+----
+
+[CAUTION]
+====
+
+Depuishttps://github.com/kubewarden/kubewarden-controller/releases/tag/v0.4.0[`+v0.4.0+`]une ressource `+PolicyServer+` nommée `+default+` n'est pas créée à l'aide du diagramme`+kubewarden-controller+`. Un diagramme Helm appelé `+kubewarden-defaults+`, installe le serveur de politiques par défaut.
+
+Cela signifie que si vous n'utilisez pas la dernière version de `+kubewarden-controller+`lors de la mise à niveau ou de la suppression, votre serveur de politiques par défaut n'est pas mis à niveau ou supprimé. Vous risquez donc de rencontrer des problèmes si vous essayez d'installer le site`+kubewarden-defaults+` avec des informations contradictoires, par exemple le même nom de serveur de politiques. Pour installer les futures mises à jour de la carte `+kubewarden-defaults+`Helm, supprimez la ressource `+PolicyServer+` existante créée par`+kubewarden-controller+` avant d'installer la nouvelle carte. Vous pouvez désormais mettre à jour votre serveur de politiques à l'aide des mises à jour Helm sans conflit de ressources. Lorsque vous supprimez le site `+PolicyServer+`, vous supprimez également toutes les politiques qui y sont liées.
+
+====
+
+
+Les valeurs de configuration par défaut sont suffisantes pour la plupart des déploiements. Lahttps://charts.kubewarden.io/#configuration[documentation de] décrit toutes les options.
+
+== Principaux éléments
+
+{short-project-name} comporte trois éléments principaux avec lesquels vous interagissez :
+
+* Le {policy-server}
+* Le {cluster-admission-policy}
+* Le {admission-policy}
+
+=== `+PolicyServer+`
+
+Le site `+kubewarden-controller+` gère un site {short-project-name} `+PolicyServer+`. Vous pouvez déployer plusieurs {policy-server}dans le même cluster Kubernetes.
+
+Un site `+PolicyServer+` valide les demandes entrantes en exécutant les politiques {short-project-name}à leur égard.
+
+Il s'agit de la configuration par défaut de `+PolicyServer+`:
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: reserved-instance-for-tenant-a
+spec:
+  image: ghcr.io/kubewarden/policy-server:v1.3.0
+  replicas: 2
+  serviceAccountName: ~
+  env:
+    - name: KUBEWARDEN_LOG_LEVEL
+      value: debug
+----
+
+[NOTE]
+====
+
+Vérifiez le sitehttps://github.com/kubewarden/policy-server/pkgs/container/policy-server[dernière version publiée de `+PolicyServer+` ] et modifiez la balise pour qu'elle corresponde.
+
+====
+
+Vue d'ensemble des attributs de la ressource `+PolicyServer+`:
+
+[cols="^,,"]
+|===
+| Exigée | Placeholder | Description
+
+| Y
+| `+image+`
+| Le nom de l'image du conteneur
+
+| Y
+| `+replicas+`
+| Le nombre d'instances souhaitées
+
+| N
+| `+serviceAccountName+`
+| Le nom du site `+ServiceAccount+` à utiliser pour le déploiement de `+PolicyServer+`. Si aucune valeur n'est fournie, la valeur par défaut `+ServiceAccount+` de l'espace de noms d'installation, de `+kubewarden-controller+`, est utilisée.
+
+| N
+| `+env+`
+| La liste des variables d'environnement
+
+| N
+| `+annotations+`
+| La liste des annotations
+
+|===
+
+La modification de l'un de ces attributs entraîne un déploiement de `+PolicyServer+` avec la nouvelle configuration.
+
+=== ClusterAdmissionPolicy
+
+La ressource {cluster-admission-policy} est au cœur de la pile {short-project-name}. Il définit la manière dont les politiques évaluent les demandes.
+
+L'application des politiques est l'opération la plus courante qu'effectue un administrateur Kubernetes. Vous pouvez déclarer autant de politiques que vous le souhaitez, chacune ciblant une ou plusieurs ressources Kubernetes (c'est-à-dire `+pods+`, `+Custom Resource+`et autres). Vous pouvez également spécifier le type d'opérations appliquées aux ressources ciblées. Les opérations disponibles sont `+CREATE+`, `+UPDATE+`, `+DELETE+` et`+CONNECT+`.
+
+Configuration par défaut de {cluster-admission-policy}:
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-capabilities
+spec:
+  policyServer: reserved-instance-for-tenant-a
+  module: registry://ghcr.io/kubewarden/policies/psp-capabilities:v0.1.9
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  settings:
+    allowed_capabilities:
+      - CHOWN
+    required_drop_capabilities:
+      - NET_ADMIN
+----
+
+Vue d'ensemble des attributs de la ressource {cluster-admission-policy}:
+
+[cols="^,,"]
+|===
+| Exigée | Placeholder | Description
+
+| N
+| `+policy-server+`
+| Identifie un objet `+PolicyServer+` existant. Seule cette instance `+PolicyServer+` est au service de la politique. Le serveur de politiques nommé `+default+` sert un {cluster-admission-policy} sans `+PolicyServer+` explicite.
+
+| Y
+| `+module+`
+| Emplacement de la politique {short-project-name}. Les schémas suivants sont autorisés :
+
+| N
+|
+| - `+registry+`: Téléchargement d'une politique à partir d'un registre de conteneurs conforme à https://github.com/opencontainers/artifacts[artifacts] OCI. Exemple : `+registry://<OCI registry/policy URL>+`
+
+| N
+|
+| - `+http+`, `+https+`: Téléchargement de la politique à partir d'un serveur HTTP(s) ordinaire.
+    Exemple : `+\https://<website/policy URL>+`
+
+| N
+|
+| - `+file+`: Charger la politique à partir d'un fichier dans le système de fichiers de l'ordinateur.
+    Exemple : `+\file:///<policy WASM binary full path>+`
+
+| Y
+| `+resources+`
+| Les ressources Kubernetes évaluées par la politique
+
+| Y
+| `+operations+`
+| Quelles opérations pour les types donnés précédemment doivent être transmises à cette politique d'admission par le serveur API pour évaluation.
+
+| Y
+| `+mutating+`
+| Définir cette valeur booléenne `+true+` pour les politiques qui peuvent modifier les demandes entrantes.
+
+| N
+| `+settings+`
+| Un objet de forme libre qui contient les valeurs de configuration de la politique.
+
+| N
+| `+failurePolicy+`
+| L'action à entreprendre si la demande évaluée par une politique aboutit à une erreur.
+  Les options suivantes sont autorisées :
+
+| N
+|
+| - `+Ignore+`: ignore une erreur lors de l'appel du webhook et la demande d'API se poursuit.
+
+| N
+|
+| - `+Fail+`: une erreur lors de l'appel du webhook entraîne l'échec de l'admission et le rejet de la demande d'API.
+|===
+
+[NOTE]
+====
+
+Le contrôleur enregistre les ressources {cluster-admission-policy} `+*+` webhook`+scope+`. Cela signifie que les webhooks enregistrés transmettent toutes les demandes correspondant aux adresses `+resources+` et `+operations+`, qu'il s'agisse de ressources à espace nominatif ou de ressources à l'échelle d'un cluster.
+
+====
+
+
+=== Politique d'admission
+
+{admission-policy} est une ressource qui s'applique à l'ensemble de l'espace de nommage. La politique ne traite que les demandes qui visent l'espace de nommage avec l'adresse {admission-policy} définie.
+En dehors de cela, il n'y a pas de différences fonctionnelles entre les ressources{admission-policy} et {cluster-admission-policy}.
+
+[IMPORTANT]
+====
+
+{admission-policy} nécessite Kubernetes 1.21.0 ou une version ultérieure. En effet,{short-project-name} utilise le label `+kubernetes.io/metadata.name+`, introduit dans Kubernetes 1.21.0.
+
+====
+
+La documentation complète de ces ressources personnalisées est disponible sur https://github.com/kubewarden/kubewarden-controller/blob/main/docs/crds/README.asciidoc[docs.crds.dev.] ou sur https://doc.crds.dev/github.com/kubewarden/kubewarden-controller[]
+
+== Exemple : Appliquer votre première politique
+
+Nous utiliserons la https://github.com/kubewarden/pod-privileged-policy[`+pod-privileged+`] politique.
+Nous voulons empêcher la création de conteneurs privilégiés dans notre cluster Kubernetes en appliquant cette politique.
+
+Définissons une {cluster-admission-policy} pour ce faire :
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: privileged-pods
+spec:
+  module: registry://ghcr.io/kubewarden/policies/pod-privileged:v0.2.2
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+EOF
+----
+
+Le résultat est le suivant :
+
+[subs="+attributes",console]
+----
+clusteradmissionpolicy.policies.kubewarden.io/privileged-pods created
+----
+
+Après l'instanciation d'un {cluster-admission-policy}, le statut devient `+pending+` et force le déploiement du `+PolicyServer+` ciblé. Dans l'exemple, il s'agit du site `+PolicyServer+` nommé `+default+`. Vous pouvez surveiller le déploiement en exécutant la commande suivante :
+
+[subs="+attributes",console]
+----
+kubectl get clusteradmissionpolicy.policies.kubewarden.io/privileged-pods
+----
+
+Vous devriez voir la sortie suivante :
+
+[subs="+attributes",console]
+----
+NAME              POLICY SERVER   MUTATING   STATUS
+privileged-pods   default         false      pending
+----
+
+Une fois que la nouvelle politique est prête, le site `+kubewarden-controller+`enregistre un objethttps://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#validatingwebhookconfiguration-v1-admissionregistration-k8s-io[ValidatingWebhookConfiguration]pour la servir.
+
+Le statut {cluster-admission-policy} devient `+active+` une fois que le déploiement est terminé pour chaque instance `+PolicyServer+`. Afficher{validating-webhook-configuration}s avec la commande suivante :
+
+[subs="+attributes",console]
+----
+kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io -l kubewarden
+----
+
+Vous devriez voir la sortie suivante :
+
+[subs="+attributes",console]
+----
+NAME                          WEBHOOKS   AGE
+clusterwide-privileged-pods   1          9s
+----
+
+Une fois que le site {cluster-admission-policy} est actif et que le site{validating-webhook-configuration} est enregistré, vous pouvez tester la politique.
+
+Tout d'abord, vous pouvez créer un pod avec un conteneur _qui n'est pas_ en mode `+privileged+`:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unprivileged-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+EOF
+----
+
+Le résultat est le suivant :
+
+[subs="+attributes",console]
+----
+pod/unprivileged-pod created
+----
+
+Le pod est créé avec succès.
+
+Maintenant, vous pouvez créer un Pod avec au moins un drapeau Container `+privileged+`:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+      securityContext:
+          privileged: true
+EOF
+----
+
+La politique refuse la création du pod et le message suivant s'affiche :
+
+[subs="+attributes",console]
+----
+Error from server: error when creating "STDIN": admission webhook "clusterwide-privileged-pods.kubewarden.admission" denied the request: Privileged container is not allowed
+----
+
+[NOTE]
+====
+
+Les deux exemples ne définissent pas de `+namespace+`, ce qui signifie que l'espace de noms `+default+` est la cible. Cependant, comme vous pouvez le voir dans le deuxième exemple, la politique est toujours appliquée. Comme indiqué précédemment, cela est dû au fait que le champ d'application s'étend à l'ensemble du cluster et ne cible pas un espace de noms spécifique.
+
+====
+
+
+== Désinstaller
+
+Vous pouvez supprimer les ressources créées en désinstallant les cartes `+helm+` de la manière suivante :
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-defaults
+----
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-controller
+----
+
+[subs="+attributes",console]
+----
+helm uninstall --namespace kubewarden kubewarden-crds
+----
+
+Après la suppression des graphiques `+helm+`, supprimez l'espace de noms Kubernetes utilisé pour déployer la pile {short-project-name}:
+
+[subs="+attributes",console]
+----
+kubectl delete namespace kubewarden
+----
+
+[CAUTION]
+====
+
+{short-project-name} contient un crochet de pré-suppression helm qui supprime tous les`+PolicyServer+`s et `+kubewarden-controller+`s. Ensuite,`+kubewarden-controller+` supprime toutes les ressources, il est donc important que`+kubewarden-controller+` soit en cours d'exécution lorsque la désinstallation de helm s'exécute.
+
+====
+
+
+{short-project-name} supprime {validating-webhook-configuration}s et{mutating-webhook-configuration}s. Vérifier avec :
+
+[subs="+attributes",console]
+----
+kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io -l "kubewarden"
+----
+
+[subs="+attributes",console]
+----
+kubectl get mutatingwebhookconfigurations.admissionregistration.k8s.io -l "kubewarden"
+----
+
+Si ces ressources ne sont pas automatiquement supprimées, supprimez-les manuellement à l'aide de la commande suivante :
+
+[subs="+attributes",console]
+----
+kubectl delete -l "kubewarden" validatingwebhookconfigurations.admissionregistration.k8s.io
+----
+
+[subs="+attributes",console]
+----
+kubectl delete -l "kubewarden" mutatingwebhookconfigurations.admissionregistration.k8s.io
+----
+
+== Conclusion
+
+{cluster-admission-policy} est la ressource principale qu'un opérateur de cluster doit gérer. Le module `+kubewarden-controller+` se charge automatiquement de la configuration du reste des ressources nécessaires à l'exécution des politiques.
+
+== Quelle est la prochaine étape ?
+
+Vous êtes maintenant prêt à déployer {short-project-name}! Jetez un coup d'œil aux politiques surhttps://artifacthub.io/packages/search?kind=13[artifacthub.io], surhttps://github.com/topics/kubewarden-policy[] GitHub, ou réutilisez les politiques Rego existantes comme indiqué dans les xref:tutorials/writing-policies/rego/01-intro-rego.adoc[chapitres suivants].
+
+.Liste complète des politiques disponibles sur ArtifactHub
+[%collapsible,subs="+macros"]
+======
+
+++++
+
+<div class="artifacthub-widget-group" data-url="https://artifacthub.io/packages/search?kind=13&sort=relevance&page=1" data-theme="light" data-header="false" data-stars="false" data-color="#fe7c3f" data-responsive="true" data-loading="true"></div>
+
+++++
+
+======
