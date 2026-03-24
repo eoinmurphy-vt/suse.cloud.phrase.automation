@@ -1,0 +1,184 @@
+include::partial$variables.adoc[]
+= ポリシーの設定
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 特定のNamespacesを選択したり、カスタム拒否メッセージを設定したりしてポリシーを構成し、AdmissionPolicyGroupを使用して結果を否定する。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "policies"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "policies", "ClusterAdmissionPolicies", "AdmissionPolicies", "configuration", "namespaces"]
+:sidebar_label: ポリシーの設定
+:sidebar_position: 90
+:current-version: {page-origin-branch}
+
+== 特定のポリシーの名前空間をスキップする
+
+デフォルトでは、ポリシーは`+PolicyServer+` が設定されているすべてのネームスペースに適用されます。
+特定のネームスペースのみを対象とするポリシーが必要な場合は、各ネームスペースに複数の`+AdmissionPolicies+` を配置できます。
+
+もう一つの方法は、`+spec.namespaceSelector+` （xref:reference/CRDs.adoc#clusteradmissionpolicy[CRDのドキュメントを]参照）を設定して、`+ClusterAdmissionPolicies+` を構成することである。`+spec.namespaceSelector+` は、オブジェクトの名前空間がセレクタと一致するかどうかに基づいて、オブジェクトに対してポリシーを実行するかどうかを決定します。
+
+たとえば、`+kube-system+` と`+my-namespace+` Namespaces のみを対象とするポリシーです：
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psa-enforcer-privileged-namespaces
+spec:
+  module: registry://ghcr.io/kubewarden/policies/psa-label-enforcer:v1.0.3
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["namespaces"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  namespaceSelector:
+    matchExpressions:
+      - key: "kubernetes.io/metadata.name"
+        operator: In
+        values: [kube-system, my-namespace]
+  settings:
+    modes:
+      enforce: "privileged"
+----
+
+以下は、`+kube-system+` と`+my-namespace+` 以外のすべての名前空間を対象とするポリシーです：
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psa-enforcer-default-mode
+spec:
+  module: registry://ghcr.io/kubewarden/policies/psa-label-enforcer:v1.0.3
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["namespaces"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: true
+  namespaceSelector:
+    matchExpressions:
+      - key: "kubernetes.io/metadata.name"
+        operator: NotIn
+        values: [kube-system, my-namespace]
+  settings:
+    modes:
+      enforce: "restricted"
+----
+
+== カスタム拒否メッセージ
+
+ポリシーがリソースを拒否するとき、ユーザーに表示されるメッセージはポリシー作成者によって書かれたものです。クラスタオペレータがカスタム拒否メッセージを設定したい場合があります。例えば、これは内部ウィキを指し示したり、より具体的なエラーコードを提供するために使用することができる。
+
+このためには、`+ClusterAdmissionPolicy+` と`+AdmissionPolicy+` タイプの`+message+` フィールドを使うことができる。
+
+[NOTE]
+====
+`+ClusterAdmissionPolicyGroup+` と`+AdmissionPolicyGroup+` 、同じように振る舞う`+message+` フィールドがすでにある。
+====
+
+`+message+` フィールドでは、クラスタオペレータがポリシーによって返されるメッセージを上書きするカスタム拒否メッセージを定義することができます。このコンフィギュレーションを使用する場合、オリジナルの拒否メッセー ジはレスポンスの`+causes+` 。
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: pod-privileged-with-message
+spec:
+  module: registry://ghcr.io/kubewarden/policies/pod-privileged:1.0.2
+  policyServer: default
+  mode: protect
+  message: "Nops! You cannot do that"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+kubectlの冗長性レベルを上げることで、拒否された入場リクエストの全詳細を取得できます：
+
+[subs="verbatim,attributes"]
+----
+$ kubectl -v4 run pod-privileged2 --image=registry.k8s.io/pause --privileged
+I0612 16:32:43.647601   48424 cert_rotation.go:137] Starting client certificate rotation controller
+I0612 16:32:43.662550   48424 helpers.go:246] server response object: [{
+  "metadata": {},
+  "status": "Failure",
+  "message": "admission webhook \"clusterwide-pod-privileged-with-message.kubewarden.admission\" denied the request: Nops! You cannot do that",
+  "details": {
+    "causes": [
+      {
+        "message": "Privileged container is not allowed"
+      }
+    ]
+  },
+  "code": 400
+}]
+----
+
+== ポリシーの結果をPolicyGroupでラップして否定する
+
+ポリシーを使っていると、必要な逆ロジックがまだ実装されていないことがある。
+
+例えば、link:https://artifacthub.io/packages/kubewarden/priority-class-policy/priority-class-policy[`+priority-class+`policy]を使って、一連の優先クラスを拒否したいとします。しかし、この記事を書いている時点では、`+priority-class+` のポリシーは allowlist にのみ対応しており、denylist には対応していない。
+
+一般的なパターンは、`+AdmissionPolicyGroup+` または`+ClusterAdmissionPolicyGroup+` でポリシーをラップし、その`+spec.expression+` でポリシーの結果を否定することです。
+
+例えば、クラスター内部で定義された以下の優先クラスを除くすべての優先クラスをユーザーに使用させたいとします：`+low-priority+``+med-priority+` と`+high-priority+` 。
+
+現在、ポリシー設定では、許可された優先クラスのリストのみを表現することができます。次のグループ・ポリシーは、この制限を克服している。
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: AdmissionPolicyGroup
+metadata:
+  name: priority-class-denylist
+  namespace: your-namespace # or use a CLusterAdmissionPolicyGroup and set spec.namespaceSelector
+spec:
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["replicationcontrollers"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      operations: ["CREATE", "UPDATE"]
+    - apiGroups: ["batch"]
+      apiVersions: ["v1"]
+      resources: ["jobs", "cronjobs"]
+      operations: ["CREATE", "UPDATE"]
+  policies:
+    is_a_denied_priority_class:
+      module: ghcr.io/kubewarden/policies/priority-class-policy:v1.0.4
+      settings:
+        allowed_priority_classes:
+          - low-priority
+          - med-priority
+          - high-priority
+  expression: "!is_a_denied_priority_class()" # negated result
+  message: "the Pod is using a priorityClass that is not allowed"
+----
