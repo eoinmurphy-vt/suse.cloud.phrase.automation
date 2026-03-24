@@ -1,0 +1,216 @@
+= クラスターロードバランサー
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+このセクションでは、High Availability (HA) K3sクラスタのサーバノードの前に外部ロードバランサをインストールする方法について説明します。つの例を挙げる：NginxとHAProxy。
+
+[TIP]
+====
+外部ロードバランサーは、サードパーティのロードバランサーコントローラーをデプロイすることなくKubernetes LoadBalancer Servicesを使用できる組み込みコントローラーである組み込みServiceLBと混同してはならない。詳細は、xref:networking/networking-services.adoc#_service_load_balancer[サービス・ロード・バランサーを]参照。
+
+外部ロードバランサーは、ノードを登録するための固定登録アドレスを提供するため、またはKubernetes API Serverへの外部アクセスのために使用できます。ロードバランサーサービスを公開する場合、外部ロードバランサーをServiceLBと一緒に、または代わりに使用することができますが、ほとんどの場合、MetalLBやKube-VIPなどの代替ロードバランサーコントローラーがより良い選択です。
+====
+
+
+== 前提条件
+
+この例では、すべてのノードがUbuntu 20.04を実行している。
+
+どちらの例でも、xref:datastore/ha-embedded.adoc[etcdを組み込んだHA K3sクラスタが]3ノードにインストールされていると仮定する。
+
+各k3sサーバーは次のように設定されている：
+
+[,yaml]
+----
+# /etc/rancher/k3s/config.yaml
+token: lb-cluster-gd
+tls-san: 10.10.10.100
+----
+
+ノードのホスト名とIPは以下の通り：
+
+* サーバー1 `+10.10.10.50+`
+* サーバー2 `+10.10.10.51+`
+* server-3: `+10.10.10.52+`
+
+ロードバランシング用の2つの追加ノードが、ホスト名とIPで設定されている：
+
+* lb-1: `+10.10.10.98+`
+* lb-2： `+10.10.10.99+`
+
+さらに3つのノードがホスト名とIPで存在する：
+
+* agent-1: `+10.10.10.101+`
+* agent-2: `+10.10.10.102+`
+* agent-3: `+10.10.10.103+`
+
+== ロードバランサーの設定
+
+[tabs,sync-group-id=ext-load-balancer]
+======
+ハプロキシー::
++
+--
+http://www.haproxy.org/[HAProxyは]、TCPロードバランサーを提供するオープンソースのオプションである。また、ロードバランサー自体のHAもサポートしており、あらゆるレベルで冗長性を確保している。詳細はhttp://docs.haproxy.org/2.8/intro.html[Documentation] HAProxyを参照のこと。
+
+さらに、KeepAlivedを使用して、クラスタへのアクセスに使用する仮想IP（VIP）を生成します。詳しくはhttps://www.keepalived.org/manpage.html[KeepAlived Documentation]を参照のこと。
+
+. HAProxyとKeepAlivedをインストールします：
++
+[,bash]
+----
+sudo apt-get install haproxy keepalived
+----
+
+. lb-1とlb-2の`+/etc/haproxy/haproxy.cfg+` ：
++
+----
+frontend k3s-frontend
+    bind *:6443
+    mode tcp
+    option tcplog
+    default_backend k3s-backend
+
+backend k3s-backend
+    mode tcp
+    option tcp-check
+    balance roundrobin
+    default-server inter 10s downinter 5s
+    server server-1 10.10.10.50:6443 check
+    server server-2 10.10.10.51:6443 check
+    server server-3 10.10.10.52:6443 check
+----
+
+. lb-1とlb-2の`+/etc/keepalived/keepalived.conf+` ：
++
+----
+global_defs {
+  enable_script_security
+  script_user root
+}
+
+vrrp_script chk_haproxy {
+    script 'killall -0 haproxy' # faster than pidof
+    interval 2
+}
+
+vrrp_instance haproxy-vip {
+    interface eth1
+    state <STATE> # MASTER on lb-1, BACKUP on lb-2
+    priority <PRIORITY> # 200 on lb-1, 100 on lb-2
+
+    virtual_router_id 51
+
+    virtual_ipaddress {
+        10.10.10.100/24
+    }
+
+    track_script {
+        chk_haproxy
+    }
+}
+----
+
+. lb-1とlb-2でHAProxyとKeepAlivedを再起動する：
++
+[,bash]
+----
+systemctl restart haproxy
+systemctl restart keepalived
+----
+
+. agent-1、agent-2、agent-3で、以下のコマンドを実行してk3sをインストールし、クラスタに参加します：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.100:6443
+----
+`+INSTALL_K3S_ARTIFACT_URL+` はhttps://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts のURL]。
++
+これでサーバー・ノードから`+kubectl+` 、クラスタとやり取りできるようになった。
++
+[,bash]
+----
+root@server-1 $ k3s kubectl get nodes -A
+NAME       STATUS   ROLES                       AGE     VERSION
+agent-1    Ready    <none>                      32s     v1.27.3+k3s1
+agent-2    Ready    <none>                      20s     v1.27.3+k3s1
+agent-3    Ready    <none>                      9s      v1.27.3+k3s1
+server-1   Ready    control-plane,etcd,master   4m22s   v1.27.3+k3s1
+server-2   Ready    control-plane,etcd,master   3m58s   v1.27.3+k3s1
+server-3   Ready    control-plane,etcd,master   3m12s   v1.27.3+k3s1
+----
+--
+
+Nginx::
++
+--
+[WARNING]
+====
+NginxはネイティブではHA（High Availability）構成をサポートしていません。HAクラスタをセットアップする場合、K3の前に単一のロードバランサーを置くと、単一障害点が再び発生する。
+====
+
+http://nginx.org/[Nginxオープンソースは]TCPロードバランサーを提供する。詳しくは、https://nginx.org/en/docs/http/load_balancing.html[HTTPロードバランサーとしてnginxを使用するを]参照してください。
+
+. lb-1に以下の内容で`+nginx.conf+` ：
++
+----
+events {}
+
+stream {
+  upstream k3s_servers {
+    server 10.10.10.50:6443;
+    server 10.10.10.51:6443;
+    server 10.10.10.52:6443;
+  }
+
+  server {
+    listen 6443;
+    proxy_pass k3s_servers;
+  }
+}
+----
+
+. lb-1でNginxロードバランサーを動かす：
++
+ドッカーを使う：
++
+[,bash]
+----
+docker run -d --restart unless-stopped \
+    -v ${PWD}/nginx.conf:/etc/nginx/nginx.conf \
+    -p 6443:6443 \
+    nginx:stable
+----
++
+または、https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/[nginxを]インストールして実行する：
++
+[,bash]
+----
+cp nginx.conf /etc/nginx/nginx.conf
+systemctl start nginx
+----
+
+. agent-1、agent-2、agent-3で、以下のコマンドを実行してk3sをインストールし、クラスタに参加します：
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.98:6443
+----
++
+これでサーバー・ノードから`+kubectl+` 、クラスタとやり取りできるようになった。
++
+[,bash]
+----
+root@server1 $ k3s kubectl get nodes -A
+NAME       STATUS   ROLES                       AGE     VERSION
+agent-1    Ready    <none>                      30s     v1.27.3+k3s1
+agent-2    Ready    <none>                      22s     v1.27.3+k3s1
+agent-3    Ready    <none>                      13s     v1.27.3+k3s1
+server-1   Ready    control-plane,etcd,master   4m49s   v1.27.3+k3s1
+server-2   Ready    control-plane,etcd,master   3m58s   v1.27.3+k3s1
+server-3   Ready    control-plane,etcd,master   3m16s   v1.27.3+k3s1
+----
+--
+======
