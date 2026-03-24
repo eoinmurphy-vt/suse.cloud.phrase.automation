@@ -1,0 +1,67 @@
+include::partial$variables.adoc[]
+= Rancher Fleetによる{project-name} の管理
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Rancher Fleet と Kubernetes Custom Resource Definitions (CRDs) を使用して{project-name} Helm チャートを管理し、GitOps アプローチを実装します。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "rancher-fleet"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}","kubernetes", "kubewarden", "rancher fleet"]
+:sidebar_label: Rancher Fleet
+:sidebar_position: 130
+:current-version: {page-origin-branch}
+
+{project-name} Helm チャートは他の Helm チャートと同様にhttps://fleet.rancher.io/[Fleet] Rancher で管理できます。
+Rancher FleetはKubernetes CRDを使用して、Kubernetesクラスタを管理するGitOpsアプローチを定義します。
+これはhttps://fleet.rancher.io/concepts[Fleet Bundles を]定義することで実現する。
+
+== インストール
+
+{short-project-name} チャートは標準的なチャートであり、それらは互いに推移的に依存している：
+
+`+kubewarden-crds+` ← `+kubewarden-controller+` ← `+kubewarden-defaults+`
+
+詳しくはxref:/quick-start.adoc[クイックスタートのドキュメントを]ご覧ください。
+
+Rancher Fleet を使うと、`+dependsOn+` を使ってチャートの依存関係をコーディングできます。https://fleet.rancher.io/ref-fleet-yaml[`+fleet.yaml+`]ファイルに記述します。
+
+チャートの準備が整うまで、次のような一過性のエラーが表示されることがある：
+
+[subs="+attributes",console]
+----
+ErrApplied(1) [Cluster fleet-local/local: dependent bundle(s) are not ready:
+[kubewarden-example-helm-kubewarden-controller]]
+----
+
+これらのエラーは問題を意味するものではなく、チャートのデプロイメントが終了すれば、表示されなくなる。
+
+== 除去
+
+[CAUTION]
+====
+
+GitRepoを削除すると、{short-project-name} の3つのチャートが一度に削除されます。
+これは、`+kubewarden-crds+` のチャートが削除されることを意味する。
+
+{short-project-name} は、`+kubewarden-controller+` チャートで、デフォルトのポリシーサーバーを削除する、削除前の helm フックジョブを使用します。
+この削除前フックは、PolicyServer を削除する前にポリシーのウェブフックを空にするために必要です。
+これはどのPolicy Engineでも同じである。
+そうでない場合、クラスターはもう存在しないポリシーのウェブフックを持っている可能性があるので、すべてを拒否して失敗状態になる。
+
+`+kubewarden-controller+` チャートと同時に GitRepo、ひいては`+kubewarden-crds+` チャートを削除すると、削除前のフックジョブは失敗します。
+除去が不完全で、クラスターに "破片 "が残っていることを意味する。
+====
+
+
+CRDを自動的にアンインストールすることは、通常どのツールでもサポートされておらず、Rancher Fleetも例外ではない。
+
+正しい削除を行うには、まずクラスタからBundle for`+kubewarden-defaults+` を削除してください。
+フリート設定を保存しているリポジトリに変更をコミットし、それが適用されるまで待ちます。
+次に、`+kubewarden-controller+` を同様に削除し、最後に`+kubewarden-crds+` を削除する。
+
+もうひとつのオプションは、2つのGitReposを追加することです。ひとつはCRDのみ、もうひとつは残りの{short-project-name} チャート用です。
+これにより、{short-project-name} のチャートを最初に削除し、{short-project-name} の CRD を最後に削除することができる。
+
+== 例
+
+フリートバンドルの定義例についてはhttps://github.com/kubewarden/fleet-example[.com/kubewarden/fleet-example] github を参照。
