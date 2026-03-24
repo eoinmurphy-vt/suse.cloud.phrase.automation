@@ -1,0 +1,64 @@
+= Gerenciando funções de servidor
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Iniciar o servidor K3s com `+--cluster-init+` executará todos os componentes do plano de controle, incluindo o apiserver, o gerenciador de controladores, o agendador e o etcd. É possível desativar componentes específicos para dividir as funções do plano de controle e do etcd em nós separados.
+
+[IMPORTANT]
+====
+Este documento só é relevante quando se usa o etcd incorporado. Quando não estiver usando o etcd incorporado, todos os servidores terão a função de plano de controle e executarão componentes do plano de controle.
+====
+
+
+== Dedicado `+etcd+` Nodes
+
+Para criar um servidor apenas com a função `+etcd+`, inicie o K3s com todos os componentes do plano de controle desativados:
+
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --cluster-init --disable-apiserver --disable-controller-manager --disable-scheduler
+----
+Onde `+INSTALL_K3S_ARTIFACT_URL+` é o https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL dos artefatos principais]
+
+Esse primeiro nó iniciará o etcd e aguardará a adesão de outros nós `+etcd+` e/ou `+control-plane+`. O cluster não poderá ser usado até que você entre em um servidor adicional com os componentes do `+control-plane+` ativados.
+
+== Dedicado `+control-plane+` Nodes
+
+[NOTE]
+====
+Um nó dedicado `+control-plane+` não pode ser o primeiro servidor no cluster; deve haver um nó existente com a função `+etcd+` antes de ingressar nos nós dedicados `+control-plane+`.
+====
+
+
+Para criar um servidor somente com a função `+control-plane+`, inicie o k3s com o etcd desativado:
+
+[,bash]
+----
+curl -fL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s sh -s - server --token <token> --disable-etcd --server https://<etcd-only-node>:6443
+----
+
+Depois de criar nós de servidores dedicados, as funções selecionadas ficarão visíveis em `+kubectl get node+`:
+
+[,bash]
+----
+$ kubectl get nodes
+NAME           STATUS   ROLES                       AGE     VERSION
+k3s-server-1   Ready    etcd                        5h39m   v1.20.4+k3s1
+k3s-server-2   Ready    control-plane,master        5h39m   v1.20.4+k3s1
+----
+
+== Adição de funções a servidores existentes
+
+As funções podem ser adicionadas aos nós dedicados existentes reiniciando os K3s com os sinalizadores de desativação removidos. Por exemplo, se você quiser adicionar a função `+control-plane+` a um nó `+etcd+` dedicado, poderá remover os sinalizadores `+--disable-apiserver --disable-controller-manager --disable-scheduler+` da unidade do systemd ou do arquivo de configuração e reiniciar o serviço.
+
+== Sintaxe do arquivo de configuração
+
+Como acontece com todos os outros sinalizadores da CLI, você pode usar o xref:installation/configuration.adoc#_configuration_file[arquivo de configuração] para desativar componentes, em vez de passar as opções como sinalizadores da CLI. Por exemplo, para criar um nó dedicado `+etcd+`, você pode colocar os seguintes valores em `+/etc/rancher/k3s/config.yaml+`:
+
+[,yaml]
+----
+cluster-init: true
+disable-apiserver: true
+disable-controller-manager: true
+disable-scheduler: true
+----
