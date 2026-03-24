@@ -1,0 +1,164 @@
+= 卷和存储
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+:page-aliases: storage.adoc
+
+在部署需要保留数据的应用程序时，您需要创建持久存储。持久存储允许您在运行应用程序的 pod 外部存储应用程序数据。采用这种存储方式，即使应用程序的 pod 出现故障，您也可以维护应用程序数据。
+
+持久卷（PV）是 Kubernetes 集群中的一块存储空间，而持久卷申请（PVC）则是对存储空间的请求。有关 PV 和 PVC 工作原理的详细信息，请参阅有关https://kubernetes.io/docs/concepts/storage/volumes/[存储]的 Kubernetes 官方文档。
+
+作为兼容 Kubernetes 的发行版，K3s 使用https://github.com/container-storage-interface/spec/blob/master/spec.md[Container Storage Interface (CSI)]和https://kubernetes.io/docs/tasks/administer-cluster/running-cloud-controller/[Cloud Provider Interface (CPI)]管理持久存储。
+
+本页介绍如何使用本地存储提供商或<<_setting_up_longhorn,Longhorn>>设置持久存储。
+
+[#_setting_up_the_local_storage_provider]
+== 设置本地存储提供程序
+
+K3s 配备了 Rancher 的本地路径配置器，因此可以使用各节点上的本地存储创建开箱即用的持久卷声明。下面我们举一个简单的例子。欲了解更多信息，请参阅官方文档https://github.com/rancher/local-path-provisioner/blob/master/README.md#usage[这里的] 。
+
+创建一个 hostPath 支持的持久卷主张和一个 pod 来使用它：
+
+=== pvc.yaml
+
+[,yaml]
+----
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-path-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+----
+
+=== pod.yaml
+
+[,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: volume-test
+  namespace: default
+spec:
+  containers:
+  - name: volume-test
+    image: nginx:stable-alpine
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - name: volv
+      mountPath: /data
+    ports:
+    - containerPort: 80
+  volumes:
+  - name: volv
+    persistentVolumeClaim:
+      claimName: local-path-pvc
+----
+
+应用 yaml：
+
+[,bash]
+----
+kubectl create -f pvc.yaml
+kubectl create -f pod.yaml
+----
+
+确认已创建 PV 和 PVC：
+
+[,bash]
+----
+kubectl get pv
+kubectl get pvc
+----
+
+每个状态都应绑定。
+
+== 设置 Longhorn
+
+[CAUTION]
+====
+Longhorn 不支持 ARM32。
+====
+
+
+K3s 支持用于 Kubernetes 的开源分布式块存储系统https://github.com/longhorn/longhorn[Longhorn]。
+
+下面我们举一个简单的例子。更多信息，请参阅https://documentation.suse.com/cloudnative/storage/{longhorn_docs_version}/en/longhorn-documentation.html[官方文档]。
+
+应用 longhorn.yaml 安装 Longhorn：
+
+[,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.8.1/deploy/longhorn.yaml
+----
+
+Longhorn 将安装在命名空间`+longhorn-system+` 中。
+
+创建一个持久卷主张和一个 pod 来使用它：
+
+=== pvc.yaml
+
+[,yaml]
+----
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-volv-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+----
+
+=== pod.yaml
+
+[,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: volume-test
+  namespace: default
+spec:
+  containers:
+  - name: volume-test
+    image: nginx:stable-alpine
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - name: volv
+      mountPath: /data
+    ports:
+    - containerPort: 80
+  volumes:
+  - name: volv
+    persistentVolumeClaim:
+      claimName: longhorn-volv-pvc
+----
+
+应用 yaml 创建 PVC 和 pod：
+
+[,bash]
+----
+kubectl create -f pvc.yaml
+kubectl create -f pod.yaml
+----
+
+确认已创建 PV 和 PVC：
+
+[,bash]
+----
+kubectl get pv
+kubectl get pvc
+----
+
+每个状态都应绑定。
