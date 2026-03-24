@@ -1,0 +1,625 @@
+include::partial$variables.adoc[]
+= 安全なサプライチェーン
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} 、アーティファクト署名とアドミッション・ポリシーの完全性を検証するように設定する。
+:doc-persona: ["kubewarden-user"、"kubewarden-operator"、"kubewarden-distributor"、"kubewarden-integrator"]]。
+:doc-topic: ["distributing-policies", "secure-supply-chain"]
+:doc-type: ["howto"]
+:doctype: book
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "secure supply chain", "infrastructure" ]。
+:sidebar_label: 安全なサプライチェーン
+:sidebar_position: 40
+:current-version: {page-origin-branch}
+
+安全なサプライチェーン・インフラストラクチャは、その部品（リンク）の妥当性を検証することができる。これにより、ユーザーや開発者は、ソフトウェア・コンポーネント（成果物）の管理チェーンを示すことができる。セキュリティ問題を軽減するための積極的なアプローチだ。
+
+https://sigstore.dev/[]Sigstoreプロジェクトは、そのためのツールとインフラを提供している。工芸品のサプライチェーンの完全性を検証するためだ。
+
+{short-project-name} 用途https://github.com/sigstore/cosign[`+cosign+`]シグストア・プロジェクトが提供するhttps://github.com/SigStore/fulcio[フルチオと]https://github.com/sigstore/rekor[レコールの]インフラとともに。
+
+クラスタ・オペレータは、{project-name} 、信頼できるエンティティによって署名されたポリシーのみを実行するように設定できる。ポリシー開発者はポリシーに署名し、レジストリに公開することができる。
+
+== 前提条件
+
+以下のセクションでは、いくつかのツールをインストールする必要があります。これらは、ユーザーがOCIアーティファクトの署名と検証を行えるようにするためのものである。例ではhttps://docs.sigstore.dev/quickstart/quickstart-cosign/[`+cosign+`]およびhttps://github.com/kubewarden/kwctl[`+kwctl+`]ユーティリティを使用しています。
+
+GitHubを使ってポリシーに署名するには、https://docs.sigstore.dev/cosign/system_config/installation/#github-actions[GitHub actions]をインストールする必要があります。
+
+キーレス署名は、Sigstoreプロジェクトが提供するデフォルトのhttps://github.com/SigStore/fulcio[fulcioと]https://github.com/sigstore/rekor[rekor]インスタンスを使用する。必要に応じて、独自のインフラを使用する方法の詳細については、Sigstoreのドキュメントを確認してください。
+
+== 署名ポリシー
+
+{short-project-name} は、Sigstoreのhttps://github.com/sigstore/cosign[コサイン・]ユーティリティを使用してポリシーに署名することを推奨している。このセクションでは、鍵ベースのポリシー署名方法を示す。このためには、秘密鍵と公開鍵のペアを生成する必要がある。生成された鍵は、署名された成果物が期待されるユーザーによるものかどうかを検証するのに役立つ。このキー・ペアを生成するには、`+cosign generate-key-pair+` ：
+
+[subs="+attributes",bash]
+----
+cosign generate-key-pair
+----
+
+パスワードを入力し、確認するプロンプトが表示される：
+
+[subs="+attributes",console]
+----
+Enter password for private key: ●●●●●●●●
+Enter password for private key again: ●●●●●●●●
+Private key written to cosign.key
+Public key written to cosign.pub
+----
+
+これで、このキーを使ってポリシーに署名できる。
+
+秘密鍵ファイルは共有しないでください、`+cosign.key+` 。これは、鍵の所有者だけがポリシーに署名するために使用する秘密ファイルである。
+
+ポリシーに署名するには、`+cosign sign+` を使用し、`+--key+` コマンドライン引数に秘密鍵ファイルを渡します：
+
+[subs="+attributes",bash]
+----
+cosign sign --key cosign.key ghcr.io/kubewarden/policies/user-group-psp:latest
+----
+
+指定された秘密鍵のパスワードの入力を求めるプロンプトが表示される：
+
+[subs="+attributes",console]
+----
+an error occurred: no provider found for that key reference, will try to load key from disk...
+Enter password for private key: ●●●●●●●●
+Pushing signature to: ghcr.io/kubewarden/policies/user-group-psp
+----
+
+このコマンドは、新しい署名オブジェクトを作成してポリシーに署名します。署名オブジェクトは、ポリシーとともにレジストリにアップロードされる。これで、署名検証を使用した{short-project-name} インストールでポリシーを使用する準備ができた。
+
+同じポリシーは、同じユーザーまたは異なるユーザーによって、複数回署名することができる。これらの署名は、オリジナルの署名とともに署名オブジェクトに追加される。
+
+署名プロセスの仕組みについての詳細は、https://docs.sigstore.dev/[] Sigstoreご覧ください。
+
+=== キーレス署名
+
+多くの場合、ポリシーはCI/CDパイプラインを使って自動的に構築される。これは鍵の生成プロセスを複雑にする。このシグストア・キーレス・ワークフローは、このような状況のためにある。キーレス・ワークフローでは、長寿命の歌唱キーを使用する代わりに、認証局（CA）と証明書チェーンを使用する。
+
+生成された短命の証明書キーを信頼の連鎖に結びつける。これは、署名者の身元を確認するためのIDチャレンジによって行われる。証明書鍵の有効期間は、署名が行われるのに十分な長さである。ID チャレンジは、OpenID Connect（OIDC）プロバイダに対する認証によって行われる。シグストアのフルシオ公共インフラは信頼の連鎖を提供する。
+
+署名にはSigstoreのコサイン・ユーティリティを使用する。
+
+[subs="+attributes",bash]
+----
+$ cosign sign ghcr.io/kubewarden/policies/user-group-psp:latest
+----
+
+.コサイン出力
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+Generating ephemeral keys...
+Retrieving signed certificate...
+Your browser will now be opened to:
+https://oauth2.sigstore.dev/auth/auth?access_type=online&client_id=sigstore&code_challenge=<REDACTED>&code_challenge_method=S256&nonce=<REDACTED>&redirect_uri=http%3A%2F%2Flocalhost%3A34021%2Fauth%2Fcallback&response_type=code&scope=openid+email&state=<REDACTED>
+client.go:196: root pinning is not supported in Spec 1.0.19
+Successfully verified SCT...
+tlog entry created with index: 1819248
+Pushing signature to: ghcr.io/kubewarden/policies/user-group-psp
+----
+
+======
+
+これでポリシーに署名し、リポジトリにプッシュする。副産物としてキーが生成されることはない。
+
+=== GitHub ワークフローで成果物に署名する方法
+
+キーレス署名を使う場合、GitHubのアクションでは、`+cosign+` 、ユーザーがOIDCプロバイダーにログインする必要はありません。GitHubトークンは、GitHubワークフローの実行中に利用できます。これは、ユーザーの認証とエフェメラル・キーの生成に使われる。署名プロセスは、キーレス・モードで使用されるものと同じである。これは、{short-project-name} ・プロジェクトがどのようにポリシーに署名しているかの一例である：
+
+.{short-project-name} ポリシー署名を記述する YAML
+[%collapsible]
+======
+
+[,yaml]
+----
+# ... beginning of the workflow file ...
+jobs:
+  build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    steps:
+      # ... other steps building the container image ...
+      -
+      name: Login to GitHub Container Registry
+      uses: docker/login-action@v1
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ inputs.GITHUB_TOKEN }}
+      -
+      name: Publish Wasm policy artifact to OCI registry with the 'latest' tag
+      shell: bash
+      if: ${{ startsWith(github.ref, 'refs/heads/') }}
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        set -ex
+        echo Pushing policy to OCI container registry
+        IMMUTABLE_REF=$(kwctl push -o json ${{ PATH_TO_BUILT_WASM_FILE }} ghcr.io/myorg/policies/my-great-policy:latest | jq -r .immutable_ref)
+        echo Keyless signing of policy using cosign
+        cosign sign ${IMMUTABLE_REF}
+      # ... other build steps ...
+
+# ... remainder of the workflow file ...
+----
+
+======
+
+[NOTE]
+====
+
+ポリシー開発者は、{short-project-name} ポリシーテンプレートを使用できます。ポリシーのビルド、テスト、署名、公開のためのGitHubアクションがある。
+
+====
+
+
+== リスティング・ポリシーの署名
+
+公開されたポリシーの署名は、`+kwctl inspect+` で確認できます。以下のように、ポリシーとその署名に関する情報が表示されます：
+
+.kwctl inspect registry://ghcr.io/kubewarden/policies/us....
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kwctl inspect registry://ghcr.io/kubewarden/policies/user-group-psp:v0.2.0
+Details
+title:              psp-user-group
+description:        Short description
+author:             José Guilherme Vanz <jguilhermevanz@suse.com>
+url:                https://github.com/kubewarden/user-group-psp-policy
+source:             https://github.com/kubewarden/user-group-psp-policy
+license:            Apache-2.0
+mutating:           true
+context aware:      false
+execution mode:     kubewarden-wapc
+protocol version:   1
+
+Annotations
+io.kubewarden.kwctl 0.2.5-rc2
+
+Rules
+────────────────────
+---
+- apiGroups:
+    - ""
+  apiVersions:
+    - v1
+  resources:
+    - pods
+  operations:
+    - CREATE
+────────────────────
+
+Usage
+This policy enforce the user and group used in the container.
+
+Sigstore signatures
+
+Digest:                            sha256:026af67682a85d424e7d95db460171635f5c3957d67b53499bece912cc0413cc
+Media type:                        application/vnd.dev.cosign.simplesigning.v1+json
+Size:                              258
+Annotations
+dev.sigstore.cosign/certificate    -----BEGIN CERTIFICATE-----
+                                   MIIDRzCCAsygAwIBAgITbPUZlUFkkAHtbzc3rzC/3zXj1DAKBggqhkjOPQQDAzAq
+                                   MRUwEwYDVQQKEwxzaWdzdG9yZS5kZXYxETAPBgNVBAMTCHNpZ3N0b3JlMB4XDTIy
+                                   MDIyNTE2MzAwMloXDTIyMDIyNTE2NDAwMVowEzERMA8GA1UEChMIc2lnc3RvcmUw
+                                   WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR/O5c6ZI5BzBweoEIam4uWu5fqzHx0
+                                   3PTCgfXyyvIjorz9wX08bsndkHdWfFObU+PztbxX78An43Yw9/fHtO93o4IB5jCC
+                                   AeIwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMAwGA1UdEwEB
+                                   /wQCMAAwHQYDVR0OBBYEFCP/v7NEJQglbDmyC5VMgnvhiuBUMB8GA1UdIwQYMBaA
+                                   FFjAHl+RRaVmqXrMkKGTItAqxcX6MHgGA1UdEQRxMG+GbWh0dHBzOi8vZ2l0aHVi
+                                   LmNvbS9rdWJld2FyZGVuL2dpdGh1Yi1hY3Rpb25zLy5naXRodWIvd29ya2Zsb3dz
+                                   L3JldXNhYmxlLXJlbGVhc2UtcG9saWN5LXJ1c3QueW1sQHJlZnMvaGVhZHMvdjEw
+                                   NgYKKwYBBAGDvzABAwQoMmJiMGQ4NjZjMzFmOGMyZTQ3NDMxMDI4M2ExNmFkMWFi
+                                   NjBlZjA1YjAuBgorBgEEAYO/MAEFBCBrdWJld2FyZGVuL3VzZXItZ3JvdXAtcHNw
+                                   LXBvbGljeTAcBgorBgEEAYO/MAEEBA5SZWxlYXNlIHBvbGljeTASBgorBgEEAYO/
+                                   MAECBARwdXNoMDkGCisGAQQBg78wAQEEK2h0dHBzOi8vdG9rZW4uYWN0aW9ucy5n
+                                   aXRodWJ1c2VyY29udGVudC5jb20wHgYKKwYBBAGDvzABBgQQcmVmcy90YWdzL3Yw
+                                   LjIuMDAKBggqhkjOPQQDAwNpADBmAjEAyGQbNCkOifStO7yCCfF8yXyc144ANn2x
+                                   Ty92WYC0pTaVhviOED47fgD6TncKf+92AjEAjBfjLmCG/Mwrh8t+gfHJEAWWEc9Q
+                                   +j9NR4wF66uABS/TTh5CYlrnIuqSD+GBHGwV
+                                   -----END CERTIFICATE-----
+dev.sigstore.cosign/timestamp      {"signatures":[{"keyid":"b6710623a30c010738e64c5209d367df1c0a18cf90e6ab5292fb01680f83453d","sig":"3046022100f666a7f4b3d85d8003f2c166e27827dfa0c4ab9282e9dab19485f4e702c61700022100dfe826e0edab5f80a40f08cc87b87777a4db30775d85684fe4950e797f2f565c"}],"signed":{"_type":"timestamp","spec_version":"1.0","version":15,"expires":"2022-03-08T19:14:05Z","meta":{"snapshot.json":{"length":1655,"hashes":{"sha256":"36cf063d0717f6dc03e23027721adcd69b684d293956d3a1a7db7b0848f711d7","sha512":"f90946d0a2dc58dae4505cfb91517a40299adf9e8719f52af187e2025aad69fcdeaeded271ec25db24869841c16fbe24f3fc56f56af8fdbb8808dccec4636b64"},"version":15}}}}
+dev.sigstore.cosign/bundle         {"SignedEntryTimestamp":"MEUCIEfu4qR+HsexSDk5h2QXMduvoRCX10J+4CLQWtYw5VD6AiEAyYCEjvJdv2Sr5tZ4LApnddH/4v+CoV1QkuvbCQ3iIUM=","Payload":{"body":"eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJraW5kIjoiaGFzaGVkcmVrb3JkIiwic3BlYyI6eyJkYXRhIjp7Imhhc2giOnsiYWxnb3JpdGhtIjoic2hhMjU2IiwidmFsdWUiOiIwMjZhZjY3NjgyYTg1ZDQyNGU3ZDk1ZGI0NjAxNzE2MzVmNWMzOTU3ZDY3YjUzNDk5YmVjZTkxMmNjMDQxM2NjIn19LCJzaWduYXR1cmUiOnsiY29udGVudCI6Ik1FWUNJUUNXNWZRZ1BUUTdaTlNuRkhzbHJOTlFrS2dTSVFpOGNSMTU5UEExc0s4VGlRSWhBSndMOWJPcUJKbVduN1lLZG9Tem80c2xPZ2s4SkJCanFYZHNydDNyeVF0QiIsInB1YmxpY0tleSI6eyJjb250ZW50IjoiTFMwdExTMUNSVWRKVGlCRFJWSlVTVVpKUTBGVVJTMHRMUzB0Q2sxSlNVUlNla05EUVhONVowRjNTVUpCWjBsVVlsQlZXbXhWUm10clFVaDBZbnBqTTNKNlF5OHplbGhxTVVSQlMwSm5aM0ZvYTJwUFVGRlJSRUY2UVhFS1RWSlZkMFYzV1VSV1VWRkxSWGQ0ZW1GWFpIcGtSemw1V2xNMWExcFlXWGhGVkVGUVFtZE9Wa0pCVFZSRFNFNXdXak5PTUdJelNteE5RalJZUkZSSmVRcE5SRWw1VGxSRk1rMTZRWGROYkc5WVJGUkplVTFFU1hsT1ZFVXlUa1JCZDAxV2IzZEZla1ZTVFVFNFIwRXhWVVZEYUUxSll6SnNibU16VW5aamJWVjNDbGRVUVZSQ1oyTnhhR3RxVDFCUlNVSkNaMmR4YUd0cVQxQlJUVUpDZDA1RFFVRlNMMDgxWXpaYVNUVkNla0ozWlc5RlNXRnROSFZYZFRWbWNYcEllREFLTTFCVVEyZG1XSGw1ZGtscWIzSjZPWGRZTURoaWMyNWthMGhrVjJaR1QySlZLMUI2ZEdKNFdEYzRRVzQwTTFsM09TOW1TSFJQT1ROdk5FbENOV3BEUXdwQlpVbDNSR2RaUkZaU01GQkJVVWd2UWtGUlJFRm5aVUZOUWsxSFFURlZaRXBSVVUxTlFXOUhRME56UjBGUlZVWkNkMDFFVFVGM1IwRXhWV1JGZDBWQ0NpOTNVVU5OUVVGM1NGRlpSRlpTTUU5Q1FsbEZSa05RTDNZM1RrVktVV2RzWWtSdGVVTTFWazFuYm5ab2FYVkNWVTFDT0VkQk1WVmtTWGRSV1UxQ1lVRUtSa1pxUVVoc0sxSlNZVlp0Y1ZoeVRXdExSMVJKZEVGeGVHTllOazFJWjBkQk1WVmtSVkZTZUUxSEswZGlWMmd3WkVoQ2VrOXBPSFphTW13d1lVaFdhUXBNYlU1MllsTTVjbVJYU214a01rWjVXa2RXZFV3eVpIQmtSMmd4V1dreGFGa3pVbkJpTWpWNlRIazFibUZZVW05a1YwbDJaREk1ZVdFeVduTmlNMlI2Q2t3elNteGtXRTVvV1cxNGJFeFlTbXhpUjFab1l6SlZkR05IT1hOaFYwNDFURmhLTVdNelVYVmxWekZ6VVVoS2JGcHVUWFpoUjFab1draE5kbVJxUlhjS1RtZFpTMHQzV1VKQ1FVZEVkbnBCUWtGM1VXOU5iVXBwVFVkUk5FNXFXbXBOZWtadFQwZE5lVnBVVVROT1JFMTRUVVJKTkUweVJYaE9iVVpyVFZkR2FRcE9ha0pzV21wQk1WbHFRWFZDWjI5eVFtZEZSVUZaVHk5TlFVVkdRa05DY21SWFNteGtNa1o1V2tkV2RVd3pWbnBhV0VsMFdqTktkbVJZUVhSalNFNTNDa3hZUW5aaVIyeHFaVlJCWTBKbmIzSkNaMFZGUVZsUEwwMUJSVVZDUVRWVFdsZDRiRmxZVG14SlNFSjJZa2RzYW1WVVFWTkNaMjl5UW1kRlJVRlpUeThLVFVGRlEwSkJVbmRrV0U1dlRVUnJSME5wYzBkQlVWRkNaemM0ZDBGUlJVVkxNbWd3WkVoQ2VrOXBPSFprUnpseVdsYzBkVmxYVGpCaFZ6bDFZM2sxYmdwaFdGSnZaRmRLTVdNeVZubFpNamwxWkVkV2RXUkROV3BpTWpCM1NHZFpTMHQzV1VKQ1FVZEVkbnBCUWtKblVWRmpiVlp0WTNrNU1GbFhaSHBNTTFsM0NreHFTWFZOUkVGTFFtZG5jV2hyYWs5UVVWRkVRWGRPY0VGRVFtMUJha1ZCZVVkUllrNURhMDlwWmxOMFR6ZDVRME5tUmpoNVdIbGpNVFEwUVU1dU1uZ0tWSGs1TWxkWlF6QndWR0ZXYUhacFQwVkVORGRtWjBRMlZHNWpTMllyT1RKQmFrVkJha0ptYWt4dFEwY3ZUWGR5YURoMEsyZG1TRXBGUVZkWFJXTTVVUW9yYWpsT1VqUjNSalkyZFVGQ1V5OVVWR2cxUTFsc2NtNUpkWEZUUkN0SFFraEhkMVlLTFMwdExTMUZUa1FnUTBWU1ZFbEdTVU5CVkVVdExTMHRMUW89In19fX0=","integratedTime":1645806604,"logIndex":1506651,"logID":"c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d"}}
+dev.sigstore.cosign/chain          -----BEGIN CERTIFICATE-----
+                                   MIIB9zCCAXygAwIBAgIUALZNAPFdxHPwjeDloDwyYChAO/4wCgYIKoZIzj0EAwMw
+                                   KjEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MREwDwYDVQQDEwhzaWdzdG9yZTAeFw0y
+                                   MTEwMDcxMzU2NTlaFw0zMTEwMDUxMzU2NThaMCoxFTATBgNVBAoTDHNpZ3N0b3Jl
+                                   LmRldjERMA8GA1UEAxMIc2lnc3RvcmUwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAT7
+                                   XeFT4rb3PQGwS4IajtLk3/OlnpgangaBclYpsYBr5i+4ynB07ceb3LP0OIOZdxex
+                                   X69c5iVuyJRQ+Hz05yi+UF3uBWAlHpiS5sh0+H2GHE7SXrk1EC5m1Tr19L9gg92j
+                                   YzBhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBRY
+                                   wB5fkUWlZql6zJChkyLQKsXF+jAfBgNVHSMEGDAWgBRYwB5fkUWlZql6zJChkyLQ
+                                   KsXF+jAKBggqhkjOPQQDAwNpADBmAjEAj1nHeXZp+13NWBNa+EDsDP8G1WWg1tCM
+                                   WP/WHPqpaVo0jhsweNFZgSs0eE7wYI4qAjEA2WB9ot98sIkoF3vZYdd3/VtWB5b9
+                                   TNMea7Ix/stJ5TfcLLeABLE4BNJOsQ4vnBHJ
+                                   -----END CERTIFICATE-----
+dev.cosignproject.cosign/signature MEYCIQCW5fQgPTQ7ZNSnFHslrNNQkKgSIQi8cR159PA1sK8TiQIhAJwL9bOqBJmWn7YKdoSzo4slOgk8JBBjqXdsrt3ryQtB
+----
+
+======
+
+== ポリシーの検証
+
+ポリシーが正しく署名されているかどうかは、`+cosign+` または`+kwctl+` で確認できます。ポリシーの署名をチェックするためのコマンドラインオプションも似ている。署名バイナリをキーでチェックするには、`+kwctl+` ：
+
+[subs="+attributes",console]
+----
+$ kwctl verify -k cosign.pub ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T14:49:31.878180Z  INFO kwctl::verify: Policy successfully verified
+----
+
+または`+cosign+` ：
+
+[subs="+attributes",console]
+----
+$ cosign verify --key cosign.pub ghcr.io/kubewarden/policies/user-group-psp:latest
+
+Verification for ghcr.io/kubewarden/policies/user-group-psp:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+  - Any certificates were verified against the Fulcio roots.
+
+[{"critical":{"identity":{"docker-reference":"ghcr.io/kubewarden/policies/user-group-psp"},"image":{"docker-manifest-digest":"sha256:af520a8ccee03811d426c48634b7007f1220c121cc23e14962bb64510585ce97"},"type":"cosign container image signature"},"optional":null}]
+----
+
+== ポリシー署名をチェックするためにポリシーサーバーを設定する
+
+{short-project-name} 、信頼できるポリシーのみを実行するように`+ConfigMap+` 。`+ConfigMap+` の構造については、『xref:reference/verification-config.adoc#_signature_configuration_reference[Signature Configuration Reference]』を参照のこと。これは、`+kwctl+` を使ってポリシーを検証するために使われる。`+ConfigMap+` は、`+verification-config+` フィールドの下に許容されるコンフィギュレーションを定義すべきである。
+
+例えば、{short-project-name} GitHub組織によって署名されたポリシーを実行したいとします。このシナリオの`+ConfigMap+` ：
+
+.$ cat kubewarden_signatures.yaml
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ cat kubewarden_signatures.yaml
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+
+# note that the data is stored under verification-config field
+$ kubectl  create configmap my-signatures-configuration --from-file=verification-config=kubewarden_signatures.yaml
+
+$ kubectl get configmap -o yaml my-signatures-configuration
+apiVersion: v1
+data:
+  verification-config: |
+    apiVersion: v1
+    allOf:
+      - kind: githubAction
+        owner: kubewarden
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2022-03-29T18:27:20Z"
+  name: my-signatures-configuration
+  namespace: default
+  resourceVersion: "10279"
+  uid: d53e1c56-1fee-45de-92f5-9bd73b8cead4
+----
+
+======
+
+`+kwctl scaffold verification-config+` を使って、`+ConfigMap+` 用のデフォルトの検証用設定ファイルを生成することができる：
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold verification-config > verification_config.yaml
+----
+
+.$ cat verification_config.yaml
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold verification-config > verification_config.yaml
+$ cat verification_config.yaml
+# Default {short-project-name} verification config
+#
+# With this config, the only valid policies are those signed by {short-project-name}
+# infrastructure.
+#
+# This config can be saved to its default location (for this OS) with:
+#   kwctl scaffold verification-config > /home/kubewarden/.config/kubewarden/verification-config.yml
+#
+# Providing a config in the default location enables Sigstore verification.
+# See https://docs.kubewarden.io for more Sigstore verification options.
+---
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+    repo: ~
+    annotations: ~
+anyOf: ~
+----
+
+======
+
+この`+verification_config.yml+` を使って、`+ConfigMap+` 。
+
+[subs="+attributes",console]
+----
+$ kubectl create configmap my-signatures-configuration --from-file==verification_config.yaml
+configmap/my-signatures-configuration created
+----
+
+`+get configmap+` で検査できる。
+
+.kubectl get configmap
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kubectl get configmap -o yaml my-signatures-configuration
+apiVersion: v1
+data:
+  verification-config: |+
+    # Default {short-project-name} verification config
+    #
+    # With this config, the only valid policies are those signed by {short-project-name}
+    # infrastructure.
+    #
+    # This config can be saved to its default location (for this OS) with:
+    #   kwctl scaffold verification-config > /home/kubewarden/.config/kubewarden/verification-config.yml
+    #
+    # Providing a config in the default location enables Sigstore verification.
+    # See https://docs.kubewarden.io for more Sigstore verification options.
+    ---
+    apiVersion: v1
+    allOf:
+      - kind: githubAction
+        owner: kubewarden
+        repo: ~
+        annotations: ~
+    anyOf: ~
+
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2022-04-07T11:54:27Z"
+  name: my-signatures-configuration
+  namespace: default
+  resourceVersion: "1317"
+  uid: 74dec846-7fcd-4b4b-8184-700c816f685a
+----
+
+======
+
+署名要件を格納する`+ConfigMap+` を作成した後、ポリシー サーバを設定できます。`+verificationConfig+` （➀マーク）フィールドに`+ConfigMap+` 名を設定して、ポリシー署名の検証を開始する。
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: PolicyServer
+metadata:
+  name: default
+  finalizers:
+    - kubewarden
+spec:
+  image: ghcr.io/kubewarden/policy-server:v0.2.7
+  serviceAccountName: policy-server
+  replicas: 1
+//highlight-next-l
+  # name of the confimap with the signatures requirements
+  verificationConfig: your_configmap <1>
+  env:
+    - name: KUBEWARDEN_ENABLE_METRICS
+      value: "1"
+    - name: KUBEWARDEN_LOG_FMT
+      value: otlp
+    - name: "KUBEWARDEN_LOG_LEVEL"
+      value: "info"
+----
+<1> `+verificationConfig+`
+
+`+kubewarden-defaults+` Helm chart を使用してデフォルトの Policy Server を配置する場合は、`+policyServer.verificationConfig+` の値に`+ConfigMap+` 名を設定して、このフィールドを構成します。
+
+現在、PolicyServerは信頼されていないAdmissionPoliciesとClusterAdmissionPoliciesの起動を拒否します。実行中の PolicyServer に対して、信頼されていないポリシーを削除するか、署名要件を変更する必要があります。
+
+== シグネチャ設定リファレンス
+
+ファイルに含まれる署名要件を検証することができます。例を挙げよう：
+
+.署名要件ファイル
+[%collapsible]
+======
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+
+allOf: <1>
+  - kind: githubAction
+    owner: kubewarden   # mandatory
+    annotations:
+      env: prod
+
+anyOf: # at least `+anyOf.minimumMatches+` are required to match <2>
+  minimumMatches: 2 # default is 1
+  signatures:
+  - kind: pubKey
+    owner: flavio # optional
+    key: .... # mandatory
+    annotations:  # optional
+      env: prod
+      foo: bar
+  - kind: pubKey
+    owner: victor # optional
+    key: .... # mandatory
+  - kind: genericIssuer
+    issuer: https://github.com/login/oauth
+    subject:
+      equal: alice@example.com
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      equal: https://github.com/flavio/policy-secure-pod-images/.github/workflows/release.yml@refs/heads/main
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/flavio/
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/kubewarden # <- it will be post-fixed with `+/+` for security reasons
+  - kind: githubAction
+    owner: flavio   # mandatory
+    repo: policy1 # optional
+  - kind: pubKey
+    owner: alice # optional
+    key: .... # mandatory
+----
+<1> `+allOf+`
+<2> `+anyOf+`
+======
+
+=== 署名検証
+
+上記のコンフィギュレーションには、ハイライトされた2つのセクション、`+allOf+` と`+anyOf+` が含まれている：
+
+* `+allOf+`ポリシーは、ここにあるすべての署名要件が有効である場合にのみ信頼される。
+* `+anyOf+``+minimumMatches+` の基準を満たせば、ポリシーは信頼される。
+
+上記、`+minimumMatches+` フィールドは2。つまり、署名の条件のうち少なくとも2つは満たさなければならない。`+minimumMatches+` フィールドのデフォルト値は`+1+` である。
+
+`+allOf+` *、*`+anyOf+` の最低署名数を満たす必要があります。
+
+=== 公開鍵の検証
+
+ポリシーが正しい公開鍵で署名されていることを確認するには、鍵データと鍵の所有者を指定する。この例では、`+kind+` を`+pubKey+` に設定し、`+key+` が公開鍵を持っている。オーナー・フィールドは任意だが、誰がキーの所有者かを明確にするのに便利である。
+
+[subs="+attributes",yaml]
+----
+  - kind: pubKey
+    owner: bob # optional
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+      BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+      -----END PUBLIC KEY-----
+----
+
+=== キーレス署名検証
+
+キーレス・モードで署名されたポリシーは、検証する公開鍵を持たない。署名プロセスで使用されたOIDCデータでポリシーを検証することはできる。そのためには、`+genericIssuer+` として署名検証を定義する必要がある。
+
+署名から情報を確認することは可能だ：
+
+* `+issuer+`(必須）：これは、Fulcioが生成した証明書の`+Issuer+` 属性と一致する。これは、ポリシーの署名に使用されたOIDCを示している。
+* `+subject+`:Fulcioの証明書の`+Subject+` 属性と一致させるために使用されるフィールド。`+Subject+` (Fulcio)フィールドには、OIDCプロバイダーに対する認証に使用されるユーザーが含まれる。検証フィールド、`+subject+` は、2つのサブフィールドのうちの1つを持つことができる：
+ ** `+equal+`:証明書の`+Subject+` （Fulcio）は、署名検証の値と等しくなければならない；
+ ** `+urlPrefix+`:証明書の`+Subject+` （Fulcio）フィールドの値の先頭に、署名検証で定義された値を付加する必要がある。
+
+[NOTE]
+====
+
+`+cosign verify+` 、`+kwctl inspect+` 、キーレス署名に関する情報を表示することができる。
+
+====
+
+
+例えば、この設定は、ポリシーがGitHub OIDCを使ったアリスからのキーレス署名を持っていなければならないことを意味する：
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://github.com/login/oauth
+  subject:
+    equal: alice@example.com
+----
+
+この設定には、GitHub ユーザー`+flavio+` が所有するリポジトリから GitHub アクションで署名されたポリシーが必要です：
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://token.actions.githubusercontent.com
+  subject:
+    urlPrefix: https://github.com/flavio
+----
+
+=== GitHub アクション署名検証
+
+kind",`+githubAction+` は、GitHub Actions で署名されたポリシーを検証するためのものです。
+`+genericIssuer+` 。署名要求プロセスを簡素化するために、`+githubAction+` に2つの追加フィールドを使用する：
+
+* `+owner+` (必須）：信頼するユーザーまたは組織のGitHub ID
+* `+repo+`信頼するリポジトリ名
+
+例えば、最後のスニペットは、`+genericIssuer+` を使って、次のように書き換えることができる：
+
+[subs="+attributes",yaml]
+----
+- kind: githubAction
+  owner: flavio
+----
+
+=== 署名注釈の検証
+
+すべての署名タイプは、他のオプションの検証フィールド、`+annotations+` を持つことができる。
+これらのフィールドは、署名プロセス中に追加されるキー／バリュー・データである。
+
+{short-project-name} を使えば、ポリシー署名が信頼されたユーザーによるものであること*、そして*そのユーザーが特定の注釈を持っていることをチェックできる。
+
+次の検証では、ポリシーの2つの条件をチェックする：
+
+* 特定の鍵で署名されていること
+* 本番環境アノテーション
+
+[subs="+attributes",yaml]
+----
+- kind: pubKey
+  key: |
+    -----BEGIN PUBLIC KEY-----
+    MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+    BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+    -----END PUBLIC KEY-----
+  annotations:
+    environment: production
+----
+
+=== 署名検証設定ファイルを使用してポリシーOCIアーティファクトをチェックする
+
+検証設定ファイルを使用して、ポリシーが検証に合格するかどうかをテストできます。
+`+kwctl verify+` コマンドの`+--verification-config-path+` フラグを使用する。
+
+[subs="+attributes",console]
+----
+$ cat signatures_requirements.yaml
+apiVersion: v1
+allOf:
+  - kind: pubKey
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5Q+cN1Jj2S7N05J4AXnqwP2DyzSg
+      Mc+raYce2Wthrd30MSgFtoh5ADAkCd/nML2Nx8UD9KBuASRb0gG5jXqgMQ==
+      -----END PUBLIC KEY-----
+
+$ kwctl verify --verification-config-path signatures_requirements.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T17:34:37.847169Z  INFO kwctl::verify: Policy successfully verified
+----
+
+この最後の例は、与えられたポリシーが{short-project-name} の組織から来たものかどうかをテストする：
+
+[subs="+attributes",console]
+----
+$ cat kubewarden_signatures.yaml
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+
+$ kwctl verify --verification-config-path kubewarden_signatures.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T18:07:39.062292Z  INFO kwctl::verify: Policy successfully verified
+----
