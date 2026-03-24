@@ -1,0 +1,215 @@
+include::partial$variables.adoc[]
+= エンド・ツー・エンド・テスト
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: TinyGoが生成するWebAssemblyバイナリに対して実行するエンドツーエンドのテストを、batsとkwctlを使って記述し、自動化する方法を紹介します。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "golang", "end-to-end-testing"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "writing policies", "end-to-end testing", "golang", "go"]
+:sidebar_label: エンド・ツー・エンド・テスト
+:sidebar_position: 40
+:current-version: {page-origin-branch}
+
+ここまでのところ、あなたはGoユニットテストのセットを使ってポリシーをテストしてきた。
+このセクションでは、TinyGoによって生成された実際のWebAssemblyバイナリに対して実行されるエンドツーエンドのテストを記述する方法を示します。
+
+== 前提条件
+
+これらのツールが開発マシンに必要なことを思い出してほしい：
+
+* Docker、または他のコンテナエンジン：WebAssemblyポリシーの構築に使用します。
+公式TinyGoコンテナ・イメージに同梱されているコンパイラーを使用する。
+* https://github.com/bats-core/bats-core[バット]
+テストを記述し、その実行を自動化するために使用する。
+* https://github.com/kubewarden/kwctl/releases[`+kwctl+`]:
+{project-name} 、Kubernetesの外部でポリシーを実行するためのCLIツール。
+ドキュメントのxref:tutorials/testing-policies/index.adoc[このセクションで取り上げて]いる。
+
+== ライティングテスト
+
+テストの記述と自動化には、https://github.com/bats-core/bats-core[]バットを使用します。
+各試験には以下のステップがある：
+
+. `+kwctl+` を使ってポリシーを実行する。
+. `+kwctl+` によって生成された出力に対してアサーションを実行する。
+
+エンド・ツー・エンドのテストはすべて、`+e2e.bats+` というファイルに入っている。
+プロジェクトの足場となるプロジェクトには、すでに`+e2e.bats+` の例が含まれている。
+ポリシーの動作を反映させるために、その内容を変更する必要がある。
+このチュートリアルを進めながら、雛形ファイルの内容を削除し、以下の内容に置き換えることができます。
+
+エンドツーエンドのテストでは、Goユニットテストで使ったのと同じテストフィクスチャファイルを使います。
+
+最初のテストは、設定が提供されていないときにリクエストが承認されることを保証する：
+
+[,bash]
+----
+@test "accept when no settings are provided" {
+  run kwctl run -r test_data/pod.json policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request is accepted
+  [ $(expr "$output" : '.*"allowed":true.*') -ne 0 ]
+}
+----
+
+このコマンドを使ってエンド・ツー・エンドのテストを実行する：
+
+[subs="+attributes",console]
+----
+make e2e-tests
+----
+
+この結果、次のような出力が得られる：
+
+[subs="+attributes",console]
+----
+bats e2e.bats
+ ✓ accept when no settings are provided
+
+1 test, 0 failures
+----
+
+ユーザー定義の制約を尊重するときに、リクエストの承認を確実にするテストを書くべきです：
+
+[,bash]
+----
+@test "accept because label is satisfying a constraint" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+次に、どのラベルも拒否リストにないときに、リクエストの受理をチェックするテストを書くことができる：
+
+[,bash]
+----
+@test "accept labels are not on deny list" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "bar"]}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ $(expr "$output" : '.*"allowed":true.*') -ne 0 ]
+}
+----
+
+ラベルのひとつが拒否リストにあるためにリクエストを拒否するテストを追加することで、テストのカバレッジを改善できます：
+
+[,bash]
+----
+@test "reject because label is on deny list" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "owner"]}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Label owner is on the deny list.*") -ne 0 ]
+}
+----
+
+次のテストは、ラベルの一つがユーザーによって提供された制約を満たさないとき、 リクエストの拒否を保証する。
+
+[,bash]
+----
+@test "reject because label is not satisfying a constraint" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "team-\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*The value of cc-center doesn't pass user-defined constraint.*") -ne 0 ]
+}
+----
+
+これで、制約ラベルの1つが見つからない場合に、バリデーションが失敗するようにすることができます：
+
+[,bash]
+----
+@test "reject because constrained label is missing" {
+  run kwctl run annotated-policy.wasm \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"organization": "\\d+"}}'
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Constrained label organization not found inside of Pod.*") -ne 0 ]
+}
+----
+
+セッティングのバリデーションが正しく機能していることを確認したい。
+これは以下のテストで可能だ：
+
+[,bash]
+----
+@test "fail settings validation because of conflicting labels" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"denied_labels": ["foo", "cc-center"], "constrained_labels": {"cc-center": "^cc-\\d+$"}}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation failed
+  [ $(expr "$output" : ".*Provided settings are not valid: These labels cannot be constrained and denied at the same time: Set{cc-center}.*") -ne 0 ]
+}
+
+@test "fail settings validation because of invalid constraint" {
+  run kwctl run \
+    -r test_data/pod.json \
+    --settings-json '{"constrained_labels": {"cc-center": "^cc-[12$"}}' \
+    policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation failed
+  [ $(expr "$output" : ".*Provided settings are not valid: error parsing regexp.*") -ne 0 ]
+}
+----
+
+== 結論
+
+これで8つのエンド・ツー・エンドのテストが十分なカバレッジを持つようになった：
+
+[subs="+attributes",shell]
+----
+$ make e2e-tests
+bats e2e.bats
+e2e.bats
+ ✓ accept when no settings are provided
+ ✓ accept because label is satisfying a constraint
+ ✓ accept labels are not on deny list
+ ✓ reject because label is on deny list
+ ✓ reject because label is not satisfying a constraint
+ ✓ reject because constrained label is missing
+ ✓ fail settings validation because of conflicting labels
+ ✓ fail settings validation because of invalid constraint
+
+8 tests, 0 failures
+----
