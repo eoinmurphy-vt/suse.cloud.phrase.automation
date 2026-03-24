@@ -1,0 +1,184 @@
+include::partial$variables.adoc[]
+= 変異するポリシー
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 事前に定義された設定に従ってClusterAdmissionPolicy内のミューティング・ポリシーを構成および管理することで、リクエストを再構築します。
+:doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["mutating-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "policy mutating", "kubernetes", "clusteradmissionpolicy", "admissionpolicy" ]。
+:sidebar_label: 変異するポリシー
+:sidebar_position: 10
+:current-version: {page-origin-branch}
+
+ミューテート・ポリシーはオブジェクト・リクエストを受け取り、それを新しいリクエストに再構築（ミューテート）する。これはポリシーの設定で定義された値に従っている。リクエストはKubernetes APIを通して進み、他のポリシーによって評価される可能性がある。
+
+リクエストの動作の変更を許可するには、`+ClusterAdmissionPolicy.mutating+`フィールドを`+true+` に設定する。
+
+しかし、`+ClusterAdmissionPolicy.mutating+` フィールドを`+false+` に設定すると、変異したリクエストは拒否される。
+
+== ポリシーの突然変異が危険な理由
+
+=== 未審査の変異ポリシーは脆弱性をもたらす可能性がある
+
+[WARNING]
+====
+
+システムの乱用を防ぐため、{project-name} 管理者は変異するポリシーを見直すべきである。ポリシーの変更は、例えば、特権コンテナの作成を許可するようにワークロードを変更することができる。
+
+====
+
+
+==== ソリューション
+
+疑わしい場合は、検証および変異の両方を行うポリシーを書いたり展開したりするのではなく、ポリシーを変異させるポリシーと検証するポリシーに分割する。これは、（Regoのような）DSLを使って複雑なポリシーを構築する場合に特に重要である。
+
+=== サードパーティのKubernetes Controllerと一緒に変異ポリシーの設定を誤ると、無限ループに陥る可能性がある。
+
+[WARNING]
+====
+
+変異するポリシーは、Kubernetes APIを通じて進行するリクエストを返す。同じリソースをリッスンしている他のKubernetes Controllersがあれば、フォローアップリクエストでそれらを変異させるかもしれない。これは突然変異の無限フィードバックループにつながる可能性がある。
+
+====
+
+
+==== ソリューション
+
+に対して変異を行う：
+
+. 下位タイプのリソース（例えばポッド）。
+. 最も高いタイプのリソース（例えば配備)。注意: コントローラーがこれらのリソースを管理している場合、ループが発生する可能性がある。たとえば、GitOps ソリューション（fleet、flux、argo、... など）のコントローラや、独自の CRD を Deployment オブジェクトに変換するサードパーティのコントローラなどです。
+
+== 例
+
+変異するポリシーが働いているのがわかるだろう。`+mutating+` フィールドを`+true+` に設定し、以下の`+ClusterAdmissionPolicy+` を作成する：
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group created
+----
+
+このhttps://github.com/kubewarden/user-group-psp-policy[`+psp-user-group+`]ポリシーを使用してコンテナ内のユーザーとグループを制御し、リクエストを変更することができます。前の例では、`+runAsUser+` フィールドを設定し、コンテナ`+securityContext+` セクションに追加した。
+
+`+mutating+` フィールドは`+true+` であるため、以下のリクエストは成功する：
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+pod/pause-user-group created
+----
+
+コンテナの`+securityContext+` ：
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl get pods pause-user-group -o jsonpath='{ .spec.containers[].securityContext }'
+
+# Output
+{"runAsUser":1000}
+----
+
+次に、フィールド`+mutating+` を`+false+` に設定して`+ClusterAdmissionPolicy+` を変更する：
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group configured
+----
+
+`+mutating+` フィールドが`+false+` であるため、以下のリクエストは失敗する：
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+Error from server: error when creating ".\\pause-user-group.yaml": admission webhook "psp-user-group.kubewarden.admission" denied the request: Request rejected by policy psp-user-group. The policy attempted to mutate the request, but it is currently configured to not allow mutations.
+----
+
+結論として、{short-project-name} 、非推奨のKubernetes Pod Security Policies（PSP）と同じ動作を再現していることがわかる。
