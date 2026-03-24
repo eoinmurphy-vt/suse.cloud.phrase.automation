@@ -1,0 +1,103 @@
+= Anulación de los argumentos de umbral de monitorización mediante anotaciones de kubernetes
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidad de SUSE
+
+== Visión general
+
+SUSE Observability proporciona xref:/use/alerting/k8s-monitors.adoc[monitores listos para usar], que supervisan los problemas habituales que pueden producirse en un clúster de Kubernetes. Estos monitores funcionan con ciertos argumentos por defecto que se adaptan a la mayoría de los casos de uso, pero a veces es necesario adaptar su comportamiento anulando algunos de estos argumentos por defecto como `+threshold+` o `+failureState+`.
+El mecanismo para declarar las anulaciones es a través de anotaciones de recursos kubernetes que denotan a qué monitor y componente deben aplicarse. Por ejemplo, podríamos anular el `+failureState+` para el monitor `+Available service endpoints+` para un servicio específico en el que queremos señalar un estado `+CRITICAL+` cuando falla en lugar del `+DEVIATING+` predeterminado.
+
+== Cómo
+
+* <<_how_to_build_my_annotation,Cómo construir mi anotación>>
+* <<_what_monitors_allow_overriding_arguments,¿Qué monitores permiten anular argumentos?>>
+* <<_build_an_override_for_a_custom_monitor,Construir una anulación para un monitor personalizado>>
+
+Como ejemplo, los pasos anularán los argumentos para el monitor `+Available service endpoints+` de los servicios HTTP de Kubernetes.
+
+== Cómo construir mi anotación
+
+Las claves de anulación de anotaciones para los monitores de SUSE Observability siguen la siguiente convención:
+
+----
+monitor.${owner}.stackstate.io/${monitorShorName}
+----
+
+La propiedad `+owner+` representa quién creó dicho monitor, para los monitores "out of the box" es `+kubernetes-v2+`, y la propiedad `+monitorShorName+` representa el id del monitor y puede extraerse de la propiedad `+identifier+` de un monitor que puede leerse del cli al listar o inspeccionar monitores
+
+----
+sts monitor list
+
+ID              | STATUS  | IDENTIFIER                                                                          | NAME                                        | FUNCTION ID     | TAGS
+8051105457030   | ENABLED | urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:service-available-endpoint | Available service endpoints                 | 233276809885571 | [services]
+----
+
+En nuestro ejemplo el identificador es `+urn:stackpack:kubernetes-v2:shared:monitor:kubernetes-v2:service-available-endpoint+` y el `+monitorShorName+` corresponde al último segmento como en `+service-available-endpoint+` por lo tanto la clave de anotación es:
+
+[,bash]
+----
+monitor.kubernetes-v2.stackstate.io/service-available-endpoint
+----
+
+la carga útil de la anotación es un objeto JSON en el que se pueden definir los siguientes argumentos opcionales:
+
+* `+threshold+`Un umbral numérico con el que comparar.
+* `+failureState+`: opcional. O "CRÍTICO" o "DESVIADO". "CRÍTICO" se mostrará como leído en SUSE Observability y "DESVIADO" como naranja, para denotar una gravedad diferente.
+* `+enabled+`: opcional. Booleano que determina si el monitor produciría un estado de salud para ese componente.
+
+La anotación completa sería la siguiente
+
+[,bash]
+----
+    monitor.kubernetes-v2.stackstate.io/service-available-endpoint: |-
+      {
+        "threshold": 0.0,
+        "failureState": "CRITICAL",
+        "enabled": true
+      }
+----
+
+== ¿Qué monitores permiten anular argumentos?
+
+* xref:/use/alerting/kubernetes-monitors.adoc#_available_service_endpoints[Puntos finales de servicio disponibles]
+* xref:/use/alerting/kubernetes-monitors.adoc#_cpu_limits_resourcequota[Cpu limits resourcequota]
+* xref:/use/alerting/kubernetes-monitors.adoc#_cpu_requests_resourcequota[Cpu requests resourcequota]
+* xref:/use/alerting/kubernetes-monitors.adoc#_memory_limits_resourcequota[Límites de memoria resourcequota]
+* xref:/use/alerting/kubernetes-monitors.adoc#_memory_requests_resourcequota[Peticiones de memoria resourcequota]
+* xref:/use/alerting/kubernetes-monitors.adoc#_node_disk_pressure[Presión del disco del nodo]
+* xref:/use/alerting/kubernetes-monitors.adoc#_node_memory_pressure[Presión de la memoria del nodo]
+* xref:/use/alerting/kubernetes-monitors.adoc#_node_pid_pressure[Nodo PID Presión]
+* xref:/use/alerting/kubernetes-monitors.adoc#_node_readiness[Preparación de los nodos]
+* xref:/use/alerting/kubernetes-monitors.adoc#_orphaned_persistent_volumes[Volúmenes Persistentes Huérfanos] (Sólo la propiedad `+enabled+` )
+* xref:/use/alerting/kubernetes-monitors.adoc#_out_of_memory_for_containers[Sin memoria para contenedores]
+* xref:/use/alerting/kubernetes-monitors.adoc#_http_5xx_error_ratio[HTTP - Proporción de errores 5xx]
+* xref:/use/alerting/kubernetes-monitors.adoc#_http_response_time_q95_is_above_3_seconds[HTTP - tiempo de respuesta - Q95 es superior a 3 segundos]
+
+== Construir una anulación para un monitor personalizado
+
+Cualquier monitor de umbral personalizado creado utilizando la guía en xref:/use/alerting/k8s-add-monitors-cli.adoc[Añadir un monitor de umbral a los componentes utilizando la CLI] es adecuado para anular argumentos, como xref:/use/alerting/k8s-add-monitors-cli.adoc#_write_the_outline_of_the_monitor[muestra el ejemplo] un identificador para un monitor personalizado se estructura como ``+urn:custom:monitor:{monitorShortName}``+y la clave de anotación de anulación para tal identificador se espera que sea
+
+[,bash]
+----
+monitor.custom.stackstate.io/${monitorShortName}
+----
+
+El ejemplo utiliza el identificador `+urn:custom:monitor:deployment-has-replicas+`, por lo que la clave de anotación sería
+
+[,bash]
+----
+monitor.custom.stackstate.io/deployment-has-replicas
+----
+
+Y la anotación completa tendría el siguiente aspecto
+
+[,bash]
+----
+    monitor.custom.stackstate.io/deployment-has-replicas: |-
+      {
+        "threshold": 0.0,
+        "failureState": "CRITICAL"
+        "enabled": true
+      }
+----
