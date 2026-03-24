@@ -2,55 +2,49 @@ include::partial$variables.adoc[]
 = Écrire la logique de validation
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Apprenez à écrire et à tester la logique de validation en Go en extrayant les informations pertinentes des charges utiles entrantes et en créant des objets de configuration.
+:description: Apprenez à écrire et à tester la logique de validation en Go en extrayant les informations pertinentes des données utiles entrantes et en créant des objets de paramétrage.
 :doc-persona: ["kubewarden-policy-developer"]
-:doc-topic: ["kubewarden", "rédaction de stratégies", "golang", "logique-de-validation"]
+:doc-topic: ["kubewarden", "writing-policies", "golang", "validation-logic"]].
 :doc-type: ["tutorial"]
-:keywords: ["kubewarden", "kubernetes", "rédaction de stratégies", "golang", "go"]
+:keywords: ["kubewarden", "kubernetes", "writing policies", "golang", "go"]
 :sidebar_label: Logique de validation
 :sidebar_position: 32
 :current-version: {page-origin-branch}
 
-La logique de validation doit se trouver dans le fichier `+validate.go+`.
+La logique de validation se trouve dans le fichier `+validate.go+`.
 
 Votre logique de validation doit :
 
 * Extraire les informations pertinentes de l'objet `+payload+` entrant.
-* Retourner une réponse basée sur l'entrée et les paramètres de la stratégie.
+* Renvoyer une réponse en fonction des données fournies et des paramètres de la politique.
 
-La charge utile entrante est un objet JSON, décrit
-xref:reference/spec/03-validating-policies.adoc[dans ce document],
-et vous pouvez obtenir les données de deux manières :
+La charge utile entrante est un objet JSON, décritxref:reference/spec/03-validating-policies.adoc[dans le présent document], dont vous pouvez obtenir les données de deux manières :
 
-. Désérialiser les données JSON en types Go.
+. Déchiffrer les données JSON en types Go.
 . Effectuer des requêtes JSON (quelque chose de similaire à https://stedolan.github.io/jq/[`+jq+`]).
 
-Cette section de la documentation se concentre sur la première approche, utilisant des types Go.
-Une description de la deuxième approche se trouve dans une section ultérieure xref:tutorials/writing-policies/go/09-validation-with-queries.adoc[validation avec requêtes].
+Cette section de la documentation se concentre sur la première approche, en utilisant les types Go.
+La deuxième approche est décrite dans une section ultérieure consacrée à xref:tutorials/writing-policies/go/09-validation-with-queries.adoc[la validation des requêtes].
 
 [NOTE]
 ====
 
-S'appuyer sur des objets Kubernetes,
-au lieu de faire des recherches de type jq,
-entraîne la génération de modules WebAssembly plus volumineux.
-Une stratégie utilisant des objets Kubernetes peut faire environ 1,5&nbsp;Mo
-tandis qu'une utilisant `+gjson+` fait environ 300&nbsp;Ko.
+S'appuyer sur les objets Kubernetes, au lieu de faire des recherches de type jq, conduit à la génération de modules WebAssembly plus importants.
+Une politique utilisant des objets Kubernetes peut peser environ 1,5&nbsp;Mo, tandis qu'une politique utilisant `+gjson+` est d'environ 300&nbsp;Ko.
 
-En dehors de la taille,
-la stratégie utilisant des objets Kubernetes prend beaucoup plus de temps lors de la première exécution.
-Les invocations suivantes sont rapides car {project-name} utilise la fonctionnalité de cache de Wasmtime.
+Outre la taille, la politique utilisant des objets Kubernetes prend beaucoup plus de temps lors de la première exécution.
+Les invocations suivantes sont rapides car {project-name} utilise la fonction de cache de Wasmtime.
 La première exécution peut prendre environ 20 secondes avec `+kwctl+`, les exécutions suivantes, 1 à 2 secondes.
-Ainsi, le serveur de stratégie {short-project-name} a un temps de démarrage plus lent mais ensuite les temps d'évaluation des stratégies ne sont généralement pas affectés par l'utilisation d'objets Kubernetes.
+Ainsi, {short-project-name} Policy Server a un temps de démarrage plus lent, mais les temps d'évaluation des politiques ne sont généralement pas affectés par l'utilisation d'objets Kubernetes.
 ====
 
 
-== La fonction `+validate+`
+== La fonction `+validate+` 
 
-La stratégie fournie par le modèle d'échafaudage, dans `+validate.go+`, a déjà une fonction `+validate+`.
-Vous devez apporter quelques modifications pour ce tutoriel.
+La politique fournie par le modèle d'échafaudage, à l'adresse `+validate.go+`, a déjà une fonction `+validate+`.
+Vous devez y apporter quelques modifications pour ce tutoriel.
 
-Voici comment la fonction devrait être une fois terminée :
+C'est ainsi que la fonction devrait se présenter une fois terminée :
 
 [,go]
 ----
@@ -109,14 +103,14 @@ func validate(payload []byte) ([]byte, error) {
 
 Le code comporte `+NOTE+` sections :
 
-. Créez un `+kubewarden_protocol.ValidationRequest+` en désérialisant la charge utile JSON.
+. Créer un site `+kubewarden_protocol.ValidationRequest+` en décomposant la charge utile JSON.
 . Créez un objet `+Settings+` en utilisant la fonction que vous avez définie précédemment dans le fichier `+settings.go+`.
-. Accédez à la représentation JSON brute du Pod qui fait partie du `+ValidationRequest+`.
-. Désérialisez l'objet Pod.
-. Itérez sur les étiquettes du Pod.
-Vous utilisez une nouvelle fonction appelée `+validateLabel+` pour identifier les étiquettes violant la stratégie.
+. Accéder à la représentation JSON brute du pod qui fait partie de `+ValidationRequest+`.
+. Démasquer l'objet Pod.
+. Itérer sur les étiquettes du Pod.
+Vous utilisez une nouvelle fonction appelée `+validateLabel+` pour identifier les étiquettes qui ne respectent pas la politique.
 
-Vous devez également définir la fonction `+validateLabel+` dans le fichier `+validate.go+` :
+Vous devez également définir la fonction `+validateLabel+` dans le fichier `+validate.go+`:
 
 [,go]
 ----
@@ -137,12 +131,12 @@ func validateLabel(label, value string, settings *Settings) error {
 }
 ----
 
-== Tester le code de validation
+== Test du code de validation
 
-Vous pouvez maintenant écrire des tests d’unité pour vérifier que le code de validation fonctionne correctement.
+Vous pouvez maintenant écrire des tests unitaires pour vérifier le comportement du code de validation.
 Localisez les tests dans le fichier `+validate_test.go+`.
 
-Vous devez remplacer le contenu du fichier d'échafaudage pour correspondre à ceci :
+Vous devez remplacer le contenu du fichier d'échafaudage pour qu'il corresponde à ce contenu :
 
 .`+validate_test.go+`
 [%collapsible]
@@ -290,8 +284,8 @@ func TestValidateLabel(t *testing.T) {
 
 ======
 
-Le test utilise une approche "pilotée par les cas de test".
-Vous commencez par définir un `+struct+` qui contient les données nécessaires à un cas de test, voir `+NOTE 1+` :
+Le test utilise une approche "axée sur les cas de test".
+Vous commencez par définir un site `+struct+` qui contient les données nécessaires à un scénario de test, voir `+NOTE 1+`:
 
 [,go]
 ----
@@ -304,10 +298,10 @@ struct {
 ----
 
 Vous déclarez ensuite plusieurs cas de test.
-Ils ont les lignes de départ marquées ➀ à ➅ dans le grand bloc de code repliable ci-dessus.
+Les lignes de départ sont marquées de ➀ à ➅ dans le grand bloc de code repliable ci-dessus.
 
-Par exemple, vous devez considérer un Pod sans étiquettes comme valide.
-Vous pouvez tester cela avec ces valeurs d'entrée :
+Par exemple, vous devez considérer qu'un pod qui n'a pas d'étiquette est valide.
+Vous pouvez tester cela avec les valeurs d'entrée suivantes :
 
 [,go]
 ----
@@ -319,14 +313,14 @@ Vous pouvez tester cela avec ces valeurs d'entrée :
 }
 ----
 
-Le test définit de nouveaux scénarios de cette manière jusqu'à `+NOTE 2+`.
-C'est ici que vous itérez sur les différents cas de test en utilisant le code suivant :
+Le test définit ainsi de nouveaux scénarios jusqu'à `+NOTE 2+`.
+C'est ici que vous itérez sur les différents cas de test à l'aide du code suivant :
 
-. Créez un objet `+BasicSettings+` en utilisant les données fournies par le `+testCase+`.
-. Créez un objet `+Pod+`, et assignez-lui les étiquettes définies dans `+testCase+`.
-. Créez un objet `+payload+`. Faites cela en utilisant une fonction d'assistance du SDK {short-project-name} : `+kubewarden_testing.BuildValidationRequest+`.
-Cette fonction prend en entrée l'objet concerné par la demande, le `+Pod+`, et l'objet qui décrit les paramètres, l'instance `+BasicSettings+`.
-. Enfin, le code invoque votre fonction `+validate+` et effectue une vérification sur le résultat.
+. Créez un objet `+BasicSettings+` en utilisant les données fournies par le site `+testCase+`.
+. Créez un objet `+Pod+` et attribuez-lui les étiquettes définies dans `+testCase+`.
+. Créer un objet `+payload+`. Pour ce faire, utilisez une fonction d'aide du SDK {short-project-name}: `+kubewarden_testing.BuildValidationRequest+`.
+Cette fonction prend en entrée l'objet sur lequel porte la demande, le `+Pod+`, et l'objet qui décrit les paramètres, l'instance `+BasicSettings+`.
+. Enfin, le code invoque votre fonction `+validate+` et vérifie le résultat.
 
 Vous pouvez maintenant exécuter tous les tests unitaires, y compris celui défini dans `+settings_test.go+`, en utilisant :
 
@@ -335,7 +329,7 @@ Vous pouvez maintenant exécuter tous les tests unitaires, y compris celui défi
 make test
 ----
 
-Cela produit la sortie suivante :
+Le résultat est le suivant :
 
 .Sortie de `+make test+`
 [%collapsible]
@@ -382,32 +376,33 @@ make: *** [Makefile:29: test] Error 1
 
 ======
 
-Comme vous pouvez le voir, tous les tests `+Settings+` passent, mais il y a un cas de test du `+TestValidateLabel+` qui ne passe pas :
+Comme vous pouvez le voir, tous les tests de `+Settings+` sont réussis, mais il y a un cas de test de`+TestValidateLabel+` qui ne l'est pas :
 
 [,console]
 ----
 validate_test.go:126: Unexpected acceptance with pod labels: map[owner:team-kubewarden], denied labels: Set{hello}, constrained labels: map[cc-center:team-\d+]
 ----
 
-Dans ce scénario, vos paramètres de stratégie indiquent que les Pods doivent avoir une étiquette, avec une clé `+cc-center+`, qui satisfait l'expression régulière `+team-\d++`.
-Le Pod testé n'a pas cette étiquette, donc vous devez le rejeter.
-Cependant, cela ne se produit pas, vous pouvez donc corriger cela dans la section suivante.
+Dans ce scénario, les paramètres de votre politique indiquent que les Pods doivent avoir une étiquette, avec une clé `+cc-center+`, qui répond à l'expression régulière `+team-\d++`.
+Le pod testé ne porte pas cette étiquette, vous devez donc le rejeter.
+Cependant, ce n'est pas le cas, vous pouvez donc y remédier dans la section suivante.
 
 [NOTE]
 ====
-Vous vous demandez peut-être pourquoi la sortie des tests unitaires présente des lignes comme `+NATIVE: |{"level":"debug","message":"validating pod object","name":"test-pod","namespace":"default"}+`.
+Vous vous demandez peut-être pourquoi la sortie des tests unitaires comporte des lignes telles que
+`+NATIVE: |{"level":"debug","message":"validating pod object","name":"test-pod","namespace":"default"}+`
 
-Les déclarations `+logger+` dans la stratégie produisent cette sortie.
-Cela se produit uniquement lorsque le code s'exécute en dehors du contexte WebAssembly.
-Cela ne se produit pas lorsque la stratégie s'évalue dans {short-project-name}, dans ce contexte, les déclarations `+logger+` émettent des événements OpenTelemetry à la place.
+Les déclarations `+logger+` de la politique produisent ce résultat.
+Cela ne se produit que lorsque le code s'exécute en dehors du contexte WebAssembly.
+Cela ne se produit pas lorsque la politique est évaluée dans {short-project-name}, dans ce contexte, les déclarations `+logger+` émettent des événements OpenTelemetry à la place.
 ====
 
 
-=== Corrigez le test unitaire défectueux
+=== Corriger le test unitaire défectueux
 
-Pour corriger le test défectueux que vous avez découvert, vous devez apporter une modification à votre fonction de validation, `+validate+` dans `+validate.go+`.
+Pour corriger le test défectueux que vous avez découvert, vous devez apporter une modification à votre fonction de validation, `+validate+` à l'adresse `+validate.go+`.
 
-Actuellement, le noyau de votre logique de validation est les lignes suivantes :
+Actuellement, le cœur de votre logique de validation est constitué des lignes suivantes :
 
 [,go]
 ----
@@ -420,10 +415,10 @@ for label, value := range pod.Metadata.Labels {
 }
 ----
 
-Ici, vous itérez sur chaque étiquette pour vérifier qu'elle n'est pas refusée et qu'elle ne viole pas l'une des contraintes spécifiées par l'utilisateur.
-Cependant, vous ne vous assurez pas que le Pod a toutes les étiquettes spécifiées dans `+Settings.ConstrainedLabels+`.
+Il s'agit ici d'itérer sur chaque étiquette pour vérifier qu'elle n'est pas refusée et qu'elle ne viole pas l'une des contraintes spécifiées par l'utilisateur.
+Cependant, vous ne vous assurez pas que le pod possède toutes les étiquettes spécifiées dans `+Settings.ConstrainedLabels+`.
 
-Ajoutez le nouveau code, juste après la boucle `+for+` :
+Ajoutez le nouveau code, juste après la boucle `+for+`:
 
 [,go]
 ----
@@ -447,9 +442,9 @@ Exécutez à nouveau les tests unitaires :
 make test
 ----
 
-Cela produit :
+Cette sortie :
 
-.Sortie du `+make test+` final
+.Sortie de la finale `+make test+`
 [%collapsible]
 ======
 
@@ -491,5 +486,5 @@ ok      github.com/kubewarden/go-policy-template        0.003s
 
 ======
 
-Comme vous pouvez le voir, cette fois tous les tests passent.
-Vous pouvez maintenant passer à l'étape suivante, écrire les tests de bout en bout.
+Comme vous pouvez le constater, cette fois-ci, tous les tests sont réussis.
+Vous pouvez maintenant passer à l'étape suivante, à savoir la rédaction des tests de bout en bout.
