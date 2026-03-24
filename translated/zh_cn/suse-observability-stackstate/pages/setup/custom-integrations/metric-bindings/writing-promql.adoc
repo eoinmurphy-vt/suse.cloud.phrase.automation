@@ -1,0 +1,103 @@
+= 为代表性图表编写 PromQL 查询
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 指导方针
+
+当{stackstate-product-name} 在图表中显示数据时，几乎总是需要改变存储数据的分辨率，使其适合图表的可用空间。要获得最具代表性的图表，请遵循以下指导原则：
+
+* 不要查询原始指标，而应始终按时间汇总（使用`+*_over_time+` 或`+rate+` 函数）。
+* 使用`+${__interval}+` 参数作为随时间聚合的范围，它会根据图表的分辨率自动调整
+* 使用`+${__rate_interval}+` 参数作为`+rate+` 聚合的范围，它也会根据图表的分辨率自动调整，但会考虑`+rate+` 的特定行为。
+* 通过对不同的时间序列进行聚合，将指标投射到所用的标签上。
+
+采用聚合方法往往意味着要权衡利弊，更强调指标的某些模式而不是其他模式。例如，对于较大的时间窗口，`+max_over_time+` 会显示所有峰值，但不会显示所有谷值。而`+min_over_time+` 的作用恰恰相反，`+avg_over_time+` 将平滑波峰和波谷。为了展示这种行为，下面是一个使用 pod 的 CPU 使用率进行度量绑定的示例。要亲自尝试，请将其复制到 YAML 文件中，然后使用xref:/setup/custom-integrations/metric-bindings/index.adoc#_create_or_update_the_metric_binding_in_stackstate[CLI 将其应用]到自己的{stackstate-product-name} 中（稍后可以删除）。
+
+将潜在的多个时间序列投影到其标签子集上，可将在无关细节上存在差异的时间序列折叠在一起。 创建度量绑定时，只有图例中使用的标签才是相关的。 同样，在创建监控器时，查询只应返回需要映射到组件（组件上的监控器状态）的标签。
+
+----
+- _type: MetricBinding
+  chartType: line
+  enabled: true
+  tags: {}
+  unit: short
+  name: CPU Usage (different aggregations and intervals)
+  priority: HIGH
+  identifier: urn:stackpack:my-stackpack:metric-binding:pod-cpu-usage-a
+  queries:
+    - expression: sum(max_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: max_over_time dynamic interval
+    - expression: sum(min_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: min_over_time dynamic interval
+    - expression: sum(avg_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: avg_over_time dynamic interval
+    - expression: sum(last_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[${__interval}])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: last_over_time dynamic interval
+    - expression: sum(max_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: max_over_time 1m interval
+    - expression: sum(min_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: min_over_time 1m interval
+    - expression: sum(avg_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: avg_over_time 1m interval
+    - expression: sum(last_over_time(container_cpu_usage{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"}[1m])) by (cluster_name, namespace, pod_name) /1000000000
+      alias: last_over_time 1m interval
+  scope: (label = "stackpack:kubernetes" and type = "pod")
+----
+
+应用后，在{stackstate-product-name} 中打开一个 pod 的度量视角（最好是 CPU 使用率有一些峰值和谷值的 pod）。使用右上角的图标放大图表，以获得更好的视图。现在，您还可以更改时间窗口，以查看不同聚合的效果（例如 30 分钟与 24 小时）。
+
+[CAUTION]
+====
+当度量绑定没有指定聚合时，{stackstate-product-name} 会自动使用`+last_over_time+` 聚合，以减少图表的数据点数量。另请参阅 "xref:/setup/custom-integrations/metric-bindings/writing-promql.adoc#_why_is_aggregation_necessary[为什么需要聚合？]
+====
+
+
+image::k8s/metric-aggregation-differences-30m.png[该指标与过去 30 米的绑定图表, there are only a few lines in the chart visible because most time series are on top of each other]image::k8s/metric-aggregation-differences-24h.png[同一张图表, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
+
+== 为什么需要汇总？
+
+首先，为什么要使用聚合器？从度量存储中获取的数据点数量超过图表的容量是不合理的。因此，{stackstate-product-name} 会自动确定两个数据点之间所需的步长，以获得良好的结果。对于较短的时间窗口（例如只显示一小时数据的图表），步长较小（约 10 秒）。指标通常每 30 秒才收集一次，因此在 10 秒钟的步长内，相同的值会重复三步，然后再切换到下一个值。放大到一周的时间窗口，则需要更大的步长（约一小时，取决于屏幕上图表的具体大小）。
+
+当步长大于所收集数据点的分辨率时，就需要决定如何将一小时时间范围内的数据点汇总为一个值。如果查询中已经指定了时间聚合，则将使用时间聚合。但是，如果没有指定聚合，或者聚合间隔小于步长，则使用`+last_over_time+` 聚合，以`+step+` 大小作为间隔。结果是，每小时只有最后一个数据点被用来 "汇总 "该小时的所有数据点。
+
+概括地说，当执行 PromQL 查询时，时间范围为一周，查询步长为一小时：
+
+----
+container_cpu_usage /1000000000
+----
+
+会自动转换为
+
+----
+last_over_time(container_cpu_usage[1h]) /1000000000
+----
+
+您可以在https://observability.suse.com/#/metrics?alias=Pod%20%24%7Bpod_name%7D&promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock-shop%22%2Cpod_name%3D~%22carts.%2A%22%7D%5B1h%5D%29%20%2F1000000000&timeRange=LAST_7_DAYS[{stackstate-product-name} 操场上]亲自体验一下。
+
+image::k8s/k8s-metric-queries-for-chart-last-over-time.png[最后超过时间]image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[固定范围最大超过时间]image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[自动范围最大超过时间]
+
+通常情况下，这种行为并不是有意为之，最好还是自己决定需要什么样的聚合。使用不同的聚合函数，可以强调某些行为（以隐藏其他行为为代价）。看到波峰、波谷、平滑的图表等是否更重要？然后为范围使用`+${__interval}+` 参数，因为它会自动替换为用于查询的`+step+` 大小。结果是该步骤中的所有数据点都被使用。
+
+image::k8s/k8s-metric-queries-small-range.png[固定量程, shorter than the data resolution]image::k8s/k8s-metric-queries-interval-for-range.png[自动量程, based on step but with a lower limit]
+
+`+${__interval}+` 参数可防止出现另一个问题。当`+step+` 的大小以及`+${__interval}+` 的值缩小到小于所存储度量数据的分辨率时，图表中就会出现间隙。
+
+因此，`+${__interval}+` 的缩减永远不会小于{stackstate-product-name} 代理的默认刮擦间隔（默认刮擦间隔为 30 秒）的 2*。
+
+最后，`+rate()+` 函数要求至少有两个数据点在区间内，才能计算出比率。如果数据点少于两个，比率就不会有数值。因此，`+${__rate_interval}+` 保证始终至少为 4 * 刮擦间隔。这样，除非数据丢失，否则速率图表中不会出现意外的间隙或其他奇怪的行为。
+
+互联网上有一些很好的博文对此有更详细的解释：
+
+* https://www.robustperception.io/step-and-query_range/[步骤和查询范围]
+* https://www.robustperception.io/what-range-should-i-use-with-rate/[我应该在什么范围内使用 rate()？]
+* https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-%5F%5Frate_interval-for-prometheus-rate-queries-that-just-work/[在 Grafana 中引入 __rate_interval]
+
+== 另见
+
+了解 PromQL 查询的更多资源：
+
+* https://promlabs.com/blog/2020/06/18/the-anatomy-of-a-promql-query/[PromQL 查询剖析]
+* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[在 PromQL 中选择数据]
+* https://iximiuz.com/en/posts/prometheus-vector-matching/[如何连接多个指标]
+* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[长期汇总]
