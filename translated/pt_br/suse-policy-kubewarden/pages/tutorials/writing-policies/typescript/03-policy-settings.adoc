@@ -1,0 +1,109 @@
+include::partial$variables.adoc[]
+= Definição de configurações de política
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Defina e implemente estruturas de configurações de políticas eficazes por meio de {project-name} políticas nos arquivos src/types.ts e src/index.ts.
+:keywords: "{project-name}", kubewarden, kubernetes, definição de configurações de política, TypeScript
+:doc-type: tutorial
+:doc-topic: {project-name}, kubewarden, writing-policies, typescript, defining-policy-settings
+:doc-persona: kubewarden-policy-developer
+:current-version: {page-origin-branch}
+
+[WARNING]
+====
+Crítico: Não grave informações de registro no STDOUT.
+
+A gravação em STDOUT quebra as políticas. Em vez disso, use STDERR para registro ou o recurso de registro fornecido pelo SDK do {project-name}. A saída da política para STDOUT deve conter apenas a resposta de validação.
+====
+
+Primeiro, defina a estrutura que mantém as configurações de política em `+src/types.ts+`:
+
+[source,javascript]
+----
+import type { PodSpec } from 'kubernetes-types/core/v1';
+import type { ObjectMeta } from 'kubernetes-types/meta/v1';
+
+/**
+ * Interface representing policy settings structure.
+ */
+export interface PolicySettings {
+  // List of hostnames that are denied by the policy.
+  denied_hostnames?: string[];
+}
+
+/**
+ * Generic Kubernetes resource interface
+ */
+export interface KubernetesResource {
+  apiVersion: string;
+  kind: string;
+  metadata: ObjectMeta;
+  spec?: PodSpec | any;
+}
+----
+
+== Criação de instâncias de configurações
+
+{short-project-name} As políticas usam duas funções que manipulam as configurações:
+
+* `+validate+`: Chamado durante a validação do objeto.
+* `+validateSettings+`: Chamado no momento do carregamento da política.
+
+Em `+src/index.ts+`, a função `+validate+` tem a seguinte aparência:
+
+[source,javascript]
+----
+function validate(): void {
+  try {
+    const validationRequest = Validation.Validation.readValidationRequest();
+    const settings: PolicySettings = validationRequest.settings || {};
+
+    // Policy logic...
+  } catch (err) {
+    console.error('Validation error:', err);
+    writeOutput(Validation.Validation.rejectRequest(`+Validation failed: ${err}+`));
+  }
+}
+----
+
+== Implementação da validação de configurações
+
+[source,javascript]
+----
+function validateSettings(): void {
+  try {
+    const settingsInput = Validation.Validation.readValidationRequest();
+    const settings: PolicySettings = settingsInput as PolicySettings;
+
+    if (settings.denied_hostnames && !Array.isArray(settings.denied_hostnames)) {
+      const errorResponse = new Validation.Validation.SettingsValidationResponse(
+        false,
+        'denied_hostnames must be an array of strings',
+      );
+      writeOutput(errorResponse);
+      return;
+    }
+
+    for (const hostname of settings.denied_hostnames || []) {
+      if (typeof hostname !== 'string') {
+        const errorResponse = new Validation.Validation.SettingsValidationResponse(
+          false,
+          'All hostnames in denied_hostnames must be strings',
+        );
+        writeOutput(errorResponse);
+        return;
+      }
+    }
+
+    const response = new Validation.Validation.SettingsValidationResponse(true);
+    writeOutput(response);
+  } catch (err) {
+    console.error('Settings validation error:', err);
+    const errorResponse = new Validation.Validation.SettingsValidationResponse(
+      false,
+      `+Settings validation failed: ${err}+`,
+    );
+    writeOutput(errorResponse);
+  }
+}
+----
