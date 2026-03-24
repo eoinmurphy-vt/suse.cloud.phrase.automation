@@ -1,0 +1,70 @@
+include::partial$variables.adoc[]
+= トレース
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: ポリシーの評価に関するきめ細かな詳細や、{project-name} のデプロイメントに関連する問題をデバッグするために、トレースを有効にします。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "ui-extension", "tracing"]
+:doc-type: ["hosto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "tracing"]
+:current-version: {page-origin-branch}
+
+トレースは、ポリシー評価に関するきめ細かな詳細を収集することを可能にする。
+これは、{project-name} のデプロイメントとポリシーの問題をデバッグするのに便利なツールです。
+
+{short-project-name} https://www.jaegertracing.io/[]Jaegerを使用して、トレースイベントを受信、保存、視覚化する。
+
+*_ポリシーのトレースログ_*image:ui_policy_tracing.png[]UI
+
+== 前提条件
+
+Cert-ManagerとOpenTelemetryが必要です。xref:howtos/telemetry/10-opentelemetry-qs.adoc#_install_opentelemetry[以下の]手順に従って、Cert Manager と OpenTelemetry Operator をインストールしてください。
+
+== イェーガーをインストールする
+
+xref:howtos/telemetry/20-tracing-qs.adoc#_install_jaeger[トレースクイックスタートからの]インストール手順を適用します。
+
+イェーガー・オペレーターがすべてのリソースを作成すると、`+my-open-telemetry-collector.jaeger.svc.cluster.local+` の下にサービスがある。
+
+イェーガー・クエリーUIは以下のアドレスでアクセス可能です：
+
+[subs="+attributes",console]
+----
+https://<CLUSTER_IP>/api/v1/namespaces/jaeger/services/http:my-open-telemetry-query:16686/proxy/search
+----
+
+このエンドポイントは、設定によっては一意である可能性がある。Jaegerリソースのエンドポイントは、「サービス」ページで確認できます。
+
+=== イェーガーのエンドポイントで`+rancher-kubewarden-controller+` を更新
+
+`+rancher-kubewarden-controller+` リソースを編集して、Jaeger のエンドポイント "my-open-telemetry-collector.jaeger.svc.cluster.local:4317" を追加する必要があります。
+
+例えば、こうだ：
+
+[subs="+attributes",yaml]
+----
+telemetry:
+  tracing: true
+  mode: sidecar
+  sidecar:
+    tracing:
+      jaeger:
+        endpoint: my-open-telemetry-collector.jaeger.svc.cluster.local:4317
+        tls:
+          insecure: true
+----
+
+サービス`+my-open-telemetry-collector+` のインストールは、`+jaeger+` 名前空間の下にある。
+
+[CAUTION]
+====
+
+簡単にするために、OpenTelemetryコレクターとJaegerエンドポイント間の通信は暗号化していません。
+
+これは*本番配備には適さない*。イェーガーのhttps://www.jaegertracing.io/docs/latest/kubernetes/[ドキュメントを]読むべきだ。
+
+====
+
+
+これで、特定のポリシー サーバに関連付けられたポリシーに対する失敗した要求を表示できるようになります。また、任意のポリシーの詳細表示も見ることができます。
+Jaeger UIを使えば、トレースをより詳細に見ることができる。
