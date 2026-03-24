@@ -1,0 +1,235 @@
+= k3s 令牌
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2025-05-26
+:page-revdate: {revdate}
+
+K3s 使用令牌确保节点加入过程的安全，并对持久保存到数据存储中的机密信息进行加密。令牌可对群集与加入节点以及节点与群集进行身份验证。
+
+== 令牌格式
+
+K3s 令牌可以安全格式或简短格式指定。安全格式是首选，因为它能让客户端在发送凭据前验证要加入的群集的身份。
+
+=== 安全
+
+安全令牌格式（有时称为 "完整 "令牌）包含以下部分：
+
+`+<prefix><cluster CA hash>::<credentials>+`
+
+* `+prefix+`：一个固定的`+K10+` 前缀，用于标识符格式
+* `+cluster CA hash+`:群集服务器 CA 证书的哈希值，用于向加入节点验证服务器的身份。
+ ** 对于自签 CA 证书，这是存储在磁盘上的 PEM 格式证书的 SHA256 和。
+ ** 对于自定义 CA 证书，这是根证书 DER 编码的 SHA256 和；通常称为证书指纹。
+* `+credentials+`:用户名和密码或承载令牌，用于验证加入集群的节点的身份。
+
+==== TLS 引导
+
+指定安全令牌后，加入节点会执行以下步骤，以验证所连接服务器的身份，然后再传输凭据：
+
+. 禁用 TLS 验证后，从`+/cacerts+` 下载要加入的服务器上的 CA 包。
+. 如上所述，计算 CA 证书的 SHA256 哈希值。
+. 将计算出的 SHA256 哈希值与令牌中的哈希值进行比较。
+. 如果哈希值匹配，则验证服务器提交的证书是否可由服务器的 CA 捆绑验证。
+. 如果服务器证书有效，则根据令牌类型，使用基本或承载令牌身份验证提交加入群集的凭证。
+
+=== 短
+
+简短令牌格式只包括用于验证加入节点是否加入群集的密码或承载令牌。
+
+如果使用短令牌，则加入节点隐式信任服务器提供的 CA 捆绑；跳过 TLS 引导过程中的第 2-4 步。初始连接可能容易受到https://en.wikipedia.org/wiki/Man-in-the-middle_attack[中间人]攻击。
+
+== 令牌类型
+
+K3s 支持三种令牌。默认情况下，只有服务器令牌可用；其他令牌类型必须由管理员配置或创建。
+
+|===
+| 类型 | CLI 选项 | 环境变量
+
+| 服务器
+| `+--token+`
+| `+K3S_TOKEN+`
+
+| 代理
+| `+--agent-token+`
+| `+K3S_AGENT_TOKEN+`
+
+| 引导
+| `+n/a+`
+| `+n/a+`
+|===
+
+[#_server]
+=== 服务器
+
+如果在启动群集中的第一台服务器时没有提供令牌，则会用随机密码创建一个令牌。服务器令牌始终以安全格式写入`+/var/lib/rancher/k3s/server/token+` 。
+
+服务器令牌可用于将服务器和代理节点加入群集。任何拥有服务器令牌访问权限的人基本上都拥有对群集的完全管理员访问权限。应小心保管这一信物。
+
+服务器令牌还可用作https://en.wikipedia.org/wiki/PBKDF2[] PBKDF2 口令，用于加密持久保存到数据存储库（称为引导数据）的机密信息。引导数据对于建立新的服务器节点或从快照中还原至关重要。因此，令牌必须与群集数据存储本身一起备份。
+
+[CAUTION]
+====
+除非使用自定义 CA 证书，否则在启动群集中的第一个服务器时，只能使用简短（仅密码）令牌格式。这是因为在服务器生成自签名群集 CA 证书之前，无法知道群集 CA 的哈希值。
+====
+
+
+有关使用自定义 CA 证书的更多信息，请参阅xref:cli/certificate.adoc[`+k3s certificate+` 文档]。 +
+有关备份群集的更多信息，请参阅xref:datastore/backup-restore.adoc[备份和还原]文档。
+
+=== 代理
+
+默认情况下，代理令牌与服务器令牌相同。可以在群集启动之前或之后，通过更改群集中所有服务器上的 CLI 选项或环境变量来设置代理令牌。代理令牌与服务器令牌类似，都是静态配置的，不会过期。
+
+代理令牌以安全格式写入`+/var/lib/rancher/k3s/server/agent-token+` 。如果未指定代理令牌，则该文件是服务器令牌的链接。
+
+=== 引导
+
+[IMPORTANT]
+.版本闸门
+====
+从 2023-02 版本（v1.26.2+k3s1、v1.25.7+k3s1、v1.24.11+k3s1、v1.23.17+k3s1）开始，支持`+k3s token+` 命令和使用引导令牌加入节点的功能。
+====
+
+K3s 支持动态生成、自动过期的代理https://kubernetes.io/docs/reference/access-authn-authz/bootstrap-tokens/[引导令牌]。
+
+[#_k3s_token_1]
+== k3s 令牌
+
+k3s 令牌 CLI 工具可处理
+
+* 引导令牌的生命周期，使用与`+kubeadm token+` 引导令牌相同的生成和验证代码。请注意，两种 CLI 都很相似。
+* 服务器令牌的旋转
+
+----
+NAME:
+   k3s token - Manage tokens
+
+USAGE:
+   k3s token command [command options] [arguments...]
+
+COMMANDS:
+   create    Create bootstrap tokens on the server
+   delete    Delete bootstrap tokens on the server
+   generate  Generate and print a bootstrap token, but do not create it on the server
+   list      List bootstrap tokens on the server
+   rotate    Rotate original server token with a new token
+
+OPTIONS:
+   --help, -h  show help
+----
+
+[discrete]
+=== `+k3s token create [token]+`
+
+创建一个新的令牌。`+[token]+` 是要写入的实际令牌，由`+k3s token generate+` 生成。如果没有给出令牌，系统将随机生成一个令牌。
+
+安全格式的令牌（包括群集 CA 哈希值）将被写入 stdout。应保存此命令的输出结果，因为令牌的秘密部分无法再次显示。
+
+|===
+| 旗帜 | 说明
+
+| `+--data-dir+` 价值
+| 保存状态的文件夹（默认：/var/lib/rancher/k3s 或 ${HOME}/.rancher/k3s（如果不是 root 用户））。
+
+| `+--kubeconfig+` 价值
+| 要连接的服务器 [$KUBECONFIG]
+
+| `+--description+` 价值
+| 关于如何使用此标记的人性化描述
+
+| `+--groups+` 价值
+| 此令牌在用于身份验证时将作为额外组进行身份验证。(默认值）：默认值："system:bootstrappers:k3s:default-node-token")
+
+| `+--ttl+` 价值
+| 标记自动删除前的持续时间（如 1 秒、2 毫秒、3 小时）。如果设置为 "0"，令牌将永不过期（默认值：24 小时）
+
+| `+--usages+` 价值
+| 描述此令牌的使用方式。(默认值："签名、身份验证"）。
+|===
+
+[discrete]
+=== `+k3s token delete+`
+
+删除一个或多个标记。可以提供完整的令牌，也可以只提供令牌 ID。
+
+|===
+| 旗帜 | 说明
+
+| `+--data-dir+` 价值
+| 保存状态的文件夹（默认：/var/lib/rancher/k3s 或 ${HOME}/.rancher/k3s（如果不是 root 用户））。
+
+| `+--kubeconfig+` 价值
+| 要连接的服务器 [$KUBECONFIG]
+|===
+
+[discrete]
+=== `+k3s token generate+`
+
+随机生成引导标记。
+
+要生成令牌，不必使用该命令。只要格式为`+[a-z0-9]\{6}.[a-z0-9]\{16}+` ，其中第一部分是令牌 ID，第二部分是密文，您就可以自己这样做。
+
+|===
+| 旗帜 | 说明
+
+| `+--data-dir+` 价值
+| 保存状态的文件夹（默认：/var/lib/rancher/k3s 或 ${HOME}/.rancher/k3s（如果不是 root 用户））。
+
+| `+--kubeconfig+` 价值
+| 要连接的服务器 [$KUBECONFIG]
+|===
+
+[discrete]
+=== `+k3s token list+`
+
+列出引导标记，显示其 ID、描述和剩余生存时间。
+
+|===
+| 旗帜 | 说明
+
+| `+--data-dir+` 价值
+| 保存状态的文件夹（默认：/var/lib/rancher/k3s 或 ${HOME}/.rancher/k3s（如果不是 root 用户））。
+
+| `+--kubeconfig+` 价值
+| 要连接的服务器 [$KUBECONFIG]
+
+| `+--output+` 价值
+| 输出格式有效选项：文本、json（默认："文本）
+|===
+
+[discrete]
+=== `+k3s token rotate+`
+
+[IMPORTANT]
+.版本闸门
+====
+从 2023 年 10 月发布的版本（v1.28.2+k3s1、v1.27.7+k3s1、v1.26.10+k3s1、v1.25.15+k3s1）起可用。
+====
+
+
+用新的服务器令牌旋转原始服务器令牌。运行此命令后，必须使用新令牌重新启动所有服务器和任何最初使用旧令牌加入的代理。
+
+如果您没有指定新的令牌，系统将为您生成一个。
+
+|===
+| 旗帜 | 说明
+
+| `+--data-dir+` 价值
+| 保存状态的文件夹（默认：/var/lib/rancher/k3s 或 ${HOME}/.rancher/k3s（如果不是 root 用户））。
+
+| `+--kubeconfig+` 价值
+| 要连接的服务器 [$KUBECONFIG]
+
+| `+--server+` 价值
+| 要连接的服务器（默认："https://127.0.0.1:6443"） [$K3S_URL]
+
+| `+--token+` 价值
+| 用于将服务器或代理加入群集的现有令牌 [$K3S_TOKEN]
+
+| `+--new-token+` 价值
+| 取代现有令牌的新令牌
+|===
+
+[WARNING]
+====
+还原群集时，轮换前拍摄的快照将需要旧服务器令牌。
+====
