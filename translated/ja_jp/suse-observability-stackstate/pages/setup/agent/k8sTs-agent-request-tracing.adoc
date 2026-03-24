@@ -1,0 +1,132 @@
+= リクエスト・トレース
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+== ロードバランサー、サービスメッシュ、およびクラスタ間による観測可能性
+
+SUSE Observabilityは、異なるクラスタ内のサービスとポッド間の接続、または接続がサービスメッシュやロードバランサを経由する場合の接続を監視できます。これらのコネクションの観察は、`+request tracing+` を通して行われる。トレースされたリクエストは、xref:/use/views/k8s-topology-perspective.adoc[トポロジーの観点での]接続をもたらし、アプリケーション全体の依存関係を洞察し、インシデントの根本原因を見つけるのに役立つ。
+
+== どのように機能するのか
+
+リクエストトレースは、すべてのHTTPトラフィックに一意のヘッダー(`+X-Request-ID+` ヘッダー)を注入することで行われる。この固有のヘッダーは、SUSE Observability AgentとともにインストールされたeBPFプローブによって、クライアントとサーバーの両方で観測されます。これらのオブザベーションはSUSE Observabilityに送信され、SUSE Observabilityはオブザベーションを使用して、どのクライアントとサーバーが接続されているかを理解します。
+
+`+X-Request-Id+` ヘッダは、SUSE Observability Agentが自動的に注入できるサイドカープロキシによって<<_enabling_the_trace_header_injection_sidecar,注入さ>>れます。サイドカーは、https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#_mutatingadmissionwebhook[mutating webhookによって]注入されます。この、`+http-header-injector.stackstate.io/inject: enabled+` アノテーションが定義されているすべてのポッドにサイドカーを注入します。サイドカー・インジェクションはOpenShiftではサポートされていません。
+
+また、アプリケーションが<<_add_the_trace_header_id_to_an_existing_proxy,すでにプロキシやLoadBalancerを持って>>いたり、<<_add_the_trace_header_id_with_envoy_filter,Istioサービスメッシュが>>有効なKubernetesクラスタにデプロイされていたり、<<_instrument_your_application,独自のコードにインスツルメンテーションを>>行うことで、`+X-Request-Id+` ヘッダを追加することも可能だ。この利点は、余分なサイドカー・プロキシが必要ないことだ。
+
+== トレースヘッダー注入サイドカーを有効にする
+
+トレースヘッダーインジェクションを有効にするには、2つのステップがあります：
+
+. SUSE Observabilityエージェントのインストール時に、helm upgrade呼び出しに`+--set httpHeaderInjectorWebhook.enabled=true+` を追加して、クラスタにミューティングWebhookをインストールします。デフォルトでは、サイドカーインジェクタは独自の自己署名証明書を生成するため、クラスタロールがこれらの証明書をクラスタにインストールする必要があります。また、より制限された環境でxref:/setup/agent/k8sTs-agent-request-tracing-certificates.adoc[独自の証明書を管理]することも可能である。
+. http(s)リクエストを処理するエンドポイントを持つすべてのポッドに対して、サイドカーを注入するためのアノテーション`+http-header-injector.stackstate.io/inject: enabled+` 。
+
+[CAUTION]
+====
+*変異型ウェブフックを有効にすると、ポッドの再起動時にのみ有効になります。*
+
+Webhookがインストールされる前にアノテーションが配置されている場合。Webhookをインストールしても、ポッドが再起動するまで効果はありません。
+====
+
+
+=== トレースヘッダー注入を無効にする
+
+トレースヘッダー注入の無効化は、逆のプロセスで行うことができる：
+
+. すべてのポッドから`+http-header-injector.stackstate.io/inject: enabled+` アノテーションを削除します。
+. SUSE Observability Agentを`+--set httpHeaderInjectorWebhook.enabled=true+` の設定なしで再デプロイします。
+
+[CAUTION]
+====
+*変異型ウェブフックを無効にすると、ポッドの再起動時にのみ有効になります。*
+
+ステップ1がスキップされ、ミューティングウェブフックだけが無効になっている場合、サイドカーを削除するためにすべてのポッドの再起動が必要です。
+====
+
+
+=== オーバーヘッド
+
+リクエストトレースは、注入され観察される各HTTPリクエストヘッダに対して、小さな固定量のCPUオーバーヘッドを追加する。正確な量は実行されるシステムに依存するため、本番環境に移行する前に、まず受け入れ環境でこの機能を有効にし、影響を観察することをお勧めする。サイドカー・プロキシは、デプロイされるポッドごとに最低25MB、最大40MBのメモリを消費する。
+
+== 既存のプロキシにトレースヘッダIDを追加する
+
+既存のプロキシから`+X-Request-Id+` ヘッダーを追加するには、2つのプロパティが重要である：
+
+. 各リクエスト/レスポンスのペアは一意なIDを取得しなければならない。
+. `+X-Request-Id+` ヘッダーは、クライアントとサーバーの両方で観測されるように、 リクエストとレスポンスの両方に追加されるべきである。
+
+=== envoyにトレースヘッダIDを追加する
+
+envoy では、https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto[]http `+generate_request_id: true+` と`+always_set_request_id_in_response: true+` を設定することで`+X-Request-Id+` ヘッダを有効にすることができます。
+
+== イスティオ
+
+https://istio.io/latest/docs/reference/config/networking/envoy-filter/[Envoy Filterは]、Envoyのトレースヘッダーを設定するために使用できる。
+
+=== envoyフィルターでトレースヘッダIDを追加
+
+`+kubectl+` 、以下の定義をKubernetesクラスタに適用する、
+
+[,yaml]
+----
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: responsed-x-request-id-always
+  namespace: istio-system
+spec:
+  configPatches:
+    - applyTo: NETWORK_FILTER
+      match:
+        context: ANY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            '@type': >-
+              type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            always_set_request_id_in_response: true
+            generate_request_id: true
+            preserve_external_request_id: true
+  priority: 0
+----
+
+== アプリケーションを計装化する
+
+クライアント側で各リクエストに、またはサーバー側で各レスポンスに`+X-Request-Id+` ヘッダーを追加することも可能です。各リクエスト/レスポンスに一意な`+X-Request-Id+` 。また、`+X-Request-Id+` は、リクエストにIDがすでに存在する場合、レスポンスにも同じIDを含めることを要求している。
+
+== 対応システム／テクノロジー
+
+* HTTP/1.0およびHTTP/1.1（keepAlive付き
+* 暗号化されていないトラフィックへのトレースヘッダ注入とトレース観測
+* OpenSSL暗号化トラフィックのトレース観測
+* LinkerD と並行してヘッダーをトレースする
+* リクエストとレスポンスで`+X-Request-Id+` ヘッダを転送するすべてのロードバランサー
+* リクエストとレスポンスで`+X-Request-Id+` ヘッダーを転送するクラスタ横断ネットワーキング・ソリューション
+
+== 既知の問題
+
+=== 私のポッドにはサイドカーはインジェクションされていない
+
+セットアップに問題がないことを確認するには、まず以下の手順が踏まれていることを確認する：
+
+* エージェントのインストール中に`+--set httpHeaderInjectorWebhook.enabled=true+` フラグが設定されました。
+* ポッドは`+http-header-injector.stackstate.io/inject: enabled+` 
+* ポッドが再起動した
+
+それでも問題が解決しない場合は、以下のことが考えられます：
+
+==== クラスターネットワーキングポリシー
+
+クラスタはネットワーキング・ポリシーをセットアップすることができ、kubernetesのコントロールプレーンapiserverがサイドカーを注入するmutatingvalidationwebhookにコンタクトするのを防ぐことができる。これを確認するには、kube-apiserverのログを調べます。kube-apiserverはkube-systemネームスペースにあるか、クラウドプロバイダーによって管理されている可能性があります。これらのログには、次のようなエラーが記録されているはずだ：
+
+----
+Failed calling webhook, failing open stackstate-agent-http-header-injector-webhook.stackstate.io: failed calling webhook "stackstate-agent-http-header-injector-webhook.stackstate.io": failed to call webhook: Post "https://stackstate-agent-http-header-injector.monitoring.svc:8443/mutate?timeout=10s": context deadline exceeded
+----
+
+この場合、apiserverがmutatingvalidationwebhookに到達できるように、クラスタ・ネットワーク・ポリシーを適応させてください。
