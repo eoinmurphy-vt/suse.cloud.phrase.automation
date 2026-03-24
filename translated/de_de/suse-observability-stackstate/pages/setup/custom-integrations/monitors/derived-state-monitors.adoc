@@ -1,0 +1,41 @@
+= Abgeleitete Zustandsüberwacher
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+== Übersicht
+
+In Observabilitätsszenarien, in denen logische (betriebswirtschaftliche) Komponenten keine direkten Monitore haben, aber von Problemen in ihren technischen Abhängigkeiten betroffen sind, können Sie die Funktion des abgeleiteten Zustandsmonitors verwenden, um einen Zustand aus den verbundenen technischen Komponenten für die logische Komponente abzuleiten.
+Dieser Monitor durchläuft die Abhängigkeiten der Komponenten und wählt den kritischsten Gesundheitszustand auf der Grundlage direkter Beobachtungen (z. B. aus Metriken) aus, wobei bereits abgeleitete Zustände ignoriert werden. Er wendet den abgeleiteten Zustand auf alle Komponenten an, die über den Parameter `+componentTypes+` ausgewählt wurden.
+Bei der Durchquerung werden nur Komponenten mit beobachteten (nicht abgeleiteten) Gesundheitszuständen für die Gesundheitsableitung berücksichtigt. Komponenten mit abgeleiteten Zuständen werden bei der Auswertung übersprungen, aber dennoch durchlaufen, um tiefere Abhängigkeiten zu erreichen--z.B. logische Komponenten, die von anderen logischen Komponenten abhängen.
+
+== Beispiel für einen abgeleiteten Health State Monitor
+
+Ein mit der Funktion `+derived-state-monitor+` implementierter Monitor sieht so aus:
+
+----
+  - _type: "Monitor"
+    name: "Aggregated health state of a Deployment, StatefulSet, ReplicaSet and DaemonSet"
+    tags:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+      - derived
+      - propagated
+    identifier: "urn:stackpack:my-stackpack:monitor:my-aggregated-health-monitor"
+    status: "DISABLED"
+    description: "Description"
+    function: {{ get "urn:stackpack:common:monitor-function:derived-state-monitor" }}
+    arguments:
+      componentTypes: "deployment, replicaset, statefulset, daemonset"
+    intervalSeconds: 30
+    remediationHint: "Investigate component [{{ causeComponentName }}](/#/components/{{ causeComponentUrnForUrl }}) as is causing the workload to be unhealthy."
+----
+
+* Die Funktion hat ein einziges Argument `+componentTypes+`, in dem Sie die verschiedenen Komponententypen als eine einzige Zeichenkette von `+,+` getrennten Werten ausdrücken können
+* Die Funktion bietet drei Werte zur Verwendung im Sanierungsleitfaden
+ ** `+componentName+` ist der Name der logischen Komponente.
+ ** `+causeComponentName+` wobei es sich um den Namen der Komponente handelt, von der aus der Zustand propagiert wird, und deren `+causeComponentUrnForUrl+`, um einen Link erstellen zu können.
+
+Der Monitor kann mit Hilfe des Leitfadens unter xref:use/alerting/k8s-dynamic-threshold-monitors.adoc[Hinzufügen eines Schwellenwertmonitors zu Komponenten unter Verwendung der CLI] implementiert werden
