@@ -1,0 +1,81 @@
+= 卸载 SUSE Observability
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 概述
+
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_un_install_the_helm_chart[卸载 Helm 购物车]
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_remaining_resources[删除剩余资源]
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_manually_created_resources[删除手动创建的资源]
+
+== 卸载 Helm 图表
+
+[NOTE]
+====
+卸载 helm 图表将保留所有数据，因为 helm 不会删除持久卷索赔或命名空间。删除这些xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_remaining_resources[资源]的同时也会xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_remaining_resources[删除剩余的资源]。
+====
+
+
+要卸载 SUSE Observability，首先要运行`+helm uninstall+` 命令。该命令将删除`+helm upgrade --install+` 命令创建的所有资源。
+
+像这样从`+suse-observability+` 命名空间卸载`+suse-observability+` 版本，将命名空间或版本名称替换为安装过程中使用的任何自定义名称：
+
+----
+helm uninstall --namespace suse-observability suse-observability
+----
+
+命令几乎会立即返回，但关闭所有 pod 和移除所有其他资源可能需要一段时间。检查是否所有豆荚都消失了：
+
+----
+kubectl get pods --namespace suse-observability
+----
+
+如果您想稍后重新安装 SUSE Observability 并保留旧数据，只需卸载即可；如果要完全卸载，请继续下面两节。
+
+== 删除剩余资源
+
+[CAUTION]
+====
+删除持久卷声称和/或命名空间将导致存储在 SUSE Observability 中的所有数据丢失。
+====
+
+
+要移除命名空间，并随之移除持久卷声称及其链接的持久卷，只需移除整个命名空间即可：
+
+----
+kubectl delete namespace suse-observability
+----
+
+命令返回时，命名空间和所有卷都已删除。
+
+要只删除持久卷要求 (PVC)，并保留命名空间的运行：
+
+----
+kubectl delete pvc --all -n suse-observability
+----
+
+在 OpenShift 上，Helm 图表还创建了一个安全上下文约束 (SCC)。Helm 不会自动清理，而是需要手动删除：
+
+----
+# The scc is always named suse-observability-<namespace>
+oc delete scc suse-observability-suse-observability
+----
+
+== 删除手动创建的资源
+
+[NOTE]
+====
+即使您打算在同一个群集上重新安装 SUSE Observability，但在不同的命名空间中，也可以删除这些文件。这些资源包含对 SUSE Observability 命名空间的引用。
+====
+
+
+xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_manually_create_cluster_wide_resources[如所需权限]所述，您的群集管理员可能需要手动创建一些资源。现在可以再次删除这些资源，但这也是一项需要管理员权限的手动任务。
+
+删除已创建的群集角色和群集角色绑定：
+
+----
+kubectl delete cluster-role suse-observability-authorization
+kubectl delete cluster-role-binding suse-observability-authorization
+kubectl delete cluster-role-binding suse-observability-authentication
+----
