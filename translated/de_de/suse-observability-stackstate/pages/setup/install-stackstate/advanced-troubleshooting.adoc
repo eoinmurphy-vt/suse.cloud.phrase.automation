@@ -1,0 +1,105 @@
+= Erweiterte Fehlersuche
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Selbstgehostet
+
+Wenn Sie ein Hauptkunde sind, wenden Sie sich an den SUSE Observability-Support unter https://scc.suse.com/, um Hilfe bei der Einrichtung von SUSE Observability in Ihrem lokalen Cluster zu erhalten. Verwenden Sie xref:/setup/install-stackstate/support-package-logs.adoc[Support Package (Logs)], um Informationen über Ihre Instanz für das Support-Team zu sammeln.
+
+Auf dieser Seite finden Sie detaillierte Informationen zu den Subsystemen der SUSE Observability-Plattform, um Probleme bei der Implementierung und beim Betrieb zu beheben. Diese Seite sollte nur dann konsultiert werden, wenn die Schritte der xref:/setup/install-stackstate/troubleshooting.adoc[Fehlerbehebung] nicht zu einer Lösung führen.
+
+== Allgemeines Vorgehen bei der Fehlersuche
+
+Die allgemeine Vorgehensweise zur Behebung von Betriebsproblemen der SUSE Observability-Plattform ist die folgende:
+
+* Verschaffen Sie sich einen Überblick über das Verhalten der Pods durch `+kubectl get pods+`
+* Verwenden Sie die detaillierten Subsysteminformationen in diesem Dokument zusammen mit den Symptomen des Problems, um festzustellen, welche Pods/Subsysteme die Ursache sein könnten
+* Überprüfen Sie die Protokolle/Metadaten der verdächtigen Pods:
+ ** `+kubectl logs <pod-name> --all-containers=true+`
+ ** `+kubectl describe pod <pod-name>+`
+ ** Eine schnelle Möglichkeit, alle zugehörigen Protokolle/Beschreibungen im Zusammenhang mit SUSE Observability abzurufen, bietet das xref:/setup/install-stackstate/support-package-logs.adoc[Support Package (Logs)].
+* Es könnte sein, dass die Protokolle auf eine Abhängigkeit hinweisen, die sich nicht korrekt verhält. In diesem Fall sollten Sie die Abhängigkeit untersuchen.
+
+== Übersicht über die Teilsysteme
+
+=== Datenbanken
+
+SUSE Observability wird von verschiedenen Datenbanken betrieben. Wenn eine Datenbank Probleme macht, sollte diese zuerst untersucht werden, da alle anderen Services von ihr abhängen.
+
+* `+Zookeeper+`: Zookeeper wird für die Erkennung, Orchestrierung und Ausfallsicherung von Diensten verwendet. Zookeeper wird über 1 oder mehrere Pods mit dem Namen bereitgestellt:
+ ** `+suse-observability-zookeeper-<n>+`
+* `+Kafka+`: Kafka wird für den Nachrichtenaustausch zwischen fast allen Diensten verwendet: Kafka wird von den folgenden Pods bereitgestellt:
+ ** `+suse-observability-kafka-<n>+`: Haupt-Kafka-Einsatz
+ ** `+<release-name>-kafkaup-operator-kafkaup-*+`: Hilfsoperator, der Kafka-Upgrades durchführt
+* `+StackGraph+`: StackGraph speichert (Benutzer-)Einstellungen und die Topologie. StackGraph besteht aus mehreren Komponenten und hat 2 Einsatzmodi. HA und Nicht-HA.
+ ** `+Tephra+`: Verwaltet den Start von Datenbanktransaktionen, Commits und Konflikte. Bedient von pod `+<release-name>-hbase-tephra-<n>+`
+  *** `+<release-name>-hbase-tephra-<n>+`: Tephra-Transaktionsserver-Pod. Behält den Überblick über Transaktionen und Konflikte.
+ ** `+HBase-HA+`: Speichert die StackGraph-Daten, verteilt auf mehrere Pods mit unterschiedlichen Zuständigkeiten:
+  *** `+<release-name>-hbase-hdfs-nn-0+`: Namensknoten für HDFS, der den Dateiindex verfolgt
+  *** `+<release-name>-hbase-hdfs-snn-0+`: Sekundärer Namensknoten, führt Aufräumarbeiten nach dem Namensknoten durch
+  *** `+<release-name>-hbase-hdfs-dn-<n>+`: HDFS Datanode, speichert die eigentlichen Daten
+  *** `+<release-name>-hbase-hbase-master-<n>+`: HBase Master, koordiniert Tabellen und Regionen
+  *** `+<release-name>-hbase-hbase-rs-<n>+`: HBase Region Server, bedient Tabellen und Regionen, speichert seine Daten im HDFS
+ ** `+HBase-non-HA+`:
+  *** `+<release-name>-hbase-stackgraph-0+`: Alle StackGraph-Komponenten werden als ein einziger Pod im `+non-HA+` Setup eingesetzt. Dazu gehört auch eine eigene Zookeeper-Instanz.
+* `+VictoriaMetrics+`: Speichert metrische Daten. Wird von den Pods eingesetzt:
+ ** `+suse-observability-victoria-metrics-<n>-0+`: Hauptknoten VictoriaMetrics Datenspeicher/Abfrage
+ ** `+suse-observability-vmagent-0+`: Ingestion Agent für VictoriaMetrics. Die Daten werden an vmagent übertragen, bevor sie weitergeleitet und gespeichert werden.
+* `+ClickHouse+`: Speichert Trace-Daten. Bereitgestellt durch die folgende(n) Gruppe(n):
+ ** `+suse-observability-clickhouse-shard0-<n>+`: Hauptgeschäft des Klickhauses
+* `+ElasticSearch+`: Speichert Ereignisse und Protokolle. Wird von den folgenden Pods eingesetzt:
+ ** `+suse-observability-elasticsearch-master-<n>+`: Haupt-Elasticsearch-Speicher
+ ** `+<release-name>-prometheus-elasticsearch-exporter-*+`: Exportiert Leistungsmetriken der Elasticsearch-Instanzen
+
+=== Ingestion-Dienste
+
+Die SUSE Observability-Plattform erhält Daten, die vom Agenten und OpenTelemetry (OTEL)-Agenten übermittelt werden. Die Ingestion Services führen die Erstverarbeitung durch und bringen die Daten zur Speicherung.
+
+* `+Receiver+`: Der Receiver implementiert die sammlungsseitige API für den SUSE Observability-Agenten. Es nimmt Telemetriedaten (Protokolle, Ereignisse, Metriken oder Topologie) entgegen, autorisiert sie und leitet sie an den entsprechenden Datenspeicher oder Kafka weiter. Es kann im Einzel- oder Split-Modus eingesetzt werden:
+ ** `+Receiver-Split+`:
+  *** `+<release-name>-suse-observability-receiver-logs-*+`: Empfängt Protokolle und speichert sie in Elasticsearch
+  *** `+<release-name>-suse-observability-receiver-process-agent-*+`: Empfängt Prozess- und Netzverbindungsinformationen und leitet sie an Kafka-Themen weiter
+  *** `+<release-name>-suse-observability-receiver-base+`-*: Alle anderen Daten des SUSE Observability-Agenten kommen hierher.
+ ** `+Receiver-NonSplit+`:
+  *** `+<release-name>-suse-observability-receiver-*+`: Alle Daten des SUSE Observability-Agenten kommen hierher.
+* `+OpenTelemetry Collector+`: Stellt einen Endpunkt zur Verfügung, an den OpenTelemetry-Agenten OpenTelemetry-Daten übertragen können, und erzeugt auf der Grundlage der übertragenen Daten Traces, Metriken und Topologie.
+ ** `+suse-observability-otel-collector-0+`: Einzelner Pod zur Implementierung des OTEL-Kollektors
+
+=== Verarbeitung und Ausgabe
+
+Die SUSE Observability-Plattform führt eine Korrelation und Überwachung der empfangenen Telemetriedaten durch. Die Ergebnisse werden dem Kunden bei Bedarf über die API zur Verfügung gestellt. Die Kernplattform kann sowohl im verteilten als auch im nicht verteilten Modus betrieben werden. Verteilt ermöglicht einen höheren Durchsatz.
+
+* `+Correlator+`: Korreliert tcp-Verbindungsinformationen, um sie in Topologie umzuwandeln. Implementiert von pod:
+ ** `+<release-name>-suse-observability-correlate-*+`
+* `+Events2Elasticsearch+`: Verarbeitet Ereignisse und speichert sie in Elasticsearch: Implementiert von pod:
+ ** `+<release-name>-suse-observability-e2es-*+`
+* `+Anomaly Detection+`: Die SUSE Observability-Plattform führt eine (standardmäßig deaktivierte) Anomalieerkennung für Metriken durch und erzeugt so Zustandsverletzungen:
+ ** `+<release-name>-anomaly-detection-spotlight-manager-*+`: Verteilte Aufdeckung von Anomalien
+ ** `+<release-name>-anomaly-detection-spotlight-worker-*+`: Erkennung von Anomalien bei metrischen Datenströmen
+* `+Platform-Distributed+`: Die Plattform enthält die wichtigsten Verarbeitungskomponenten und die Serving-Api. Im verteilten Modus werden die Funktionseinheiten aufgeteilt. Die Pods, die zur Plattform gehören:
+ ** `+<release-name>-suse-observability-api-*+`: Liefert alle Daten an den Benutzer und verwaltet die Installation/Deinstallation von StackPack.
+ ** `+<release-name>-suse-observability-checks-*+`: Führt die Monitore aus
+ ** `+<release-name>-suse-observability-health-sync-*+`: Verarbeitet Zustandsinformationen (Verletzungen) von Monitoren und dem SUSE Observability Agent und ordnet sie der Topologie zu.
+ ** `+<release-name>-suse-observability-initializer-*+`: Koordiniert die Initialisierung von Datenspeichern und Migrationen
+ ** `+<release-name>-suse-observability-notification-*+`: Leitet Benachrichtigungen auf der Grundlage von Zustandsverletzungen und Benutzereinstellungen an nachgelagerte Systeme wie Slack/Opsgenie weiter.
+ ** `+<release-name>-suse-observability-slicing-*+`: Optimiert kontinuierlich den Topologieverlauf für einen schnellen Abruf
+ ** `+<release-name>-suse-observability-state-*+`: Verarbeitung von Gesundheitsverstößen und deren Zusammenfassung zu einer Komponente Gesundheit
+ ** `+<release-name>-suse-observability-sync-*+`: Verarbeitet Topologiedaten in Kombination mit Benutzereinstellungen und erstellt daraus den Topologiediagramm.
+* `+Platform-Mono+`:
+ ** `+<release-name>-suse-observability-server-*+`: Enthält alle Funktionen des `+Platform-Distributed+` Setup, aber in einem einzigen Pod.
+
+=== Sonstiges
+
+* `+Routing+`: Nehmen Sie Verbindungen an und leiten Sie sie an den richtigen Backend-Dienst weiter:
+ ** `+<release-name>-suse-observability-router-+`: Router auf Basis von Envoy
+* `+UI+`: React-basierte UI
+ ** `+<release-name>-suse-observability-ui+`: Dient nur dem statischen UI-Code und den Assets, das gesamte dynamische Verhalten wird von der `+api+`
+* `+Backup/Restore+`: Regelmäßige Ausführung von Aufträgen zur Sicherung der verschiedenen Datenspeicher. Verfügt über einen ständig laufenden Pod:
+ ** `+suse-observability-minio-*+`: Bietet eine abstrakte Schnittstelle für die Interaktion mit dem Sicherungsspeicher.
+
+== Beziehungen zwischen Teilsystemen
+
+Um die Ursache eines Problems effektiv zu finden, ist es wichtig zu verstehen, welche Pods bei der Bereitstellung von anderen abhängig sind. Das folgende Diagramm zeigt eine Übersicht über die Pods mit TCP-Verbindungen, die zwischen ihnen bestehen können. Bei der Suche nach einer Grundursache ist es sinnvoll, den Pod zu betrachten, der in dieser Abhängigkeitskette am "niedrigsten" ist.
+
+Die Namen der Pods in diesem Diagramm sind der Einfachheit halber abgekürzt.
+
+image::Pod_TCP_diagram.png[Pod TCP-Abhängigkeiten]
