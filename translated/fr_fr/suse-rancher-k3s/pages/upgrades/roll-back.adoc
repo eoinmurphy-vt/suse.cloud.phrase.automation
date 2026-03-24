@@ -1,0 +1,185 @@
+= Retournement des K3
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Vous pouvez revenir à la version K3s Kubernetes après une mise à niveau, en utilisant une combinaison de K3s binary downgrade et de restauration du datastore. Le retour en arrière peut être effectué sur des clusters de tous types, y compris un SQLite à nœud unique, un magasin de données externe ou un etcd intégré. Pour revenir à une version mineure antérieure de Kubernetes, vous devez disposer d'un instantané du datastore pris sur la version mineure de Kubernetes sur laquelle vous souhaitez revenir.
+
+[WARNING]
+====
+Si vous ne pouvez pas restaurer la base de données, vous ne pouvez pas revenir à une version mineure antérieure.
+====
+
+== Considérations importantes
+
+* *Sauvegardes :* Avant de procéder à la mise à jour, assurez-vous que vous disposez d'une base de données valide ou d'un instantané etcd de votre cluster utilisant l'ancienne version de K3s. Sans sauvegarde, il est impossible de revenir en arrière.
+* *Perte potentielle de données :* Le script `+k3s-killall.sh+` met fin de force aux processus K3s et peut entraîner une perte de données si les applications ne sont pas correctement fermées.
+* *Spécificités de la version :* Vérifiez toujours les K3 et les versions des composants avant et après le rollback.
+
+== Retourner un cluster K3s
+
+[tabs]
+======
+
+SQLite::
++
+--
+Pour rétablir un cluster K3s lors de l'utilisation d'une base de données SQLite, remplacez le fichier `+.db+` par la copie du fichier `+.db+` que vous avez effectuée lors de la sauvegarde de votre base de données.
+--
+
+etcd embarqué::
++
+--
+Pour rétablir un cluster K3s lors de l'utilisation d'un etcd intégré, procédez comme suit : 
+
+. Si le cluster est en cours d'exécution et que l'API Kubernetes est disponible, arrêtez gracieusement les charges de travail en vidant tous les nœuds : 
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
+
+. Sur chaque nœud, arrêtez le service K3s et tous les processus pods en cours :
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. Sur chaque nœud, ramenez le binaire K3s à la version précédente, mais *ne* démarrez *pas* K3s.
+
+* Clusters avec accès à l'internet :
+
+** Nœuds de serveur : 
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+** Nœuds d'agents :
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+* Grappes à air comprimé :
+
+** Téléchargez les artefacts et exécutez le xref:installation/airgap.adoc#_install_k3s[script d'installation] localement. Ajoutez la variable d'environnement `+INSTALL_K3S_SKIP_START="true"+` lors de l'exécution du script d'installation pour empêcher le démarrage de K3s.
+
+. Sur le premier nœud de serveur ou le nœud sans entrée `+server:+` dans son xref:installation/configuration.adoc[fichier de configuration K3s], lancez la restauration du cluster. Reportez-vous aux xref:cli/etcd-snapshot.adoc#_snapshot_restore_steps[étapes de la restauration des clichés] pour plus d'informations : 
++
+[,bash]
+----
+k3s server --cluster-reset --cluster-reset-restore-path=<PATH-TO-SNAPSHOT>
+----
++
+[WARNING]
+====
+Cette opération écrase toutes les données du magasin de données etcd. Vérifiez l'intégrité de l'instantané avant de le restaurer. Sachez que la restauration d'instantanés volumineux peut prendre beaucoup de temps.
+====
+
+. Démarrez le service K3s sur le premier nœud du serveur : 
++
+[,bash]
+----
+systemctl start k3s
+----
+ 
+. Sur les autres nœuds du serveur, supprimez le répertoire de la base de données K3s :
++
+[,bash]
+----
+rm -rf /var/lib/rancher/k3s/server/db
+----
+ 
+. Démarrez le service K3s sur les autres nœuds du serveur : 
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Démarrer le service K3s sur tous les nœuds de l'agent :
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Vérifiez l'état de service du K3s à l'aide de `+systemctl status k3s+`. 
+--
+
+Base de données externe:: 
++
+--
+Pour revenir en arrière dans un cluster K3s lors de l'utilisation d'une base de données externe (par exemple, PostgreSQL, MySQL), procédez comme suit : 
+
+. Si le cluster est en cours d'exécution et que l'API Kubernetes est disponible, arrêtez gracieusement les charges de travail en vidant tous les nœuds : 
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
++
+[NOTE]
+====
+Ce processus peut perturber les applications en cours.
+====
+
+. Sur chaque nœud, arrêtez le service K3s et tous les processus pods en cours :
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. Restaurer un instantané de la base de données pris avant la mise à niveau de K3s et vérifier l'intégrité de la base de données. Par exemple, si vous utilisez PostgreSQL, exécutez la commande suivante :
++
+[,bash]
+----
+pg_restore -U <DB-USER> -d <DB-NAME> <BACKUP-FILE>
+----
+
+. Sur chaque nœud, revenir à la version précédente du binaire K3s. 
+
+* Clusters avec accès à l'internet :
+
+** Nœuds de serveur :
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" sh -
+----
+
+** Nœuds d'agents :
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" sh -
+----
+
+* Grappes à air comprimé :
+
+** Téléchargez les artefacts et exécutez le xref:installation/airgap.adoc#_install_k3s[script d'installation] localement. Vérifiez la version de K3s après l'installation à l'aide de `+k3s --version+` et réappliquez toutes les configurations personnalisées qui ont été utilisées avant la mise à niveau. 
+
+. Démarrez le service K3s sur chaque nœud :
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Vérifiez l'état de service du K3s à l'aide de `+systemctl status k3s+`.
+--
+======
+
+== Verification 
+
+Après le retour en arrière, vérifiez les points suivants : 
+
+* Version K3s : `+k3s --version+` 
+* Santé des clusters Kubernetes : `+kubectl get nodes+` 
+* Fonctionnalité de l'application. 
+* Vérifiez les erreurs dans les journaux de K3s.
