@@ -1,0 +1,1564 @@
+= ClusterClass
+:revdate: 2026-02-18
+:page-revdate: {revdate}
+
+Nesta seção, abordaremos o uso do https://cluster-api.sigs.k8s.io/tasks/experimental-features/cluster-class/[ClusterClass] com o {product_name}.
+
+== Pré-requisitos
+
+* Cluster do Rancher Manager com {product_name} instalado
+* O provedor https://github.com/rancher/cluster-api-addon-provider-fleet[CAAPF] deve ser instalado como um pré-requisito para o uso de todas as ClusterClasses.
+** Exemplo de instalação do provedor CAAPF:
++
+.Clique para expandir
+[%collapsible]
+======
+[,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet-addon-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: fleet
+  namespace: fleet-addon-system
+spec:
+  name: rancher-fleet
+  type: addon
+----
+======
+
+[WARNING]
+====
+O CAAPF depende do gate de recursos do `+WatchList+` Kubernetes. Esse recurso precisa ser ativado explicitamente nas versões do Kubernetes `+1.33+`. Consulte a https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/[documentação upstream do] para obter mais informações.
+====
+
+* Dependendo do seu mecanismo, a instalação do https://github.com/rancher/cluster-api-provider-rke2[CAPRKE2] ou https://github.com/kubernetes-sigs/cluster-api[do] Kubeadm Bootstrap/Control Plane é necessária antes da configuração adicional do CAPIProvider:
++
+[tabs]
+======
+CAPRKE2::
++
+--
+
+Instalação dos provedores Bootstrap e Control Plane:
+
+.Clique para expandir
+[%collapsible]
+=======
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rke2-bootstrap-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: rke2-bootstrap
+  namespace: rke2-bootstrap-system
+spec:
+  name: rke2
+  type: bootstrap
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rke2-control-plane-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: rke2-control-plane
+  namespace: rke2-control-plane-system
+spec:
+  name: rke2
+  type: controlPlane
+----
+=======
+
+--
+
+Kubeadm::
++
+--
+
+Instalação dos provedores Bootstrap e Control Plane:
+
+.Clique para expandir
+[%collapsible]
+=======
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capi-kubeadm-bootstrap-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: kubeadm-bootstrap
+  namespace: capi-kubeadm-bootstrap-system
+spec:
+  name: kubeadm
+  type: bootstrap
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capi-kubeadm-control-plane-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: kubeadm-control-plane
+  namespace: capi-kubeadm-control-plane-system
+spec:
+  name: kubeadm
+  type: controlPlane
+----
+=======
+
+--
+
+======
+
+== Configuração
+
+ifeval::["{build-type}" == "community"]
+[NOTE]
+.Fixação de versão
+====
+O CAPIProvider `+spec.version+` pode ser definido a qualquer momento para fixar o provedor em uma versão específica. Para que a imutabilidade persista, você também pode definir `+spec.enableAutomaticUpdate: false+` para desativar as atualizações automáticas de versão do seu respectivo provedor CAPIP.
+====
+endif::[]
+
+[tabs]
+======
+Azure::
++
+--
+Para preparar o cluster de gerenciamento, instalaremos o https://capz.sigs.k8s.io/[provedor de API de cluster] e criaremos uma identidade https://capz.sigs.k8s.io/topics/identities#service-principal[do Azure] para provisionar um novo cluster no Azure.
+
+Antes de começarmos, um ServicePrincipal precisa ser criado, com pelo menos acesso de Colaborador a uma assinatura do Azure.
+Consulte a https://capz.sigs.k8s.io/topics/identities[documentação do] para obter mais detalhes.
+
+* Instalação do provedor
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capz-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: azure
+  namespace: capz-system
+spec:
+  type: infrastructure
+  name: azure
+----
+
+* Configuração de identidade
++
+[WARNING]
+.Autenticação para provisionamento de cluster AKS
+====
+Se você estiver implantando um cluster gerenciado no **AKS**, poderá ignorar a etapa **de Configuração de identidade** e pular para xref:#_create_a_cluster_from_a_clusterclass[Criar um cluster a partir de uma ClusterClass].
+Em vez de usar `+AzureClusterIdentity+`, você criará um `+Secret+` com as credenciais do Service Principal para o Operador de Serviços do Azure usar ao aplicar o manifesto do cluster.
+====
++
+Neste exemplo, vamos usar um `+AzureClusterIdentity+` para provisionar Clusters do Azure.
+Um segredo contendo as credenciais da entidade de serviço precisa ser criado primeiro, para ser referenciado pelo recurso `+AzureClusterIdentity+`.
+Observe que o `+AzureClusterIdentity+` é um recurso namespaced e precisa ser criado no mesmo namespace que o Cluster.
+Para obter mais informações sobre as práticas recomendadas ao usar as identidades do Azure, consulte a oficial https://capz.sigs.k8s.io/topics/identities-use-cases[documentação].
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Secret
+metadata:
+  name: <AZURE_CLUSTER_IDENTITY_SECRET_NAME>
+  namespace: <AZURE_CLUSTER_IDENTITY_SECRET_NAMESPACE>
+type: Opaque
+stringData:
+  clientSecret: <AZURE_CLIENT_SECRET>
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: AzureClusterIdentity
+metadata:
+  labels:
+    clusterctl.cluster.x-k8s.io/move-hierarchy: "true"
+  name: cluster-identity
+spec:
+  allowedNamespaces: {}
+  clientID: <AZURE_APP_ID>
+  clientSecret:
+    name: <AZURE_CLUSTER_IDENTITY_SECRET_NAME>
+    namespace: <AZURE_CLUSTER_IDENTITY_SECRET_NAMESPACE>
+  tenantID: <AZURE_TENANT_ID>
+  type: ServicePrincipal
+----
+--
+
+AWS::
++
+--
+Para preparar o cluster de gerenciamento, instalaremos o https://cluster-api-aws.sigs.k8s.io/[provedor de API do] e criaremos um segredo com as credenciais necessárias para provisionar um novo cluster no AWS.
+As credenciais globais são definidas como espaços em branco, pois, em vez disso, usaremos `+AWSClusterStaticIdentity+`.
+
+* Instalação do provedor
++
+[source,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: aws
+  namespace: capa-system
+spec:
+  type: infrastructure
+  variables:
+    AWS_B64ENCODED_CREDENTIALS: ""
+----
+
+* Configuração de identidade
++
+Neste exemplo, usaremos o site `+AWSClusterStaticIdentity+` para provisionar clusters do AWS. +
+Um segredo contendo as credenciais precisa ser criado no namespace em que o provedor da AWS está instalado. +
+Para obter mais informações sobre como configurar as credenciais, consulte a link:https://cluster-api-aws.sigs.k8s.io/clusterawsadm/clusterawsadm[documentação do]. +
+O site `+AWSClusterStaticIdentity+` pode fazer referência a esse segredo para permitir o provisionamento do cluster. Neste exemplo, estamos permitindo o uso da identidade em todos os namespaces, para que ela possa ser facilmente reutilizada. +
+Você pode consultar a link:https://cluster-api-aws.sigs.k8s.io/topics/multitenancy[documentação oficial do site] para saber mais sobre o gerenciamento de identidade.
++
+Observe que algumas variáveis são deixadas para o usuário substituir. +
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Secret
+metadata:
+  name: <AWS_IDENTITY_SECRET_NAME>
+  namespace: capa-system
+type: Opaque
+stringData:
+  AccessKeyID: <AWS_ACCESS_KEY_ID>
+  SecretAccessKey: <AWS_SECRET_ACCESS_KEY>
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: AWSClusterStaticIdentity
+metadata:
+  name: cluster-identity
+spec:
+  secretRef: <AWS_IDENTITY_SECRET_NAME>
+  allowedNamespaces: {}
+----
+--
+
+GCP::
++
+--
+Para preparar o cluster de gerenciamento, instalaremos o https://cluster-api-gcp.sigs.k8s.io/[Cluster API Provider GCP] e criaremos um segredo com as credenciais necessárias para provisionar um novo cluster no GCP.
+É necessária uma conta de serviço para criar e gerenciar clusters no GCP e isso exigirá permissões `+Editor+`. Você pode seguir o guia oficial do https://cluster-api-gcp.sigs.k8s.io/quick-start#create-a-service-account[CAPG Book].
+A chave da conta de serviço codificada em base64 precisa ser definida na variável `+GCP_B64ENCODED_CREDENTIALS+` do provedor.
+
+* Instalação do provedor
++
+[source,yaml]
+----
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: gcp
+  namespace: capg-system
+spec:
+  type: infrastructure
+  variables:
+    GCP_B64ENCODED_CREDENTIALS: xxx
+----
+
+* Configuração de rede
++
+O provisionamento de um cluster GCP autogerenciado exige que uma rede GCP seja configurada para permitir que os nós do Kubernetes se comuniquem com o plano de controle e extraiam imagens do registro de contêineres, para o qual as máquinas precisam ter acesso NAT ou um IP público.
+O comportamento padrão do provedor é criar máquinas virtuais sem IP público anexado, portanto, é necessário um https://cloud.google.com/nat/docs/overview[NAT do] para permitir que os nós estabeleçam uma conexão com o balanceador de carga e o mundo externo.
+Consulte o guia oficial https://cluster-api-gcp.sigs.k8s.io/prerequisites#configure-network-and-cloud-nat[do livro] sobre como preparar sua rede do GCP para provisionar um cluster autogerenciado do GCP.
++
+[NOTE]
+====
+As etapas a seguir são necessárias para preparar a rede GCP para o provisionamento do cluster:
+
+- Crie um roteador.
+- Crie um NAT associado ao roteador.
+====
+--
+
+Docker::
++
+--
+Para preparar o cluster de gerenciamento, vamos instalar o provedor de API do Docker Cluster.
+
+* Instalação do provedor do Docker na infraestrutura
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capd-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: docker
+  namespace: capd-system
+spec:
+  type: infrastructure
+----
+
+--
+
+vSphere::
++
+--
+Para preparar o cluster de gerenciamento, vamos instalar o https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/main/docs/getting_started.md[Cluster API Provider vSphere].
+As credenciais globais são definidas como espaços em branco, pois, em vez disso, usaremos `+VSphereClusterIdentity+`.
+
+* Instalação do provedor
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capv-system
+---
+apiVersion: turtles-capi.cattle.io/v1alpha1
+kind: CAPIProvider
+metadata:
+  name: vsphere
+  namespace: capv-system
+spec:
+  type: infrastructure
+  variables:
+    VSPHERE_USERNAME: "" 
+    VSPHERE_PASSWORD: ""
+----
+
+* Configuração de identidade
++
+Neste exemplo, usaremos um `+VSphereClusterIdentity+` para provisionar vSphere Clusters. +
+Um Secret contendo as credenciais precisa ser criado no namespace em que o provedor vSphere está instalado.
+O site `+VSphereClusterIdentity+` pode fazer referência a esse segredo para permitir o provisionamento do cluster. Neste exemplo, estamos permitindo o uso da identidade em todos os namespaces, para que ela possa ser facilmente reutilizada.
+Você pode consultar a https://github.com/kubernetes-sigs/cluster-api-provider-vsphere/blob/main/docs/identity_management.md[documentação oficial do site] para saber mais sobre o gerenciamento de identidade.
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-identity
+  namespace: capv-system
+type: Opaque
+stringData:
+  username: xxx
+  password: xxx
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: VSphereClusterIdentity
+metadata:
+  name: cluster-identity
+spec:
+  secretName: cluster-identity
+  allowedNamespaces:
+    selector:
+      matchLabels: {}
+----
+--
+======
+
+
+== Criar um cluster a partir de uma ClusterClass
+
+[tabs]
+======
+
+Azure RKE2::
++
+--
+* Uma Azure ClusterClass pode ser encontrada entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o Azure Cloud Provider e o Calico CNI serão instalados em clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cloud-provider: azure+` e `+cni: calico+`.
++
+[tabs]
+=======
+CLI::
++
+Um Azure RKE2 ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r azure-rke2 | kubectl apply -f -
+----
+kubectl::
++
+* Como alternativa, você pode aplicar o Azure RKE2 ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/azure/rke2/clusterclass-rke2-example.yaml
+----
+
+* Além disso, o https://capz.sigs.k8s.io/self-managed/cloud-provider-config[provedor de nuvem do] precisará ser instalado em cada cluster downstream, para que os nós sejam inicializados corretamente.
+Para este exemplo, também instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/azure/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
+=======
+
+* Crie o Cluster do Azure a partir do exemplo ClusterClass
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+    cloud-provider: azure
+    cni: calico
+  name: azure-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: azure-rke2-example
+    controlPlane:
+      replicas: 1
+    variables:
+    - name: subscriptionID
+      value: <AZURE_SUBSCRIPTION_ID>
+    - name: location
+      value: <AZURE_LOCATION>
+    - name: resourceGroup
+      value: <AZURE_RESOURCE_GROUP>
+    - name: azureClusterIdentityName
+      value: cluster-identity
+    version: v1.34.3+rke2r1
+    workers:
+      machineDeployments:
+      - class: rke2-default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+Azure AKS::
++
+--
+* Um Azure AKS ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+[tabs]
+=======
+CLI::
++
+Um Azure AKS ClusterClass pode ser aplicado usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r azure-aks | kubectl apply -f -
+----
+kubectl::
++
+* Como alternativa, você pode aplicar o Azure AKS ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/azure/aks/clusterclass-aks-example.yaml
+----
+=======
+
+* Crie o cluster do Azure AKS a partir do exemplo ClusterClass.
++
+O Azure AKS `+ClusterClass+`, a partir do qual o `+Cluster+` é criado, usa os recursos `+AzureASOManagedCluster+`, `+AzureASOManagedControlPlane+` e `+AzureASOManagedMachinePool+` que são gerenciados pelo Azure Service Operator.
+Por esse motivo, você não usará um `+AzureClusterIdentity+` como faria em um cluster autogerenciado do Azure (por exemplo, Azure com RKE2). Em vez disso, um `+Secret+` é criado com as credenciais da entidade de serviço no mesmo namespace que o `+Cluster+`.
+Observe que a definição de `+Secret+` está incorporada no manifesto `+Cluster+` para simplificar, mas também pode ser criada previamente.
++
+Você pode consultar a https://azure.github.io/azure-service-operator/guide/authentication/[documentação do] para obter mais informações sobre esse método de autenticação.
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aks-credentials
+stringData:
+  AZURE_SUBSCRIPTION_ID: <AZURE_SUBSCRIPTION_ID>
+  AZURE_TENANT_ID: <AZURE_TENANT_ID>
+  AZURE_CLIENT_ID: <AZURE_CLIENT_ID>
+  AZURE_CLIENT_SECRET: <AZURE_CLIENT_SECRET>
+type: Opaque
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: azure-aks-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    class: azure-aks-example
+    variables:
+    - name: location
+      value: <AZURE_LOCATION>
+    - name: resourceGroup
+      value: <AZURE_RESOURCE_GROUP>
+    - name: asoCredentialSecretName
+      value: aks-credentials
+    version: v1.34.2
+    workers:
+      machinePools:
+      - class: default-system
+        name: system-1
+        replicas: 1
+      - class: default-worker
+        name: worker-1
+        replicas: 1
+----
+--
+
+Azure Kubeadm::
++
+--
+* Uma Azure ClusterClass pode ser encontrada entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o Azure Cloud Provider e o Calico CNI serão instalados em clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cloud-provider: azure+` e `+cni: calico+`.
++
+[tabs]
+=======
+CLI::
++
+Um Azure RKE2 ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r azure-rke2 | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o Azure RKE2 ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/azure/kubeadm/clusterclass-kubeadm-example.yaml
+----
+
+* Além disso, o https://capz.sigs.k8s.io/self-managed/cloud-provider-config[provedor de nuvem do] precisará ser instalado em cada cluster downstream, para que os nós sejam inicializados corretamente. Para este exemplo, também instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster]. Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/azure/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
+=======
+
+* Crie o Cluster do Azure a partir do exemplo ClusterClass. 
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+    cloud-provider: azure
+    cni: calico
+  name: azure-kubeadm-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: azure-kubeadm-example
+    controlPlane:
+      replicas: 1
+    variables:
+    - name: subscriptionID
+      value: <AZURE_SUBSCRIPTION_ID>
+    - name: location
+      value: <AZURE_LOCATION>
+    - name: resourceGroup
+      value: <AZURE_RESOURCE_GROUP>
+    - name: azureClusterIdentityName
+      value: cluster-identity
+    version: v1.34.3
+    workers:
+      machineDeployments:
+      - class: kubeadm-default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+AWS EKS::
++
+--
+* Uma AWS EKS ClusterClass pode ser encontrada entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+[tabs]
+=======
+
+CLI::
++
+Um AWS EKS ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash]
+----
+go run github.com/rancher/turtles/examples@main -r aws-eks | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o AWS EKS ClusterClass diretamente usando o kubectl:
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/aws/eks/clusterclass-eks-example.yaml
+----
+=======
++
+* Crie o AWS Cluster a partir do exemplo ClusterClass +
++
+Observe que algumas variáveis são deixadas para o usuário substituir. +
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: aws-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef:
+      name: aws-eks-example
+    variables:
+    - name: region
+      value: eu-west-2
+    - name: instanceType
+      value: <AWS_NODE_MACHINE_TYPE>
+    - name: awsClusterIdentityName
+      value: cluster-identity
+    version: v1.32.0
+    workers:
+      machineDeployments:
+      - class: default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+AWS Kubeadm::
++
+--
+* Uma AWS Kubeadm ClusterClass pode ser encontrada entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o https://docs.tigera.io/calico/latest/about/[Calico CNI], o https://github.com/kubernetes/cloud-provider-aws[Cloud Controller Manager] AWS e o https://github.com/kubernetes-sigs/aws-ebs-csi-driver[EBS CSI Driver] AWS serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cni: calico+`, `+cloud-provider: aws+` e `+csi: aws-ebs-csi-driver+`.
++
+[tabs]
+=======
+
+CLI::
++
+Um AWS Kubeadm ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r aws-kubeadm | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o AWS Kubeadm ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/aws/kubeadm/clusterclass-kubeadm-example.yaml
+----
+
+* Para este exemplo, também instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
+* O https://github.com/kubernetes/cloud-provider-aws[Cloud Controller Manager] AWS precisará ser instalado em cada cluster downstream para que os nós sejam funcionais.
+* Além disso, também habilitaremos o do AWS https://github.com/kubernetes-sigs/aws-ebs-csi-driver[driver CSI].
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+O `+HelmOps+` precisa ser criado primeiro, para ser aplicado no novo Cluster por meio de seletores de rótulo. Isso cuidará da implementação do Calico, do driver CSI do EBS e do AWS Cloud Controller Manager no cluster de carga de trabalho.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/csi/aws/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/aws/calico/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/aws/helm-chart.yaml
+----
+=======
+
+* Crie o AWS Cluster a partir do exemplo ClusterClass.
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+    cni: calico
+    cloud-provider: aws
+    csi: aws-ebs-csi-driver
+  name: aws-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: aws-kubeadm-example
+    controlPlane:
+      replicas: 3
+    variables:
+    - name: region
+      value: eu-west-2
+    - name: sshKeyName
+      value: <AWS_SSH_KEY_NAME>
+    - name: controlPlaneMachineType
+      value: <AWS_CONTROL_PLANE_MACHINE_TYPE>
+    - name: workerMachineType
+      value: <AWS_NODE_MACHINE_TYPE>
+    - name: awsClusterIdentityName
+      value: cluster-identity
+    version: v1.32.0
+    workers:
+      machineDeployments:
+      - class: default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+AWS RKE2::
++
+--
+[WARNING]
+====
+Antes de criar um cluster de carga de trabalho do AWS+RKE2, é necessário criar uma AMI para a versão do RKE2 que será instalada no cluster ou encontrar uma que funcione para instalações sem aerofotogrametria. 
+Você pode seguir as etapas no https://github.com/rancher/cluster-api-provider-rke2/tree/main/image-builder#aws[LEIAME do construtor de imagens] RKE2 para criar a AMI. 
+====
+
+* Um AWS RKE2 ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o https://docs.tigera.io/calico/latest/about/[Calico CNI], o https://github.com/kubernetes/cloud-provider-aws[Cloud Controller Manager] AWS e o https://github.com/kubernetes-sigs/aws-ebs-csi-driver[EBS CSI Driver] AWS serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cni: calico+`, `+cloud-provider: aws+` e `+csi: aws-ebs-csi-driver+`.
++
+[tabs]
+=======
+CLI::
++
+Um AWS RKE2 ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r aws-rke2 | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o AWS RKE2 ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/aws/rke2/clusterclass-ec2-rke2-example.yaml
+----
+=======
+
+* Para este exemplo, também instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
+* O https://github.com/kubernetes/cloud-provider-aws[Cloud Controller Manager] AWS precisará ser instalado em cada cluster downstream para que os nós sejam funcionais.
+* Além disso, também habilitaremos o do AWS https://github.com/kubernetes-sigs/aws-ebs-csi-driver[driver CSI].
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+O `+HelmOps+` precisa ser criado primeiro, para ser aplicado no novo Cluster por meio de seletores de rótulo. Isso cuidará da implementação do Calico, do driver CSI do EBS e do AWS Cloud Controller Manager no cluster de carga de trabalho.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/csi/aws/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/aws/calico/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/aws/helm-chart.yaml
+----
+
+* Crie o AWS Cluster a partir do exemplo ClusterClass
++ 
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cloud-provider: aws
+    cni: calico
+    csi: aws-ebs-csi-driver
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: aws-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: aws-rke2-example
+    controlPlane:
+      replicas: 3
+    variables:
+    - name: cni
+      value: none
+    - name: region
+      value: <AWS_REGION>
+    - name: sshKeyName
+      value: <AWS_SSH_KEY_NAME>
+    - name: controlPlaneMachineType
+      value: <AWS_RKE2_CONTROL_PLANE_MACHINE_TYPE>
+    - name: workerMachineType
+      value: <AWS_RKE2_NODE_MACHINE_TYPE>
+    - name: amiID
+      value: <AWS_AMI_ID>
+    - name: awsClusterIdentityName
+      value: cluster-identity
+    version: v1.35.0+rke2r1
+    workers:
+      machineDeployments:
+      - class: default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+GCP GKE::
++
+--
+* Uma ClusterClass do GCP GKE pode ser encontrada nos https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+[tabs]
+=======
+
+CLI::
++
+Um GCP GKE ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash]
+----
+go run github.com/rancher/turtles/examples@main -r gcp-gke | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o GCP GKE ClusterClass diretamente usando o kubectl:
++
+[source,bash]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/gcp/gke/clusterclass-gke-example.yaml
+----
+=======
++
+* Crie o cluster do GCP a partir do exemplo ClusterClass +
++
+Observe que algumas variáveis são deixadas para o usuário substituir. +
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: gcp-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef:
+      name: gcp-gke-example
+    variables:
+      - name: project
+        value: ${GCP_PROJECT}
+      - name: region
+        value: ${GCP_REGION}
+      - name: networkName
+        value: ${GCP_NETWORK_NAME}
+    version: v1.35.0
+    workers:
+      machinePools:
+        - class: default-system
+          name: system-pool
+          replicas: ${WORKER_MACHINE_COUNT}
+        - class: default-worker
+          name: worker-pool
+          replicas: ${WORKER_MACHINE_COUNT}
+----
+--
+
+GCP Kubeadm::
++
+--
+[WARNING]
+====
+Antes de criar um cluster de carga de trabalho GCP+Kubeadm, é necessário criar uma imagem para a versão do Kubernetes que será instalada no cluster ou encontrar uma que funcione para seu caso de uso. 
+Você pode seguir as etapas no https://image-builder.sigs.k8s.io/capi/providers/gcp[livro]. 
+====
+
+* Um GCP Kubeadm ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como https://docs.tigera.io/calico/latest/about/[Calico CNI] e https://github.com/kubernetes/cloud-provider-gcp[Cloud Controller Manager] GCP serão instalados em clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cni: calico+` e `+cloud-provider: gcp+`.
++
+[tabs]
+=======
+CLI::
++
+Um GCP Kubeadm ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r gcp-kubeadm | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o GCP Kubeadm ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/gcp/kubeadm/clusterclass-kubeadm-example.yaml
+----
++
+* Para este exemplo, também instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
+* O https://github.com/kubernetes/cloud-provider-gcp[Cloud Controller Manager] GCP precisará ser instalado em cada cluster downstream para que os nós sejam funcionais.
++
+ifeval::["{build-type}" == "product"]
+Podemos fazer isso automaticamente na criação do cluster usando uma combinação de https://rancher.github.io/cluster-api-addon-provider-fleet/[Cluster API Add-on Provider Fleet] e https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/how-tos-for-users/bundle-add.html[Fleet Bundle].
+endif::[]
+ifeval::["{build-type}" == "community"]
+Podemos fazer isso automaticamente na criação do cluster usando uma combinação de https://rancher.github.io/cluster-api-addon-provider-fleet/[Cluster API Add-on Provider Fleet] e https://fleet.rancher.io/bundle-add[Fleet Bundle].
+endif::[]
+O `+HelmOps+` precisa ser criado primeiro, para ser aplicado no novo Cluster por meio de seletores de rótulo. Isso cuidará da implantação do Calico.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
++
+O site `+Bundle+` cuidará da implantação do GCP Cloud Controller Manager. O motivo para não usar o provedor complementar Fleet é que https://github.com/kubernetes/cloud-provider-gcp[o] GCP não fornece um gráfico Helm, portanto, optamos por criar o recurso Fleet `+Bundle+` diretamente.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/gcp/bundle.yaml
+----
+=======
++
+* Crie o cluster do GCP a partir do exemplo ClusterClass
++ 
+Observe que algumas variáveis são deixadas para o usuário substituir.
+A configuração padrão do GCP Cloud Controller Manager está configurada para usar um cluster de zona única, portanto, a variável `+clusterFailureDomains+` está definida como uma zona única. Se precisar provisionar um cluster de várias zonas, recomendamos que você inspecione os parâmetros fornecidos pelo https://github.com/kubernetes/cloud-provider-gcp/blob/master/providers/gce/gce.go#L120[Cloud Controller Manager] GCP e como https://github.com/kubernetes-sigs/cluster-api-provider-gcp/blob/main/test/e2e/data/infrastructure-gcp/cluster-template-ci.yaml#L59[o] para criar configurações específicas do cluster.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cluster-api.cattle.io/rancher-auto-import: "true"
+    cni: calico
+    cloud-provider: gcp
+  name: gcp-quickstart
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: 
+      - 192.168.0.0/16
+  topology:
+    classRef:
+      name: gcp-kubeadm-example
+    controlPlane:
+      replicas: 1
+    workers:
+      machineDeployments:
+        - class: "default-worker"
+          name: "md-0"
+          replicas: 1
+    variables:
+      - name: gcpProject
+        value: <GCP_PROJECT>
+      - name: region
+        value: <GCP_REGION>
+      - name: gcpNetworkName
+        value: <GCP_NETWORK_NAME>
+      - name: clusterFailureDomains
+        value:
+          - "<GCP_REGION>-a"
+      - name: imageId
+        value: <GCP_IMAGE_ID>
+      - name: machineType
+        value: <GCP_MACHINE_TYPE>
+    version: v1.34.1
+----
+--
+
+Docker Kubeadm::
++
+--
+* Um Docker Kubeadm ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o https://docs.tigera.io/calico/latest/about/[Calico CNI] serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por meio de Clusters direcionados com rótulos específicos, como `+cni: calico+`.
++
+[tabs]
+=======
+CLI::
++
+Um Docker Kubeadm ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r docker-kubeadm | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o Docker Kubeadm ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/docker/kubeadm/clusterclass-docker-kubeadm.yaml
+----
+
+* Para este exemplo, também instalaremos o Calico como o CNI padrão.
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
+=======
+
+* Crie o Docker Kubeadm Cluster a partir do exemplo ClusterClass.
++
+Observe que algumas variáveis são deixadas para o usuário substituir.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: docker-kubeadm-quickstart
+  labels:
+    cni: calico
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    serviceDomain: cluster.local
+    services:
+      cidrBlocks:
+        - 10.96.0.0/24
+  topology:
+    classRef: 
+      name: docker-kubeadm-example
+    controlPlane:
+      replicas: 1
+    version: v1.35.0
+    workers:
+      machineDeployments:
+        - class: default-worker
+          name: md-0
+          replicas: 1
+----
+--
+
+Docker RKE2::
++
+--
+* Um Docker RKE2 ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o https://docs.tigera.io/calico/latest/about/[Calico CNI] serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por meio de Clusters direcionados com rótulos específicos, como `+cni: calico+`.
++
+[tabs]
+=======
+CLI::
++
+Um Docker RKE2 ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r docker-rke2 | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o Docker RKE2 ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/docker/rke2/clusterclass-docker-rke2.yaml
+----
+
+* Para este exemplo, também instalaremos o Calico como o CNI padrão.
++
+Podemos fazer isso automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
+
+* Crie o LoadBalancer ConfigMap para o cluster Docker RKEv2.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/lb/docker/configmap.yaml
+----
+=======
+
+* Crie o Docker Kubeadm Cluster a partir do exemplo ClusterClass.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster 
+metadata:
+  name: docker-rke2-example
+  labels:
+    cni: calico
+  annotations:
+    cluster-api.cattle.io/upstream-system-agent: "true"
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.0.0/24
+    serviceDomain: cluster.local
+  topology:
+    classRef: 
+      name: docker-rke2-example
+    controlPlane:
+      replicas: 1
+    variables:
+    - name: rke2CNI
+      value: none
+    - name: dockerImage
+      value: kindest/node:v1.35.0
+    version: v1.35.0+rke2r1
+    workers:
+      machineDeployments:
+      - class: default-worker
+        name: md-0
+        replicas: 1
+----
+--
+
+vSphere Kubeadm::
++
+--
+* Um vSphere ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o vSphere Cloud Provider, o driver vSphere CSI e o Calico CNI serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cloud-provider: vsphere+`, `+csi: vsphere+` e `+cni: calico+`.
++
+[tabs]
+=======
+CLI::
++
+Um vSphere Kubeadm ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r vsphere-kubeadm | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o vSphere Kubeadm ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/vsphere/kubeadm/clusterclass-kubeadm-example.yaml
+----
+
+* Além disso, o https://github.com/kubernetes/cloud-provider-vsphere[Cloud Provider] vSphere precisará ser instalado em cada cluster downstream, para que os nós sejam inicializados corretamente.
+O https://github.com/kubernetes-sigs/vsphere-csi-driver[driver] será usado como solução de armazenamento.
+Por fim, para este exemplo, instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
+Podemos instalar todos os aplicativos automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/vsphere/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
++
+Como o driver CSI do vSphere não está empacotado no Helm, incluiremos todo o seu manifesto em um Fleet Bundle, que será aplicado ao cluster downstream.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/csi/vsphere/bundle.yaml
+----
+=======
+
+* Configuração do cluster
++
+O vSphere Cloud Provider e o controlador vSphere CSI precisam de configuração adicional para serem aplicados no Cluster downstream.
+De forma semelhante às etapas acima, podemos criar dois Fleet Bundles adicionais, que serão aplicados ao cluster downstream.
+Lembre-se de que esses pacotes estão configurados para direcionar o cluster downstream pelo nome: `+vsphere-kubeadm-quickstart+`.
+Se você usar um nome diferente para o seu cluster, altere os destinos do pacote de acordo.
++
+[source,yaml]
+----
+kind: Bundle
+apiVersion: fleet.cattle.io/v1alpha1
+metadata:
+  name: vsphere-csi-config
+spec:
+  resources:
+  - content: |-
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: vsphere-config-secret
+        namespace: vmware-system-csi
+      stringData:
+        csi-vsphere.conf: |+
+          [Global]
+          thumbprint = "<VSPHERE_THUMBPRINT>"
+          [VirtualCenter "<VSPHERE_SERVER>"]
+          user = "<VSPHERE_USER>"
+          password = "<VSPHERE_PASSWORD>"
+          datacenters = "<VSPHERE_DATACENTED>"
+          [Network]
+          public-network = "<VSPHERE_NETWORK>"
+          [Labels]
+          zone = ""
+          region = ""
+  targets:
+  - clusterSelector:
+      matchLabels:
+        csi: vsphere
+        cluster.x-k8s.io/cluster-name: 'vsphere-kubeadm-quickstart'
+---
+kind: Bundle
+apiVersion: fleet.cattle.io/v1alpha1
+metadata:
+  name: vsphere-cloud-credentials
+spec:
+  resources:
+  - content: |-
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: vsphere-cloud-secret
+        namespace: kube-system
+      stringData:
+        <VSPHERE_SERVER>.password: "<VSPHERE_PASSWORD>"
+        <VSPHERE_SERVER>.username: "<VSPHERE_USER>"
+  targets:
+  - clusterSelector:
+      matchLabels:
+        cloud-provider: vsphere
+        cluster.x-k8s.io/cluster-name: 'vsphere-kubeadm-quickstart'
+----
+
+* Criar o vSphere Cluster a partir do exemplo ClusterClass
++
+Observe que, neste exemplo, estamos usando o https://kube-vip.io/[] kube-vip como balanceador de carga do plano de controle.
+O `+KUBE_VIP_INTERFACE+` será usado para vincular o `+CONTROL_PLANE_IP+` no modo ARP. Dependendo do seu sistema operacional e da configuração do dispositivo de rede, você precisa configurar esse valor de acordo - por exemplo, para `+eth0+`.
+O manifesto estático do `+kube-vip+` está incorporado na definição do ClusterClass. Para obter mais informações sobre como gerar um manifesto estático do kube-vip para suas próprias ClusterClasses, consulte a oficial https://kube-vip.io/docs/installation/static/[documentação].
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cni: calico
+    cloud-provider: vsphere
+    csi: vsphere
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: 'vsphere-kubeadm-quickstart'
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: vsphere-kubeadm-example
+    version: v1.35.0
+    controlPlane:
+      replicas: 3
+    workers:
+      machineDeployments:
+      - class: vsphere-kubeadm-example-worker
+        name: md-0
+        replicas: 1
+    variables:
+    - name: vSphereClusterIdentityName
+      value: cluster-identity
+    - name: vSphereTLSThumbprint
+      value: <VSPHERE_THUMBPRINT>
+    - name: vSphereDataCenter
+      value: <VSPHERE_DATACENTER>
+    - name: vSphereDataStore
+      value: <VSPHERE_DATASTORE>
+    - name: vSphereFolder
+      value: <VSPHERE_FOLDER>
+    - name: vSphereNetwork
+      value: <VSPHERE_NETWORK>
+    - name: vSphereResourcePool
+      value: <VSPHERE_RESOURCE_POOL>
+    - name: vSphereServer
+      value: <VSPHERE_SERVER>
+    - name: vSphereTemplate
+      value: <VSPHERE_TEMPLATE>
+    - name: controlPlaneIpAddr
+      value: <CONTROL_PLANE_IP>
+    - name: controlPlanePort
+      value: 6443
+    - name: sshKey
+      value: <SSH_KEY>
+    - name: kubeVIPInterface
+      value: <KUBE_VIP_INTERFACE>
+----
+--
+
+vSphere RKE2::
++
+--
+* Um vSphere ClusterClass pode ser encontrado entre os https://github.com/rancher/turtles/tree/main/examples/clusterclasses[exemplos do].
++
+Aplicativos como o vSphere Cloud Provider, o driver vSphere CSI e o Calico CNI serão instalados nos clusters downstream. Isso é feito automaticamente na criação do Cluster por Clusters direcionados com rótulos específicos, como `+cloud-provider: vsphere+`, `+csi: vsphere+` e `+cni: calico+`.
++
+[tabs]
+=======
+
+CLI::
++
+Um vSphere RKE2 ClusterClass e aplicativos associados podem ser aplicados usando a ferramenta de exemplos:
++
+[source,bash, subs="attributes"]
+----
+go run github.com/rancher/turtles/examples@{turtles_version} -r vsphere-rke2 | kubectl apply -f -
+----
+
+kubectl::
++
+* Como alternativa, você pode aplicar o vSphere RKE2 ClusterClass diretamente usando o kubectl:
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/clusterclasses/vsphere/rke2/clusterclass-rke2-example.yaml
+----
+
+* Além disso, o https://github.com/kubernetes/cloud-provider-vsphere[Cloud Provider] vSphere precisará ser instalado em cada cluster downstream, para que os nós sejam inicializados corretamente.
+O https://github.com/kubernetes-sigs/vsphere-csi-driver[driver] será usado como solução de armazenamento.
+Por fim, para este exemplo, instalaremos https://docs.tigera.io/calico/latest/about/[o] como o CNI padrão.
++
+Podemos instalar todos os aplicativos automaticamente na criação do cluster usando o https://rancher.github.io/cluster-api-addon-provider-fleet/[Fleet do provedor complementar da API do cluster].
+Dois `+HelmOps+` precisam ser criados primeiro, para serem aplicados no novo Cluster por meio de seletores de rótulo.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/ccm/vsphere/helm-chart.yaml
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/cni/calico/helm-chart.yaml
+----
++
+Como o driver CSI do vSphere não está empacotado no Helm, incluiremos todo o seu manifesto em um Fleet Bundle, que será aplicado ao cluster downstream.
++
+[source,bash, subs="attributes"]
+----
+kubectl apply -f https://raw.githubusercontent.com/rancher/turtles/refs/tags/{turtles_version}/examples/applications/csi/vsphere/bundle.yaml
+----
+=======
+
+* Configuração do cluster
++
+O vSphere Cloud Provider e o controlador vSphere CSI precisam de configuração adicional para serem aplicados no Cluster downstream.
+De forma semelhante às etapas acima, podemos criar dois Fleet Bundles adicionais, que serão aplicados ao cluster downstream.
+Lembre-se de que esses pacotes estão configurados para direcionar o cluster downstream pelo nome: `+vsphere-rke2-quickstart+`.
+Se você usar um nome diferente para o seu cluster, altere os destinos do pacote de acordo.
++
+[source,yaml]
+----
+kind: Bundle
+apiVersion: fleet.cattle.io/v1alpha1
+metadata:
+  name: vsphere-csi-config
+spec:
+  resources:
+  - content: |-
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: vsphere-config-secret
+        namespace: vmware-system-csi
+      stringData:
+        csi-vsphere.conf: |+
+          [Global]
+          thumbprint = "<VSPHERE_THUMBPRINT>"
+          [VirtualCenter "<VSPHERE_SERVER>"]
+          user = "<VSPHERE_USER>"
+          password = "<VSPHERE_PASSWORD>"
+          datacenters = "<VSPHERE_DATACENTED>"
+          [Network]
+          public-network = "<VSPHERE_NETWORK>"
+          [Labels]
+          zone = ""
+          region = ""
+  targets:
+  - clusterSelector:
+      matchLabels:
+        csi: vsphere
+        cluster.x-k8s.io/cluster-name: 'vsphere-rke2-quickstart'
+---
+kind: Bundle
+apiVersion: fleet.cattle.io/v1alpha1
+metadata:
+  name: vsphere-cloud-credentials
+spec:
+  resources:
+  - content: |-
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: vsphere-cloud-secret
+        namespace: kube-system
+      stringData:
+        <VSPHERE_SERVER>.password: "<VSPHERE_PASSWORD>"
+        <VSPHERE_SERVER>.username: "<VSPHERE_USER>"
+  targets:
+  - clusterSelector:
+      matchLabels:
+        cloud-provider: vsphere
+        cluster.x-k8s.io/cluster-name: 'vsphere-rke2-quickstart'
+----
+
+* Criar o vSphere Cluster a partir do exemplo ClusterClass
++
+Observe que, neste exemplo, estamos usando o https://kube-vip.io/[] kube-vip como balanceador de carga do plano de controle.
+O `+KUBE_VIP_INTERFACE+` será usado para vincular o `+CONTROL_PLANE_IP+` no modo ARP. Dependendo do seu sistema operacional e da configuração do dispositivo de rede, você precisa configurar esse valor de acordo - por exemplo, para `+eth0+`.
+O manifesto estático do `+kube-vip+` está incorporado na definição do ClusterClass. Para obter mais informações sobre como gerar um manifesto estático do kube-vip para suas próprias ClusterClasses, consulte a oficial https://kube-vip.io/docs/installation/static/[documentação].
+Caso esteja usando um modelo de VM baseado no SUSE Linux Micro, você pode, opcionalmente, fornecer uma variável `+productKey+` para ativar o registro automático do SL Micro no SUSE Customer Center.
++
+[source,yaml]
+----
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  labels:
+    cni: calico
+    cloud-provider: vsphere
+    csi: vsphere
+    cluster-api.cattle.io/rancher-auto-import: "true"
+  name: 'vsphere-rke2-quickstart'
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  topology:
+    classRef: 
+      name: vsphere-rke2-example
+    version: v1.35.0+rke2r1
+    controlPlane:
+      replicas: 3
+    workers:
+      machineDeployments:
+      - class: vsphere-rke2-example-worker
+        name: md-0
+        replicas: 1
+    variables:
+    - name: vSphereClusterIdentityName
+      value: cluster-identity
+    - name: vSphereTLSThumbprint
+      value: <VSPHERE_THUMBPRINT>
+    - name: vSphereDataCenter
+      value: <VSPHERE_DATACENTER>
+    - name: vSphereDataStore
+      value: <VSPHERE_DATASTORE>
+    - name: vSphereFolder
+      value: <VSPHERE_FOLDER>
+    - name: vSphereNetwork
+      value: <VSPHERE_NETWORK>
+    - name: vSphereResourcePool
+      value: <VSPHERE_RESOURCE_POOL>
+    - name: vSphereServer
+      value: <VSPHERE_SERVER>
+    - name: vSphereTemplate
+      value: <VSPHERE_TEMPLATE>
+    - name: controlPlaneIpAddr
+      value: <CONTROL_PLANE_IP>
+    - name: controlPlanePort
+      value: 6443
+    - name: sshKey
+      value: <SSH_KEY>
+    - name: kubeVIPInterface
+      value: <KUBE_VIP_INTERFACE>
+    - name: productKey
+      value: <SL_MICRO_PRODUCT_KEY>
+----
+--
+======
