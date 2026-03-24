@@ -1,0 +1,265 @@
+include::partial$variables.adoc[]
+
+= Installation d'une lame d'air
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurez un registre privé avec des images et des stratégies {project-name} pour installer {project-name} dans un environnement à air comprimé.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["opérateur-manuel", "vide d'air", "installation"].
+:doc-type: ["howto"]
+:keywords: ["{project-name}", " kubewarden ", " kubernetes ", " air gap installation "].
+:current-version: {page-origin-branch}
+
+Pour une installation air-gapped de {project-name}, vous avez besoin d'un registre privé de l'Open Container Initiative (OCI) accessible par votre cluster Kubernetes.
+{short-project-name} Les politiques sont des modules WebAssembly, vous pouvez donc les stocker dans un registre conforme à l'OCI en tant qu'artefacts OCI. Vous devez ajouter les images et les politiques de{short-project-name}à ce registre OCI. Vous pouvez consulter la liste des artefacts {short-project-name} sur la page dexref:/reference/artifacts.adoc[référence des artefacts]. Les sections suivantes décrivent le processus.
+
+[NOTE]
+====
+Nous recommandons d'utiliser link:https://docs.hauler.dev/docs/intro[Hauler].
+Voir notre xref:/howtos/airgap/03-hauler.adoc[page de documentation sur les transporteurs].
+
+Vous pouvez également utiliser la procédure manuelle décrite ci-dessous.
+====
+
+
+== Sauvegarder localement les cartes du Helm
+
+Vous devez télécharger les diagrammes de barre suivants sur votre poste de travail :
+
+[,console]
+----
+helm pull kubewarden/kubewarden-crds
+helm pull kubewarden/kubewarden-controller
+helm pull kubewarden/kubewarden-defaults
+helm pull kubewarden/sbomscanner
+----
+
+[NOTE]
+====
+En option, vous pouvez vérifier les signatures desxref:/tutorials/verifying-kubewarden.adoc#_helm_charts[diagrammes de barre] et desxref:/tutorials/verifying-kubewarden.adoc#_container_images[images de conteneur].
+====
+
+== Sauvegarder localement les images des conteneurs
+
+. Chacun de nos diagrammes Helm contient un `+imagelist.txt+` avec les images de conteneurs qu'il consomme et, le cas échéant, un `+policylist.txt+` avec les modules OCI Wasm des politiques qu'il consomme également.
++
+Pour les obtenir, vous pouvez faire :
++
+[,console]
+----
+helm pull --untar \
+  kubewarden/kubewarden-crds \
+  kubewarden/kubewarden-controller \
+  kubewarden/kubewarden-defaults \
+  kubewarden/sbomscanner
+----
++
+Puis les concaténer en un seul fichier :
++
+[,console]
+----
+cat */imagelist.txt > kubewarden-images.txt
+----
+
+. Téléchargez `+kubewarden-save-images.sh+` et `+kubewarden-load-images.sh+` à partir du https://github.com/kubewarden/utils[dépôt d'utilitaires].
+. Enregistrer les images des conteneurs {short-project-name} dans un fichier `+.tar.gz+`:
++
+[,shell]
+----
+ ./kubewarden-save-images.sh \
+   --image-list ./kubewarden-images.txt \
+   --images kubewarden-images.tar.gz
+----
++
+Docker commence à extraire les images utilisées pour l'installation d'un trou d'air. Ce processus peut prendre quelques minutes. Une fois l'opération terminée, votre répertoire courant, où vous avez exécuté la commande, contient une archive, `+kubewarden-images.tar.gz+`.
+
+== Sauvegarder les politiques au niveau local
+
+. Ajoutez toutes les politiques que vous souhaitez utiliser à un fichier `+policies.txt+`:
++
+[,console]
+----
+cat */policylist.txt > policies.txt
+----
++
+Un fichier contenant une liste de politiques par défaut se trouve dans la {short-project-name} defaultshttps://github.com/kubewarden/helm-charts/releases/[page de publication].
+
+. Téléchargez `+kubewarden-save-policies.sh+` et `+kubewarden-load-policies.sh+` à partir du https://github.com/kubewarden/kubewarden-controller/blob/main/scripts[dépôt]
+
+. Enregistrer les politiques dans un fichier `+.tar.gz+`:
++
+[,shell]
+----
+./kubewarden-save-policies.sh --policies-list policies.txt
+----
++
+Utilisez `+kwctl+` pour télécharger les politiques. L'archive `+kubewarden-policies.tar.gz+`contient les politiques.
+
+== Tableaux de bord
+
+Vous devez télécharger les diagrammes de barre suivants sur votre poste de travail :
+
+[,shell]
+----
+helm pull kubewarden/kubewarden-crds
+helm pull kubewarden/kubewarden-controller
+helm pull kubewarden/kubewarden-defaults
+----
+
+== Alimentation du registre privé
+
+Déplacer ces fichiers dans l'environnement de l'intervalle d'air :
+
+* Cartes de barre au format `+tgz+` (par exemple, `+kubewarden-crds-1.23.0.tgz+`)
+* `+kubewarden-policies.tar.gz+`,
+* `+kubewarden-images.tar.gz+`,
+* `+kubewarden-load-images.sh+`,
+* `+kubewarden-load-policies.sh+` et
+* `+policies.txt+`
+
+. Charger les images {short-project-name} dans le registre privé. Vous devez authentifier le client Docker par rapport au registre local.
++
+[,shell]
+----
+ ./kubewarden-load-images.sh \
+   --image-list ./kubewarden-images.txt \
+   --images kubewarden-images.tar.gz \
+   --registry <REGISTRY.YOURDOMAIN.COM:PORT>
+----
+
+. Charger les politiques {short-project-name} dans le registre privé. Vous devez authentifier `+kwctl+` dans le registre local (`+kwctl+` utilise le même mécanisme d'authentification que `+docker+`, un fichier `+~/.docker/config.json+` ).
++
+[,shell]
+----
+ ./kubewarden-load-policies.sh \
+   --policies-list policies.txt \
+   --policies kubewarden-policies.tar.gz \
+   --registry <REGISTRY.YOURDOMAIN.COM:PORT> \
+   --sources-path sources.yml
+----
+
+[CAUTION]
+====
+
+La commande `+kwctl+` a besoin du fichier `+sources.yaml+` pour se connecter aux registres de ces catégories :
+
+* L'authentification est requise
+* Un certificat auto-signé est utilisé
+* Aucune terminaison TLS n'est effectuée
+
+Reportez-vous à la xref:howtos/custom-certificate-authorities.adoc[section sur les autorités de certification personnalisées] dans la documentation pour en savoir plus sur la configuration du fichier `+sources.yaml+`.
+
+====
+
+
+== Installer {short-project-name}
+
+Maintenant que votre registre privé a tout ce qu'il faut, vous pouvez installer{short-project-name}. La seule différence avec une installation standard de {short-project-name} est que vous devez modifier le registre dans les images de conteneurs et les stratégies pour qu'il s'agisse du registre privé.
+
+Installez la pile {short-project-name}:
+
+[,shell]
+----
+helm install --wait -n kubewarden \
+  kubewarden-crds kubewarden-crds.tgz
+----
+
+[,shell]
+----
+helm install --wait -n kubewarden \
+  kubewarden-controller kubewarden-controller.tgz \
+  --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT>
+----
+
+[CAUTION]
+====
+
+Pour utiliser le sous-graphe Policy Reporter disponible sur le site `+kubewarden-controller+`, vous devez définir d'autres valeurs spécifiques pour le sous-graphe dans un environnement à air comprimé. Un exemple est donné ci-dessous :
+
+[,shell]
+----
+helm install --wait -n kubewarden kubewarden-controller kubewarden-controller.tgz \
+    --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set auditScanner.policyReporter=true \
+    --set policy-reporter.image.registry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set policy-reporter.ui.image.registry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+    --set policy-reporter.image.repository=kyverno/policy-reporter \
+    --set policy-reporter.ui.image.repository=kyverno/policy-reporter-ui
+----
+
+Il est nécessaire de définir `+auditScanner.policyReporter+` pour activer le sous-graphe et 4 autres valeurs, pour configurer le registre et le référentiel où vous stockez les images de Policy Reporter. Pour plus d'informations sur les valeurs de la sous-carte du rapport de politique, consultez le sitehttps://github.com/kyverno/policy-reporter/tree/policy-reporter-2.19.4/charts/policy-reporter[Policy Reporter documentation].
+
+====
+
+
+[,shell]
+----
+helm install --wait -n kubewarden \
+  kubewarden-defaults kubewarden-defaults.tgz \
+  --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT>
+----
+
+[CAUTION]
+====
+
+Pour télécharger les stratégies recommandées installées par `+kubewarden-defaults+`Helm Chart à partir d'un registre autre que `+global.cattle.systemDefaultRegistry+`, utilisez la configuration `+recommendedPolicies.defaultPoliciesRegistry+`.
+Cette configuration permet aux utilisateurs de spécifier un registre dédié à l'extraction des artefacts OCI des politiques. Il est particulièrement utile lorsque leur référentiel d'images de conteneurs ne prend pas en charge les artefacts OCI.
+
+Pour procéder à l'installation et attendre qu'elle soit terminée, utilisez la commande suivante :
+
+[,console]
+----
+helm install --wait -n kubewarden \
+  kubewarden-defaults kubewarden-defaults.tgz \
+  --set global.cattle.systemDefaultRegistry=<REGISTRY.YOURDOMAIN.COM:PORT> \
+  --set recommendedPolicies.defaultPoliciesRegistry=<REGISTRY.YOURDOMAIN.COM:PORT>
+----
+
+Si la configuration `+recommendedPolicies.defaultPoliciesRegistry+` n'est pas définie, la configuration `+global.cattle.systemDefaultRegistry+` est utilisée comme registre par défaut.
+
+====
+
+
+Enfin, vous devez configurer Policy Server pour qu'il récupère les stratégies de votre registre privé. Reportez-vous à la section de la documentation relativexref:howtos/policy-servers/02-private-registry.adoc[à l'utilisation du registre privé].
+
+Vous pouvez maintenant créer des politiques {short-project-name} dans votre cluster. Les politiques doivent être disponibles dans votre registre privé.
+
+[,console]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: privileged-pods
+spec:
+  module: registry://<REGISTRY.YOURDOMAIN.COM:PORT>/kubewarden/policies/pod-privileged:v0.2.2
+  rules:
+  - apiGroups: [""]
+    apiVersions: [“v1”]
+    resources: [“pods”]
+    operations:
+    - CREATE
+  mutating: false
+EOF
+----
+
+[CAUTION]
+====
+
+`+PolicyServer+` doivent utiliser l'image disponible dans votre registre privé.
+Par exemple :
+
+[,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: reserved-instance-for-tenant-a
+spec:
+  image: <REGISTRY.YOURDOMAIN.COM:PORT>/kubewarden/policy-server:v1.3.0
+  replicas: 2
+  serviceAccountName: sa
+----
+
+====
+
