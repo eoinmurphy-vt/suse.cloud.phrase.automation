@@ -1,0 +1,53 @@
+= 如何为 Raspberry Pi 制作原始磁盘映像
+:revdate: 2024-09-24
+:page-revdate: {revdate}
+
+本指南将介绍如何创建原始磁盘镜像，将其写入 SD 卡并启动，而无需任何其他安装介质。
+
+[CAUTION]
+====
+SD 卡上的任何数据都将被清除，请只使用没有重要内容的 SD 卡。
+
+SD 卡的容量必须相当大（32 GB 或以上），*速度*必须相当*快*（！！）。
+====
+
+.种子图像资源
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  type: raw
+  baseImage: registry.opensuse.org/isv/rancher/elemental/staging/containers/suse/sl-micro/6.0/baremetal-os-container:latest
+  targetPlatform: linux/arm64
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+检查使用的构建 pod 的日志：
+
+[,shell]
+----
+kubectl logs -n fleet-default fire-img -f -c build
+----
+
+构建完成后，我们可以使用 wget 下载镜像文件：
+
+[,shell]
+----
+wget --no-check-certificate $(kubectl get seedimage -n fleet-default fire-img -o jsonpath="{.status.downloadURL}") -O sle-micro.arm64.raw
+----
+
+现在，我们可以将`+.raw+` 映像写入 SD 卡。`+dd+`https://www.opensuse.org[openSUSE]有很好的说明，介绍如何将镜像写入 Linux、https://en.opensuse.org/SDB:Live_USB_stick[Windows]https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_Windows[OS X] 和https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_macOS[] 的存储介质。
+
+== 启动机器
+
+原始磁盘镜像只包括 EFI 分区、OEM 分区和恢复分区。首次启动时，系统将进入恢复系统，以扩展和添加缺失的分区。扩展后，它将注册 rancher 并重新启动。
+
+如果在注册阶段出现错误，可使用`+journalctl -u elemental-register-reset+` 查找日志。
