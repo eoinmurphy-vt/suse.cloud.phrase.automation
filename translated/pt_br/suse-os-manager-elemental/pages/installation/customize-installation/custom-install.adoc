@@ -1,0 +1,156 @@
+= Personalizar a instalação do {elemental-product-name} 
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} As imagens do sistema operacional instalado (Elemental) podem ser personalizadas de diferentes maneiras.
+
+Uma opção é remasterizar as imagens do sistema operacional do contêiner simplesmente usando uma compilação do docker. As imagens do SL Micro são imagens de contêineres regulares, portanto, é absolutamente possível criar uma nova imagem usando um Dockerfile baseado no SLE Micro. Consulte a seção xref:operator-operational-tasks/custom-images.adoc[Criar imagens personalizadas do sistema operacional] para obter mais detalhes; essa é a opção preferida.
+
+Como alternativa, também é possível fornecer recursos e configurações adicionais na mídia de instalação para que, durante a instalação ou, eventualmente, no momento da inicialização, possam ser incluídos binários adicionais, como drivers ou arquivos de configuração extras.
+
+Esta seção se concentra em como personalizar o processo de instalação de uma determinada imagem do sistema operacional.
+
+== Opções de personalização
+
+A instalação do Elemental pode ser personalizada de três maneiras diferentes e não exclusivas. Primeiro, incluindo arquivos adicionais de configuração de nuvem no sistema instalado, segundo, incluindo arquivos adicionais de configuração de nuvem na mídia de instalação e, por fim, adicionando um arquivo de configuração de cliente personalizado do Elemental (`+/etc/elemental/config.yaml+`).
+
+. Os arquivos adicionais de configuração de nuvem incluídos no sistema instalado são úteis para executar operações personalizadas no momento da inicialização. Consulte a xref:references/cloud-config-reference.adoc[Referência de configuração da nuvem].
+
+. Os arquivos adicionais de configuração de nuvem na mídia de instalação são úteis para executar operações personalizadas no momento da instalação ou para personalizar o ambiente de instalação para atender a determinadas necessidades específicas.
+
+. Um arquivo de configuração de cliente personalizado do Elemental está, por padrão, localizado em `+/etc/elemental/config.yaml+` e também pode ser dividido em vários arquivos yaml no diretório `+/etc/elemental/config.d+`. Consulte a https://rancher.github.io/elemental-toolkit/docs/customizing/general_configuration/[referência do arquivo de configuração].
+
+Um padrão comum é combinar as três formas descritas acima, dependendo das necessidades específicas.
+
+=== Adição de arquivos adicionais de configuração de nuvem no sistema operacional instalado
+
+Para incluir arquivos adicionais de configuração de nuvem durante a instalação, eles precisam ser adicionados aos dados de instalação no recurso MachineRegistration. A maneira mais simples de conseguir isso é adicionar a configuração de nuvem desejada diretamente como parte da xref:references/machineregistration-reference.adoc#_config_cloud_config[seção dedicada] MachineRegistration. Veja o exemplo abaixo
+
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  ...
+  config:
+    ...
+    cloud-config:
+      stages:
+        boot:
+        - name: "Adding 'admin' user"
+          users:
+            admin:
+              passwd: mysecretpasswd
+----
+
+Como alternativa, o caminho dos arquivos de configuração da nuvem também pode ser referenciado explicitamente para que a configuração não seja estritamente necessária para residir no próprio recurso MachineRegistration. A seção `+config-urls+` do MachineRegistration é usada exatamente para essa finalidade. Consulte a página xref:references/machineregistration-reference.adoc[de referência MachineRegistration].
+
+`+config-urls+` é uma lista de literais de string em que cada item é um URL HTTP ou um caminho local que aponta para um arquivo de configuração de nuvem. O caminho local é avaliado durante a instalação, portanto, ele deve existir na mídia de instalação, geralmente uma imagem ISO.
+
+Por padrão, os sistemas Elemental live montam a raiz ISO em `+/run/initramfs/live+`, que também é o caminho padrão definido para `+config-url+` em `+MachineRegistrations+`. Veja o exemplo abaixo:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  ...
+  config:
+    ...
+    elemental:
+      ...
+      install:
+        ...
+        config-urls:
+        - "/run/initramfs/live/oem/custom_config.yaml"
+----
+
+Os ISOs live elementares, quando inicializados, têm a raiz do ISO montada em `+/run/initramfs/live+`. De acordo com isso, espera-se que a ISO do exemplo acima inclua o arquivo `+/oem/custom_config.yaml+`.
+
+[NOTE]
+====
+`+/run/initramfs/live+` é um ponto de montagem somente leitura e não é um caminho apropriado para conteúdo gerado dinamicamente na inicialização do ISO.
+====
+
+=== Adição de arquivos adicionais de configuração de nuvem na mídia de instalação
+
+A adição de arquivos adicionais de configuração de nuvem na mídia de instalação pode ser necessária para configurar o ambiente de instalação (por exemplo, definir a conectividade de rede para registro) ou para fornecer alguns xref:references/cloud-config-reference.adoc#_elemental_client_cloud_config_hooks[ganchos de instalação] para executar a lógica personalizada durante a própria instalação.
+
+No Elemental, os recursos xref:references/seedimage-reference.adoc[SeedImage] são os responsáveis por lidar com a mídia de instalação. Portanto, o lugar mais simples para incluir dados adicionais de configuração de nuvem é na mídia de instalação, adicionando-os à xref:references/seedimage-reference.adoc#_seedimagespec_reference[seção`+cloud-config+` ]. Ao fazer isso, a configuração de nuvem fornecida já será avaliada desde a primeira inicialização da mídia de instalação e também será honrada durante a fase de instalação, caso seja fornecido algum gancho de instalação. Considere o exemplo a seguir:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: custom-seed
+  namespace: fleet-default
+spec:
+  ...
+  cloud-config:
+    stages:
+      post-install:
+      - name: "Run custom script after installation"
+        commands:
+        - |
+          echo "This is a custom script"
+          echo "For instance, this could be used to handle extra drives for an LVM group"
+      boot:
+      - name: "Add proxy setup for the installation media"
+        files:
+        - path: /etc/sysconfig/proxy
+          permissions: 0664
+          content: |
+            PROXY_ENABLED="yes"
+            HTTP_PROXY=http://<MY_PROXY>:<MY_PORT>
+            HTTPS_PROXY=https://<MY_PROXY>:<MY_PORT>
+            NO_PROXY="localhost, 127.0.0.1"
+----
+
+=== Arquivo de configuração personalizado do cliente {elemental-product-name} 
+
+https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental.md[do cliente elementar]Os comandos  `+install+`, `+upgrade+` e `+reset+` podem ser configurados com um https://rancher.github.io/elemental-toolkit/docs/customizing/general_configuration/[arquivo de configuração personalizado] localizado, por padrão, em `+/etc/elemental/config.yaml+`. Se você tiver vários arquivos yaml, precisará adicioná-los ao diretório `+/etc/elemental/config.d+`.
+
+O exemplo a seguir define uma partição extra adicional durante a instalação:
+
+[,yaml]
+----
+install:
+  extra-partitions:
+  - size: 10240
+    fs: ext4
+    label: EXTRA_PARTITION
+----
+
+Para torná-lo disponível no momento da instalação, isso pode ser feito adicionando o arquivo extra como parte da configuração de nuvem do recurso SeedImage, conforme descrito na seção anterior desta página. Considere o exemplo:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: custom-seed
+  namespace: fleet-default
+spec:
+  ...
+  cloud-config:
+    stages:
+      boot:
+      - name: "Add Elemental client configuration file"
+        files:
+        - path: /etc/elemental/config.d/extra-partition.yaml
+          permissions: 0664
+          content: |
+            install:
+              extra-partitions:
+              - size: 10240
+                fs: ext4
+                label: EXTRA_PARTITION
+----
