@@ -1,0 +1,98 @@
+= SUSE Observability 集群性能测试
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 概述
+
+本页提供了一种对运行中的群集进行剖析的方法，以验证其性能是否符合预期。当遇到性能下降时，可使用此功能主动调查多个部件的性能如何。这是xref:/setup/install-stackstate/support-package-logs.adoc[支持软件包（日志）]收集器的新增功能，用于收集一般日志。
+
+== 说明
+
+该脚本应在已配置 kubectl 并可访问{stackstate-product-name} 集群的主机上执行，或在具有必要权限并可连接到集群的任何其他主机上执行。
+这可以直接在主机上使用 root 用户或通过 sudo 完成。如果未设置 kubeconfig，请使用命令`+export KUBECONFIG=$PATH-TO-YOUR/kubeconfig+` 。
+
+== 使用方法
+
+需要下载该脚本，并使用`+root+` 用户或`+sudo+` 直接在主机上运行。
+
+=== 下载并运行脚本
+
+下载xref::attachment$suse-observability_performance_collector.sh[suse-observability_performance_collector.sh]脚本。
+
+* 将脚本另存为 `+suse-observability_performance_collector.sh+`
+* 使用以下命令运行脚本
++
+[,bash]
+----
+bash suse-observability_performance_collector.sh
+----
++
+这将在当前目录下生成一个名为`+suse-observability_performance_<date>.tar.gz+` 的文件。将此文件上传到案例中。
+
+可以指定其他参数。例如，选择不同的命名空间：
+[,bash]
+----
+> bash suse-observability_performance_collector.sh -h
+SUSE Observability performance measurement tool.
+Runs some rudimentary performance tests on a deployed instance to validate performance.
+
+Usage: $0 [options] [<namespace>]
+
+options:
+  -h  Print this help
+
+<namespace>:
+  The namespace that is running SUSE Observability, or
+  "suse-observability" when not specified
+----
+
+== 参考性能
+
+以下是我们用来作为系统性能参考的输出结果，我们也用它来调整自己的配置文件。客户磁盘和速度应接近这些数字。
+
+----
+=== SUSE Observability Performance Summary ===
+Date: 2026-03-09T09:46:18Z
+
+--- Hdfs Disk Buffered ---
+  suse-observability-hbase-hdfs-dn-0                           151 MB/s
+  suse-observability-hbase-hdfs-dn-1                           150 MB/s
+  suse-observability-hbase-hdfs-dn-2                           150 MB/s
+
+--- Hdfs Disk Direct ---
+  suse-observability-hbase-hdfs-dn-0                           58.3 MB/s
+  suse-observability-hbase-hdfs-dn-1                           56.6 MB/s
+  suse-observability-hbase-hdfs-dn-2                           56.7 MB/s
+
+--- Kafka Disk Buffered ---
+  suse-observability-kafka-0                                   173 MB/s
+  suse-observability-kafka-1                                   142 MB/s
+  suse-observability-kafka-2                                   143 MB/s
+
+--- Kafka Disk Direct ---
+  suse-observability-kafka-0                                   59.2 MB/s
+  suse-observability-kafka-1                                   59.2 MB/s
+  suse-observability-kafka-2                                   59.4 MB/s
+
+--- Kafka Producer Local ---
+  suse-observability-kafka-0                                   50241.157556 records/sec (49.06 MB/sec), 557.44 ms avg latency
+  suse-observability-kafka-1                                   31422.825540 records/sec (30.69 MB/sec), 903.49 ms avg latency
+  suse-observability-kafka-2                                   31703.760066 records/sec (30.96 MB/sec), 893.00 ms avg latency
+
+--- Kafka Producer Remote ---
+  suse-observability-kafka-0                                   59765.718384 records/sec (58.36 MB/sec), 453.19 ms avg latency
+  suse-observability-kafka-1                                   54656.755575 records/sec (53.38 MB/sec), 500.53 ms avg latency
+  suse-observability-kafka-2                                   39503.831872 records/sec (38.58 MB/sec), 703.39 ms avg latency
+
+--- Hdfs Network ---
+  suse-observability-hbase-hdfs-dn-0 -> suse-observability-hbase-hdfs-dn-1 571 MB/s
+  suse-observability-hbase-hdfs-dn-1 -> suse-observability-hbase-hdfs-dn-2 524 MB/s
+  suse-observability-hbase-hdfs-dn-2 -> suse-observability-hbase-hdfs-dn-0 597 MB/s
+----
+
+澄清：
+
+- 缓冲 IO 与原始磁盘吞吐量有关，允许数据在内核中缓冲
+- 直接磁盘使用 O_DIRECT（不允许缓冲）测量磁盘吞吐量，这更接近于我们使用 fsync() 的数据库，并能深入了解底层存储的延迟情况
+- Kafka Producer 本地版通过本地主机将数据放入 kafka，远程版则通过网络。当 CPU 而不是网络成为瓶颈时，远程可能比本地更快（这里就是这种情况，因此远程效率更高）。
