@@ -1,0 +1,104 @@
+= 在庫管理
+:revdate: 2025-08-15
+:page-revdate: {revdate}
+
+{elemental-product-name} オペレータは、マシンのインベントリと、マシンの構成および割り当てられたクラスタへのマッピングを保持することができます。
+
+== MachineInventory
+
+`+MachineInventory+` は、登録されたマシンのすべての関連情報を保持している。 +
+登録に成功すると、`+MachineInventory+` は、関連する`+MachineRegistration+` で定義されたすべての`+machineInventoryLabels+` を継承する。 +
+さらに、登録が成功するたびにマシン`+annotations+` も更新される。
+
+デフォルトでは、{elemental-product-name} マシンは、ラベルと注釈を更新するために、24時間ごとに登録更新を試みます。
+
+=== 参考
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineInventory
+metadata:
+  # Machine annotations can be useful to identify hosts
+  annotations:
+    elemental.cattle.io/auth: tpm
+    elemental.cattle.io/registration-ip: 192.168.122.152
+  labels:
+    # A label inherited from the MachineRegistration definition
+    element: fire
+    # Generic SMBIOS labels that are typically populated with
+    # the MachineRegister approach
+    machineUUID: f266c64b-3972-40e7-9937-3dc4a311436c
+    manufacturer: QEMU
+    productName: Standard-PC-Q35-ICH9-2009
+    serialNumber: Not-Specified
+    # Custom labels can be applied to each MachineInventory
+    myCustomLabel: foo
+  name: m-479ab68e-00ff-4081-a731-5b1a76610289
+  # The namespace must match the namespace of the cluster
+  # assigned to the clusters.provisioning.cattle.io resource
+  namespace: fleet-default
+  # A reference to the MachineInventorySelector that links the
+  # machine to a Cluster definition
+  ownerReferences:
+  - apiVersion: elemental.cattle.io/v1beta1
+    controller: true
+    kind: MachineInventorySelector
+    name: fire-machine-selector-qcn7d
+    uid: 0a1f751e-4ca9-4a0d-919a-97ba1f434d12
+spec:
+  # The hash of the TPM EK public key. This is used if you are
+  # using TPM2 to identify nodes. Nodes can report their TPM
+  # hash by using the MachineRegistration.
+  tpmHash: d68795c6192af9922692f050b...
+----
+
+== マシン登録
+
+`+MachineRegistration+` 接続されているすべての{elemental-product-name} マシンのインストール、リセット、および設定方法に関する情報を保持します。
+
+`+spec.machineInventoryLabels+` 、`+spec.machineInventoryAnnotations+` 、登録されているすべてのマシンに適用されます。
+デフォルトでは、{elemental-product-name} マシンは、ラベルと注釈を更新するために、24時間ごとに登録更新を試みます。
+
+`+spec.config+` の定義を変更することは可能だが、`+spec.config+` へのアップデートは、すでにインストールが完了したマシンでは無視される。
+インストールを完了できなかったマシンは、リモート`+MachineRegistration+` 定義を再読み込みすることで、30 分ごとに再試行します。これは、`+MachineRegistration+` や新しい ISO を作成することなく、インストー ルが成功しないような`+spec.config+` の間違いを修正するのに便利です(例:`+spec.config.elemental.install.device+`)。
+
+=== 参考
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  # The namespace must match the namespace of the cluster
+  # assigned to the clusters.provisioning.cattle.io resource
+  namespace: fleet-default
+spec:
+  # The cloud config that will be used to provision the node
+  config:
+    cloud-config:
+      users:
+        - name: root
+          passwd: root
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+      reset:
+        enabled: true
+        debug: true
+        reset-persistent: true
+        reset-oem: true
+        reboot: true
+  # Labels to be added to the created MachineInventory object
+  machineInventoryLabels:
+    element: fire
+    manufacturer: "${System Information/Manufacturer}"
+    productName: "${System Information/Product Name}"
+    serialNumber: "${System Information/Serial Number}"
+    machineUUID: "${System Information/UUID}"
+  # Annotations to be added to the created MachineInventory object
+  machineInventoryAnnotations: {}
+----
