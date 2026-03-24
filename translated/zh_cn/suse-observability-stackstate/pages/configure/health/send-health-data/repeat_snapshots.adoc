@@ -1,0 +1,117 @@
+= 重复快照
+:revdate: 2025-10-27
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 概述
+
+本页描述了健康同步 Repeat Snapshots 一致性模型可发送的确切 JSON 消息。
+
+== JSON 属性："健康"
+
+健康状况可通过xref:/configure/health/send-health-data/send-health-data.adoc#_common_json_object[通用 JSON 对象]的`+"health"+` 属性发送到 SUSE Observability Receiver API。
+
+[tabs]
+====
+健康`+repeat_snapshots+` JSON 示例::
++
+--
+[,javascript]
+----
+{
+   "apiKey":"<STACKSTATE_RECEIVER_API_KEY>",
+   "collection_timestamp":1585818978,
+   "internalHostname":"lnx-343242.srv.stackstate.com",
+   "health":[
+      {
+        "consistency_model": "REPEAT_SNAPSHOTS",
+        "start_snapshot": {
+          "repeat_interval_s": 50
+          //"expiry_interval_s": 200 Optional
+        },
+        "stop_snapshot": {},
+        "stream": {
+          "urn": "urn:health:sourceId:streamId"
+          //"sub_stream_id": "subStreamId" Optional
+        },
+        "check_states": [
+          {
+            "checkStateId": "checkStateId1",
+            "message": "Server Running out of disk space",
+            "health": "Deviating",
+            "topologyElementIdentifier": "server-1",
+            "name": "Disk Usage"
+          },
+          {
+            "checkStateId": "checkStateId2",
+            "message": "Provisioning failed. [Learn more](https://www.any-link.com)",
+            "health": "critical",
+            "topologyElementIdentifier": "server-2",
+            "name": "Health monitor"
+          }
+        ]
+      }
+   ]
+}
+----
+--
+====
+
+每个健康状况重复快照数据有效载荷都有以下详细信息：
+
+* *start_snapshot*- 可选。在处理`+check_states+` 之前，需要先处理快照的起始位置。这样，SUSE Observability 就能将流快照与之前收到的快照进行差异，并删除快照中不再存在的校验状态。它包含以下作为快照元数据的字段：
+ ** *repeat_interval_s*- 以秒为单位的时间。外部源向 SUSE Observability 发送健康数据的频率。最大允许值为 1800（30 分钟）。
+ ** *expiry_interval_s*- 时间（秒）。SUSE Observability 删除外部检查前最后一次更新后的等待时间。使用子数据流时需要。
+* *stop_snapshot*- 可选。快照结束将在处理``+``check_states+后进行。
+* *stream*- 提供有关快照和`+check_states+` 属于一起的标识的对象。它有以下字段：
+ ** *urn*- 以 SUSE Observabilityxref:/configure/topology/identifiers.adoc[URN]编码的数据源和数据流 ID，符合以下约定：`+urn:health:<sourceId>:<streamId>+` ，其中`+<sourceId>+` 是外部数据源的名称，`+<streamId>+` 是健康数据流的唯一标识符。
+ ** *sub_stream_id*- 可选。数据流健康数据子集的标识符。当流数据由多个代理分发和报告时，这就允许每个代理的快照生命周期都是相同的。 `+sub_stream_id+`
+* *check_states*- 校验状态列表。每个检查状态都可以有以下字段：
+ ** *checkStateId*- 外部系统中检查状态的标识符
+ ** *message*- 可选。在 SUSE Observability UI 中显示的信息。数据将被解释为标记符，允许链接到生成外部检查状态的外部系统检查。
+ ** *health*- 以下 SUSE Observability Health 状态值之一：`+Clear+`,`+Deviating+`,`+Critical+` 。
+ ** *topologyElementIdentifier*- 用于将检查状态绑定到 SUSE Observability 拓扑元素。
+ ** *name*- 外部校验状态的名称。
+
+== 向 SUSE Observability 发送健康状况
+
+健康信息可通过 HTTP POST 在一个 JSON 信息中发送。在下面的示例中，包含两个检查状态的快照从一个外部监控系统发送到 SUSE Observability。
+
+[,bash]
+----
+curl -X POST \
+ '<STACKSTATE_RECEIVER_API_ADDRESS>' \
+ -H 'Content-Type: application/json' \
+ -d '{
+  "collection_timestamp": 1548857167,
+  "internalHostname": "local.test",
+  "health": [
+    {
+      "consistency_model": "REPEAT_SNAPSHOTS",
+      "start_snapshot": {
+        "repeat_interval_s": 300
+      },
+      "stop_snapshot": {},
+      "stream": {
+        "urn": "urn:health:sourceId:streamId"
+      },
+      "check_states": [
+        {
+          "checkStateId": "checkStateId1",
+          "message": "Server Running out of disk space",
+          "health": "Deviating",
+          "topologyElementIdentifier": "server-1",
+          "name": "Disk Usage"
+        },
+        {
+          "checkStateId": "checkStateId2",
+          "message": "Provisioning failed. [Learn more](https://www.any-link.com)",
+          "health": "critical",
+          "topologyElementIdentifier": "server-2",
+          "name": "Health monitor"
+        }
+      ]
+    }
+  ]
+}'
+----
