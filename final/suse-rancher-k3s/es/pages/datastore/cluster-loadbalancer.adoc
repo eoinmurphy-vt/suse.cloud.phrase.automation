@@ -1,23 +1,23 @@
-= Balanceador de Carga de Clúster
+= Equilibrador de carga de clúster
 :page-languages: [en, ja, ko, zh]
 :revdate: 2026-03-03
 :page-revdate: {revdate}
 
-Esta sección describe cómo instalar un balanceador de carga externo delante de los nodos del servidor de un clúster K3s de alta disponibilidad (HA). Se proporcionan dos ejemplos: Nginx y HAProxy.
+En esta sección se describe cómo instalar un equilibrador de carga externo delante de los nodos de servidor de un clúster K3s de alta disponibilidad (HA). Se ofrecen dos ejemplos: Nginx y HAProxy.
 
 [TIP]
 ====
-Los balanceadores de carga externos no deben confundirse con el ServiceLB integrado, que es un controlador embebido que permite el uso de Servicios LoadBalancer de Kubernetes sin desplegar un controlador de balanceador de carga de terceros. Para más detalles, consulta xref:networking/networking-services.adoc#_service_load_balancer[Balanceador de Carga de Servicio].
+Los equilibradores de carga externos no deben confundirse con el ServiceLB incrustado, que es un controlador incrustado que permite utilizar los servicios del equilibrador de carga de Kubernetes sin desplegar un controlador de equilibrador de carga de terceros. Para más detalles, consulte xref:networking/networking-services.adoc#_service_load_balancer[Service Load Balancer].
 
-Los balanceadores de carga externos pueden utilizarse para proporcionar una dirección de registro fija para registrar nodos, o para el acceso externo al Servidor API de Kubernetes. Para exponer Servicios LoadBalancer, se pueden utilizar balanceadores de carga externos junto con o en lugar de ServiceLB, pero en la mayoría de los casos, controladores de balanceador de carga de reemplazo como MetalLB o Kube-VIP son una mejor opción.
+Los equilibradores de carga externos pueden utilizarse para proporcionar una dirección de registro fija para registrar nodos, o para el acceso externo al servidor API de Kubernetes. Para exponer Servicios de LoadBalancer, se pueden utilizar load-balancer externos junto o en lugar de ServiceLB, pero en la mayoría de los casos, los controladores de load-balancer de reemplazo como MetalLB o Kube-VIP son una mejor opción.
 ====
 
 
 == Requisitos previos
 
-Todos los nodos en este ejemplo están ejecutando Ubuntu 20.04.
+Todos los nodos de este ejemplo ejecutan Ubuntu 20.04.
 
-Para ambos ejemplos, asume que se ha instalado un xref:datastore/ha-embedded.adoc[clúster HA K3s con etcd embebido] en 3 nodos.
+Para ambos ejemplos, supongamos que se ha instalado un xref:datastore/ha-embedded.adoc[clúster HA K3s con etcd integrado] en 3 nodos.
 
 Cada servidor k3s está configurado con:
 
@@ -28,42 +28,42 @@ token: lb-cluster-gd
 tls-san: 10.10.10.100
 ----
 
-Los nodos tienen nombres de host e IPs de:
+Los nodos tienen nombres de host e IP de:
 
 * servidor-1: `10.10.10.50`
 * servidor-2: `10.10.10.51`
 * servidor-3: `10.10.10.52`
 
-Se configuran dos nodos adicionales para el balance de la carga con nombres de host e IPs de:
+Se configuran dos nodos adicionales para el equilibrio de carga con nombres de host e IP de:
 
 * lb-1: `10.10.10.98`
 * lb-2: `10.10.10.99`
 
-Existen tres nodos adicionales con nombres de host e IPs de:
+Existen tres nodos adicionales con nombres de host e IP de:
 
 * agente-1: `10.10.10.101`
 * agente-2: `10.10.10.102`
 * agente-3: `10.10.10.103`
 
-== Configura el balanceador de carga
+== Configurar el equilibrador de carga
 
 [tabs,sync-group-id=ext-load-balancer]
 ======
 HAProxy::
 +
 --
-http://www.haproxy.org/[HAProxy] es una opción de código abierto que proporciona un balanceador de carga TCP. También admite alta disponibilidad para el propio balanceador de carga, asegurando redundancia en todos los niveles. Consulta http://docs.haproxy.org/2.8/intro.html[Documentación de HAProxy] para más información.
+http://www.haproxy.org/[HAProxy] es una opción de código abierto que proporciona un equilibrador de carga TCP. También admite HA para el propio equilibrador de carga, lo que garantiza la redundancia a todos los niveles. Consulte HAProxy http://docs.haproxy.org/2.8/intro.html[la documentación de] para obtener más información.
 
-Además, utilizaremos KeepAlived para generar una IP virtual (VIP) que se utilizará para acceder al clúster. Consulta https://www.keepalived.org/manpage.html[Documentación de KeepAlived] para más información.
+Además, utilizaremos KeepAlived para generar una IP virtual (VIP) que se utilizará para acceder al clúster. Consulte https://www.keepalived.org/manpage.html[la documentación de KeepAlived en] para obtener más información.
 
-. Instala HAProxy y KeepAlived:
+. Instale HAProxy y KeepAlived:
 +
 [,bash]
 ----
 sudo apt-get install haproxy keepalived
 ----
 
-. Añade lo siguiente a `/etc/haproxy/haproxy.cfg` en lb-1 y lb-2:
+. Añada lo siguiente a `/etc/haproxy/haproxy.cfg` en lb-1 y lb-2:
 +
 ----
 frontend k3s-frontend
@@ -82,7 +82,7 @@ backend k3s-backend
     server server-3 10.10.10.52:6443 check
 ----
 
-. Añade lo siguiente a `/etc/keepalived/keepalived.conf` en lb-1 y lb-2:
+. Añada lo siguiente a `/etc/keepalived/keepalived.conf` en lb-1 y lb-2:
 +
 ----
 global_defs {
@@ -112,7 +112,7 @@ vrrp_instance haproxy-vip {
 }
 ----
 
-. Reinicia HAProxy y KeepAlived en lb-1 y lb-2:
+. Reinicie HAProxy y KeepAlived en lb-1 y lb-2:
 +
 [,bash]
 ----
@@ -120,15 +120,15 @@ systemctl restart haproxy
 systemctl restart keepalived
 ----
 
-. En agente-1, agente-2 y agente-3, ejecuta el siguiente comando para instalar k3s y unirte al clúster:
+. En el agente-1, agente-2 y agente-3, ejecute el siguiente comando para instalar k3s y unirse al clúster:
 +
 [,bash]
 ----
 curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.100:6443
 ----
-Donde `INSTALL_K3S_ARTIFACT_URL` es la https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL de Prime Artifacts]
+Donde `INSTALL_K3S_ARTIFACT_URL` es la https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL de]
 +
-Ahora puedes usar `kubectl` desde el nodo del servidor para interactuar con el clúster.
+Ahora puede utilizar `kubectl` desde el nodo servidor para interactuar con el clúster.
 +
 [,bash]
 ----
@@ -148,10 +148,10 @@ Nginx::
 --
 [WARNING]
 ====
-Nginx no admite nativamente una configuración de alta disponibilidad (HA). Si configuras un clúster HA, tener un único balanceador de carga frente a K3s reintroducirá un único punto de fallo.
+Nginx no soporta de forma nativa una configuración de Alta Disponibilidad (HA). Si se configura un cluster HA, tener un único balanceador de carga delante de los K3 reintroducirá un único punto de fallo.
 ====
 
-http://nginx.org/[Nginx Open Source] proporciona un balanceador de carga TCP. Consulta https://nginx.org/en/docs/http/load_balancing.html[Usando nginx como balanceador de carga HTTP] para más información.
+http://nginx.org/[Nginx Open Source] proporciona un equilibrador de carga TCP. Consulte https://nginx.org/en/docs/http/load_balancing.html[Usar nginx como equilibrador de carga HTTP] para obtener más información.
 
 . Cree un archivo `nginx.conf` en lb-1 con el siguiente contenido:
 +
@@ -172,7 +172,7 @@ stream {
 }
 ----
 
-. Ejecute el balanceador de carga Nginx en lb-1:
+. Ejecute el equilibrador de carga Nginx en lb-1:
 +
 Usando docker:
 +
@@ -184,7 +184,7 @@ docker run -d --restart unless-stopped \
     nginx:stable
 ----
 +
-O https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/[instale nginx] y luego ejecute:
+O https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/[instalar nginx] y luego ejecutar:
 +
 [,bash]
 ----
@@ -192,14 +192,14 @@ cp nginx.conf /etc/nginx/nginx.conf
 systemctl start nginx
 ----
 
-. En agente-1, agente-2 y agente-3, ejecuta el siguiente comando para instalar k3s y unirte al clúster:
+. En el agente-1, agente-2 y agente-3, ejecute el siguiente comando para instalar k3s y unirse al clúster:
 +
 [,bash]
 ----
 curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=lb-cluster-gd sh -s - agent --server https://10.10.10.98:6443
 ----
 +
-Ahora puedes usar `kubectl` desde el nodo del servidor para interactuar con el clúster.
+Ahora puede utilizar `kubectl` desde el nodo servidor para interactuar con el clúster.
 +
 [,bash]
 ----
