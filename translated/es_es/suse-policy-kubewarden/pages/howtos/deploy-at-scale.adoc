@@ -1,0 +1,69 @@
+include::partial$variables.adoc[]
+= {project-name} en un entorno a gran escala
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configure {project-name}s con {project-name} para garantizar una alta disponibilidad y rendimiento en entornos exigentes a gran escala.
+:keywords: [kubewarden, "{project-name}", kubernetes, policyservers, producción]
+:doc-persona: kubewarden-operator, kubewarden-integrator
+:doc-type: cómo
+:doc-topic: operador-manual, política-servidores, producción
+:sidebar_label: Despliegue a escala
+:sidebar_position: 21
+
+En esta sección se detalla una implantación real de {project-name} en un entorno exigente a gran escala. Ilustra cómo configurar {short-project-name} para una alta disponibilidad y rendimiento y qué esperar bajo una carga pesada.
+
+[IMPORTANT]
+====
+Si desea ver más consejos sobre cómo ejecutar {short-project-name} en producción, consulte la documentación sobre xref:/howtos/production-deployments.adoc[implantaciones en producción].
+====
+
+== Medio ambiente
+
+La infraestructura consta de aproximadamente 20 clústeres Kubernetes. Las mayores de estas agrupaciones se caracterizan por un tamaño y un volumen de recursos significativos:
+
+* Nodos: ~400
+* Espacios de nombres: ~4.000
+* Recursos gestionados:
+** Vainas: 10,000
+** RoleBindings: 13,000
+** Entradas: 12,000
+** Despliegues: 8,000
+** Servicios: 13,000
+
+== {short-project-name} Configuración
+
+Para responder a las exigencias de este entorno, {short-project-name} se configura centrándose en el aislamiento de las cargas de trabajo y la alta disponibilidad.
+
+* Aplicación de la política: 22 `+ClusterAdmissionPolicies+` se aplican en todos los clústeres, sin espacios de nombres específicos `+AdmissionPolicies+`.
+* Arquitectura PolicyServer: Se utilizan dos despliegues separados de `+PolicyServer+` para aislar las cargas de trabajo:
+** Un sitio `+PolicyServer+` está dedicado exclusivamente a las políticas contextuales.
+** Una segunda `+PolicyServer+` se encarga de todas las demás políticas que no tienen en cuenta el contexto.
+* Escalabilidad y recursos:
+** Réplicas: Cada despliegue de `+PolicyServer+` ejecuta 15 réplicas para gestionar el elevado volumen de solicitudes.
+** Asignación de recursos: A cada réplica se le asignan 300 MB de memoria y 4 núcleos de CPU.
+
+== Métricas de rendimiento
+
+Esta configuración gestiona con éxito un alto índice de solicitudes de admisión manteniendo un rendimiento predecible.
+
+* Rendimiento de las solicitudes de admisión: Los clústeres gestionan hasta 300 solicitudes de admisión por segundo (incluidas las validaciones de webhook y las exploraciones de auditoría).
+* Latencia de la política:
+** Latencia típica: Las políticas contextuales suelen tardar unos 500 ms en ejecutarse.
+** Tiempos muertos: En este entorno de alto rendimiento, los tiempos de espera de los webhooks están configurados en 2,5 segundos, mientras que el tiempo de espera de `+PolicyServer+` está fijado en 10 segundos. Aunque la mayoría de las peticiones son rápidas, la infraestructura está diseñada para gestionar operaciones lentas ocasionales sin comprometer la estabilidad del servidor API.
+
+== Auditoría del rendimiento del escáner
+
+El escáner de auditoría se utiliza para garantizar el cumplimiento continuo en un gran número de recursos.
+
+* Frecuencia: Cada 4 horas se realiza una auditoría de todo el clúster.
+* Configuración: El trabajo de auditoría se ajusta al máximo paralelismo para reducir el tiempo de ejecución:
+
+[source,shell]
+----
+--parallel-namespaces: "10"
+--parallel-resources: "20"
+--parallel-policies: "20"
+--page-size: "1000"
+----
+
+* Duración de la auditoría: Incluso en el clúster más grande con decenas de miles de recursos, un trabajo de auditoría completo se completa en
