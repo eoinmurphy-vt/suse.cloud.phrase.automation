@@ -1,0 +1,183 @@
+include::partial$variables.adoc[]
+= {project-name} 建筑学
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解{project-name} 如何使用 Kubernetes 核心功能无缝集成到您的集群中。
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["architecture"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "architecture"]
+:sidebar_label: 建筑学
+:sidebar_position: 61
+:current-version: {page-origin-branch}
+
+{project-name} 是一个 Kubernetes 策略引擎。
+它使用的策略是用你选择的编程语言编写的。
+该语言必须生成 WebAssembly 二进制文件，供{project-name} 使用。
+
+== 什么_是_政策？
+
+政策是https://opencontainers.org/[开放容器倡议](OCI) 的产物。它包含一个 WebAssembly 模块、策略代码以及 PolicyServer 执行接纳请求验证和突变所需的元数据。
+
+[NOTE]
+====
+
+与https://kubernetes.io/docs/contribute/style/style-guide/[Kubernetes] 一样，{project-name} 在讨论{project-name}PolicyServer 时使用 "PolicyServer"，而`+policy-server+` 在讨论{project-name} PolicyServer 的 Pod 或部署时使用 "PolicyServer"。
+
+====
+
+
+== 设计原则
+
+=== 利用 Kubernetes 的核心功能
+
+该团队设计的{project-name} 使用了 Kubernetes 的核心功能，而不是重新发明轮子。
+该项目综合利用了
+
+* Kubernetes 控制器
+* 自定义资源定义（CRD）
+* 网络钩子（验证和突变）
+* 控制平面的事件通知系统
+
+=== 有效利用 Kubernetes 架构
+
+{project-name} 可在 Kubernetes 生态系统内无缝运行。{project-name} 控制器的核心是 Kubernetes 控制器，负责监控{project-name} 自定义资源定义（CRD），并配置 Kubernetes 资源以执行这些资源。这种集成可确保{project-name} 使用控制器和 CRD 等 Kubernetes 内置机制来高效地观察、管理和应用安全策略。
+
+=== 可扩展的政策定义
+
+{project-name} 采用 CRD 来定义和管理{project-name} 资源，其中指定了接纳请求验证规则。这种设计使用户能够通过自定义接入控制来扩展 Kubernetes 的功能，确保整个集群的安全性和合规性策略执行保持一致。
+
+=== 直接录取控制
+
+由{project-name} 控制器设置后，策略服务器服务会使用`+ValidationWebhooks+` 和`+MutatingWebhooks+` 直接接收来自 Kubernetes 控制平面的接纳请求。这种直接互动简化了准入控制流程，减少了延迟，提高了政策执行效率。
+
+WebAssembly 提供了沙箱式执行环境，确保策略在隔离状态下运行，从而增强了策略执行机制的安全性和稳定性。这种隔离可防止策略之间或策略与主机系统之间相互干扰，从而降低恶意代码的执行风险。
+WebAssembly 具有可移植性和高效性，使策略无需修改即可在不同环境中运行。这种跨平台兼容性确保了{project-name} 策略的通用性，因此您可以在不同的 Kubernetes 集群上分发和运行这些策略。
+
+=== 基于 OCI 的政策工具
+
+{project-name} 中的政策是 OCI（开放容器倡议）的产物。这种标准化使策略的发布和版本更容易，策略既包含执行逻辑的 WebAssembly 模块，也包含策略服务器运行所需的元数据。使用 OCI 构件可促进云生态系统内的互操作性并简化管理。
+
+=== 细粒度政策应用
+
+{project-name} 将策略与自己的 "验证 "或 "突变 "网络钩子关联起来，从而实现细粒度的准入控制应用。这种灵活性使管理员能够根据特定需求定制策略的执行，从而增强 Kubernetes 集群的安全性和合规性。
+
+== {project-name} 堆栈
+
+{project-name} 由这些部分组成：
+
+* {project-name} 自定义资源是https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/[Kubernetes 自定义资源]，可简化策略管理流程。
++
+{project-name} 使用https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/[动态准入控制] 与 Kubernetes 集成。特别是，{project-name} 作为 Kubernetes Admission Webhook 运行。`+policy-server+` 是 Kubernetes API 服务器为验证请求而调用的 Webhook 端点。
+
+* https://github.com/kubewarden/kubewarden-controller[{project-name}控制器] 是一个 Kubernetes 控制器，用于调节{project-name} 的自定义资源。该控制器创建了{project-name} 堆栈的一部分。
+它还能将{project-name} 配置转化为 Kubernetes 指令。
++
+`+kubewarden-controller+` 向 Kubernetes API 服务器注册所需的`+MutatingWebhookConfiguration+` 或`+ValidatingWebhookConfiguration+` 对象。
+
+* xref:../tutorials/writing-policies/index.adoc[{project-name} 策略]是包含验证或突变逻辑的 WebAssembly 模块。WebAssembly 模块在xref:../tutorials/writing-policies/index.adoc[编写策略]部分有详细的文档说明。
+
+* https://github.com/kubewarden/policy-server[PolicyServer]接收验证请求。它通过执行{project-name} 策略来验证请求。
+
+* https://github.com/kubewarden/audit-scanner[审计扫描器]会检查群集中已有的资源。它可以识别那些违反{project-name} 政策的人。
++
+xref:/explanations/audit-scanner/audit-scanner.adoc[审计扫描器]会不断检查群集中声明的资源，标记出不再符合已部署{project-name} 策略的资源。
++
+.建筑学
+[mermaid]
+....
+%%{
+  init: {
+    "flowchart": {
+      "htmlLabels": false,
+    }}}%% graph LR accTitle：接纳控制器架构 accDescr：显示接纳控制器组件架构的图表。
+    子图 " " 方向 LR 子图 " " 方向 LR k8s(("Kubernetes"))registry[("OCI registry")] end 子图 kw[&quot;`+**Admission Controller**+`&quot;] controller(&quot;`+**Controller**+`&quot;) 子图 policy-server[&quot;`+**policy-server**+`&quot;]方向 LR kw-policy-1{{"Policy 1"}} kw-policy-2{{"Policy 2"}} kw-policy-3{{"Policy 3"}} end webhooks(["ValidationWebhooks and\nMutatingWebhooks"]) audit-scanner["KW audit scanner"] end policy-server-->|"downloads\npolicies from"| registry controller-->|"watches for\nevents"| k8s controller-->|"creates"| webhooks controller-->|"creates\npolicy-server\ninstances"| policy-server k8s -."-> webhooks webhooks -. "sent admission\nrequests from K8s".-> policy-server audit-scanner-->||"发送 audit\nadmission requests"| policy-server
+....
+
+== {project-name} 政策的历程
+
+=== 默认策略服务器
+
+在新群集上，定义的{project-name} 组件有
+
+* 自定义资源定义 (CRD)
+* `+kubewarden-controller+` 部署
+* 名为`+default+` 的 PolicyServer 自定义资源。
+
+当`+kubewarden-controller+` 注意到默认 PolicyServer 资源时，它会创建一个 PolicyServer 组件的`+policy-server+` 部署。
+
+{project-name} 可用作 Kubernetes Admission Webhook。Kubernetes 规定使用https://en.wikipedia.org/wiki/Transport_Layer_Security[传输层安全] (TLS) 确保所有 Webhook 端点的安全。`+kubewarden-controller+`通过以下方式建立这种安全通信：
+
+. 生成自签名证书授权
+. 使用此 CA 为`+policy-server+` 服务生成 TLS 证书密钥。
+
+这些对象都存储为 Kubernetes 中的`+Secret+` 资源。
+
+最后，`+kubewarden-controller+` 创建`+policy-server+` Deployment 和 Kubernetes ClusterIP 服务，以便在集群网络内公开它。
+
+=== 确定第一项政策
+
+[NOTE]
+====
+
+策略必须定义它必须在哪个`+policy-server+` 上运行。它*绑定*到`+policy-server+` 实例。您可以在多个 PolicyServers 中运行具有相同 Wasm 模块和设置的不同策略。但是，不能让一个策略定义在多个策略服务器中运行。
+
+====
+
+`+kubewarden-controller+` 会注意到新的`+ClusterAdmissionPolicy+` 资源，因此会找到绑定的`+policy-server+` 并对其进行调节。
+
+=== 对账 `+policy-server+`
+
+在创建、修改或删除`+ClusterAdmissionPolicy+` 或`+AdmissionPolicy+` 时，会在`+kubewarden-controller+` 激活一个调节循环，用于`+policy-server+` 拥有该策略。这个调节循环创建了一个`+ConfigMap+` ，其中包含与`+policy-server+` 绑定的所有策略。然后开始部署推广`+policy-server+` 。这样就可以用更新的配置启动新的`+policy-server+` 实例。
+
+启动时，`+policy-server+` 从 ConfigMap 中读取其配置，并下载指定的所有{project-name} 策略。您可以从远程 HTTP 服务器和容器注册中心下载{project-name} 策略。
+
+您可以使用策略设置参数来调整策略的行为。启动和下载策略后，`+policy-server+` 会检查用户提供的策略设置是否有效。
+
+`+policy-server+` 通过调用每个策略所公开的`+validate_setting+` 函数来验证策略设置。文档中的xref:../reference/spec/01-intro-spec.adoc[规范参考]部分有更多文档。
+
+如果任何策略从用户策略规范中接收到错误的配置参数，那么由该策略评估的任何接入请求都会返回错误。
+
+当{project-name} 配置完所有策略后，`+policy-server+` 会生成一个工作线程池，使用用户指定的{project-name}策略来评估传入的请求。
+
+最后，`+policy-server+` 启动 HTTPS 服务器，监听传入的验证请求。{project-name} 使用{project-name} 控制器创建的 TLS 密钥和证书来确保网络服务器的安全。
+
+网络服务器按照命名规则，通过专用路径公开每项策略：`+/validate/<policy ID>+` 。
+
+=== 让 Kubernetes 感知策略
+
+所有`+policy-server+` 实例都有一个https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/`[Readiness Probe+`]，"+kubewarden+-controller "会使用它来检查`+policy-server`部署是否已准备就绪，以评估一个"\...https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#webhook-request-and-response[`+AdmissionReview+`].
+
+一旦{project-name} 将`+policy-server+` 部署标记为 "唯一可达 "或`+Ready+` ，`+kubewarden-controller+` 就会让 Kubernetes API 服务器知道新策略。方法是创建`+MutatingWebhookConfiguration+` 或`+ValidatingWebhookConfiguration+` 对象。在这种情况下，"唯一可达 "意味着群集中的所有 PolicyServer 实例都安装了最新的策略配置。这种区别很细微，但由于 PolicyServers 的推出方式，这种区别是必要的。
+在不同配置的 PolicyServers 上使用相同的策略是有可能的。
+
+每个策略都有一个专用的`+MutatingWebhookConfiguration+` 或`+ValidatingWebhookConfiguration+` ，指向由`+policy-server+` 提供服务的 Webhook 端点。端点可通过`+/validate/<policy ID>+` URL 访问。
+
+=== 政策在行动
+
+现在，所有必要的管道都已完成，Kubernetes 开始向正确的`+policy-server+` 端点发送 "接纳审查 "请求。
+
+`+policy-server+` 接收到接纳请求对象后，会根据接收请求的端点，使用正确的策略对其进行评估。
+
+{project-name} 会在其专用的 WebAssembly 沙盒中评估每项策略。`+policy-server+` 实例（"主机"）与 WebAssembly 策略（"访客"）之间的通信使用 waPC 通信协议。协议说明是xref:../tutorials/writing-policies/index.adoc[编写政策]文件的一部分。
+政策还可以使用xref:../tutorials/writing-policies/wasi/01-intro-wasi.adoc[网络组装系统接口]（WASI）提供的接口。
+
+== {project-name} 如何处理多个 PolicyServer 和策略
+
+一个群集可定义多个 PolicyServers 和{project-name} 策略。
+拥有多个 PolicyServers 有很多好处：
+
+* 您可以将嘈杂的命名空间或租户，或生成大量策略评估的命名空间或租户与群集的其他部分隔离，以免对群集的其他运行造成不利影响。
+
+* 您可以在专用的 PolicyServer 池中运行关键任务策略，从而提高基础架构的弹性。
+
+一个 PolicyServer 资源定义每个`+policy-server+` ，一个`+ClusterAdmissionPolicy+` 或`+AdmissionPolicy+` 资源定义每个策略。
+
+`+ClusterAdmissionPolicy+` 和`+AdmissionPolicy+` 与`+policy-server+` 绑定。
+任何未指定`+policy-server+` 的`+ClusterAdmissionPolicy+` 都会绑定到默认 PolicyServer。如果`+ClusterAdmissionPolicy+` 引用了不存在的`+policy-server+` ，则其状态为`+unschedulable+` 。
+
+每个`+policy-server+` 都定义了许多验证端点，其配置文件中定义的每个策略都有一个验证端点。您可以使用不同的配置参数多次加载相同的策略。
+
+`+ValidatingWebhookConfiguration+` 和`+MutatingWebhookConfiguration+`资源可让 Kubernetes API 服务器了解这些策略。然后，`+kubewarden-controller+` ，使 API 服务器和配置资源保持同步。
+
+Kubernetes API 服务器会将传入的接纳请求分派到`+policy-server+` 公开的正确验证端点。
