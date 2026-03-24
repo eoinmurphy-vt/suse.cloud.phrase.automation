@@ -1,0 +1,103 @@
+= Manuelle Upgrades
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+Sie können K3s mit Hilfe des Installationsskripts aktualisieren oder die Binärdatei der gewünschten Version manuell installieren.
+
+[NOTE]
+====
+Aktualisieren Sie beim Upgrade zuerst die Serverknoten und dann die Agentenknoten.
+====
+
+[#_release_channels]
+== Release-Kanäle
+
+Upgrades, die über das Installationsskript oder über unsere Funktion für xref:upgrades/automated.adoc[automatisierte Upgrades] durchgeführt werden, können an verschiedene Release-Kanäle gebunden sein. Die folgenden Kanäle sind verfügbar:
+
+|===
+| Kanal | Beschreibung
+
+| stabil
+| (Standard) Stabil wird für Produktionsumgebungen empfohlen. Diese Versionen wurden von der Gemeinschaft getestet.
+
+| neueste
+| Latest verweist immer auf die höchste verfügbare Nicht-Veröffentlichungsversion, wie durch die Semver-Bestellregeln bestimmt. Diese Versionen wurden noch nicht von der Gemeinschaft getestet.
+
+| v1.33 (Beispiel)
+| Es gibt einen Release Channel für jede Kubernetes-Unterversion, einschließlich der End-of-Life-Versionen. Diese Channels wählen die letzte verfügbare Version für diese Nebenversion aus, nicht unbedingt eine stabile Version.
+|===
+
+Eine vollständige und aktuelle Liste der Kanäle finden Sie auf der https://update.k3s.io/v1-release/channels[channel service API] k3s. Weitere technische Details zur Funktionsweise von Channels finden Sie im https://github.com/rancher/channelserver[Projekt].
+
+[TIP]
+====
+Beim Versuch, auf eine neue Version von K3s zu aktualisieren, gilt die https://kubernetes.io/docs/setup/release/version-skew-policy/[Kubernetes-Versionsversetzungsrichtlinie]. Stellen Sie sicher, dass Ihr Plan beim Upgrade keine Zwischenversionen überspringt. Der system-upgrade-controller selbst bietet keinen Schutz vor nicht unterstützten Änderungen an der Kubernetes-Version.
+====
+
+
+== Upgrade von K3s mit dem Installationsskript
+
+Um K3s von einer älteren Version zu aktualisieren, können Sie das Installationsskript erneut ausführen und dabei dieselben Konfigurationsoptionen verwenden, die Sie ursprünglich beim Ausführen des Installationsskripts verwendet haben.
+
+[IMPORTANT]
+.Hinweis
+====
+Die Variable `+INSTALL_K3S_EXEC+`, die Variablen `+K3S_+` und die abschließenden Shell-Argumente werden vom Installationsskript verwendet, um die systemd-Unit und die Umgebungsdatei zu erzeugen.
+Wenn Sie die Konfiguration bei der ursprünglichen Ausführung des Installationsskripts festgelegt haben, sie aber bei der erneuten Ausführung des Installationsskripts nicht erneut festlegen, gehen die ursprünglichen Werte verloren.
+
+Der Inhalt der xref:installation/configuration.adoc#_configuration_file[Konfigurationsdatei] wird nicht durch das Installationsskript verwaltet.
+Wenn Sie Ihre Konfiguration unabhängig vom Installationsskript machen wollen, sollten Sie eine Konfigurationsdatei verwenden, anstatt Umgebungsvariablen oder Argumente an das Installationsskript zu übergeben.
+====
+
+
+Das Ausführen des Installationsskripts bewirkt:
+
+. Die neue k3s-Binärdatei herunterladen
+. Aktualisieren Sie die systemd-Unit oder das openrc-Init-Skript, um die an das Installationsskript übergebenen Argumente zu berücksichtigen
+. Starten Sie den k3s-Dienst neu
+
+[NOTE]
+====
+Container für Pods laufen weiter, auch wenn K3s angehalten wird. Das Installationsskript entleert oder sperrt den Knoten vor dem Neustart von K3s nicht. Wenn Ihre Arbeitslast empfindlich auf kurze Ausfälle des API-Servers reagiert, sollten Sie den Knoten manuell https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[drain und cordon] mit `+kubectl+`, bevor Sie das Installationsskript erneut ausführen, um K3s zu aktualisieren oder die Konfiguration zu ändern, und danach uncordon.
+====
+
+Zum Beispiel, um auf die aktuelle stabile Version zu aktualisieren:
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+Wenn Sie auf eine neuere Version in einem bestimmten Kanal (z. B. neueste Version) aktualisieren möchten, können Sie den Kanal angeben:
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_CHANNEL=latest <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+Wenn Sie auf eine bestimmte Version aktualisieren möchten, können Sie den folgenden Befehl ausführen:
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Z+k3s1 <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+[TIP]
+====
+Wenn Sie die neue Version von k3s herunterladen, aber nicht starten wollen, können Sie die Umgebungsvariable `+INSTALL_K3S_SKIP_START=true+` verwenden.
+====
+
+
+== K3s mit der Binärdatei aufrüsten
+
+Um K3s manuell zu aktualisieren, können Sie die gewünschte Version der K3s-Binärdatei herunterladen und die vorhandene Binärdatei durch die neue ersetzen.
+
+. Laden Sie die gewünschte Version der K3s-Binärdatei von https://github.com/k3s-io/k3s/releases[releases] herunter.
+. Kopieren Sie die heruntergeladene Binärdatei nach `+/usr/local/bin/k3s+` (oder an den gewünschten Ort)
+. Starten Sie den k3s- oder k3s-agent-Dienst neu oder starten Sie den k3s-Prozess neu (binär)
+
+[NOTE]
+====
+Container für Pods laufen weiter, auch wenn K3s angehalten wird. Es ist im Allgemeinen sicher, K3s neu zu starten, ohne die Pods zu entleeren und den Knoten abzusperren. Wenn Ihre Arbeitslast empfindlich auf kurze Ausfälle des API-Servers reagiert, sollten Sie den Knoten manuell https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[drain und cordon] mit `+kubectl+` vor dem Neustart von K3s und danach uncordon.
+====
