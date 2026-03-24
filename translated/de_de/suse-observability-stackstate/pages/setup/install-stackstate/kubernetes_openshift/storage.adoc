@@ -1,0 +1,214 @@
+= Konfigurieren Sie den Speicher
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Selbstgehostet
+
+== Standardwerte für die Speicherung
+
+SUSE Observability gibt standardmäßig keine bestimmte Storage-Klasse für seine PVCs (Persistent Volume Claims) an. Für Cloud-Anbieter wie EKS und AKS bedeutet dies, dass die Standard-Storage-Klasse verwendet wird.
+
+Die Standardeinstellungen für diese Speicherklassen sind in der Regel so, dass das PV (persistent volume) gelöscht wird, wenn die PVC gelöscht wird. Aber selbst wenn `+helm delete+` ausgeführt wird, um eine Stackstate-Freigabe zu entfernen, bleiben die PVCs im Namensraum vorhanden und werden wiederverwendet, wenn eine `+helm install+` im gleichen Namensraum mit dem gleichen Freigabenamen ausgeführt wird.
+
+Um die PVCs zu entfernen, entfernen Sie sie entweder manuell mit `+kubectl delete pvc+` oder löschen Sie den gesamten Namensraum.
+
+[NOTE]
+====
+SUSE Observability setzt voraus, dass der zugrunde liegende Storage auf Flash-Speicher (SSD) oder einer ähnlichen Leistung basiert.
+====
+[NOTE]
+====
+Für Produktionsumgebungen wird NFS für das Storage-Provisioning in SUSE Observability aufgrund des potenziellen Risikos einer Datenbeschädigung nicht empfohlen und unterstützt.
+====
+[NOTE]
+====
+Im Zweifelsfall ist es möglich, das xref:/setup/install-stackstate/support-package-performance.adoc[Leistungsskript] auszuführen und mit der xref:/setup/install-stackstate/support-package-performance.adoc#_reference_performance[Referenzleistung] zu vergleichen.
+====
+
+== Lagerung anpassen
+
+Sie können die Einstellungen `+storageClass+` und `+size+` für verschiedene Lautstärken in der Helm-Tabelle anpassen. Diese Beispiel-Werte-Dateien zeigen, wie Sie die Speicherklasse oder die Volume-Größe ändern können. Diese können zusammengelegt werden, um beide gleichzeitig zu ändern.
+Für `+size+` bieten wir die Muster für `+HA+` und `+NonHa+` an, je nach dem bei der Installation gewählten Größenprofil.
+
+[tabs]
+====
+Änderung der Speicherklasse::
++
+--
+
+[,yaml]
+----
+global:
+  # The storage class for all of the persistent volumes
+  storageClass: "standard"
+----
+
+--
+
+Ändern der Volume-Größe für HA::
++
+--
+
+[,yaml]
+----
+clickhouse:
+  persistence:
+    # Size of persistent volume for each clickhouse pod
+    size: 50Gi
+elasticsearch:
+  volumeClaimTemplate:
+    resources:
+      requests:
+        # size of volume for each Elasticsearch pod
+        storage: 250Gi
+
+hbase:
+  hdfs:
+    datanode:
+      persistence:
+        # size of volume for HDFS data nodes
+        size: 250Gi
+
+    namenode:
+      persistence:
+        # size of volume for HDFS name nodes
+        size: 20Gi
+
+
+kafka:
+  persistence:
+    # size of persistent volume for each Kafka pod
+    size: 100Gi
+
+
+zookeeper:
+  persistence:
+    # size of persistent volume for each Zookeeper pod
+    size: 8Gi
+
+victoria-metrics-0:
+  server:
+    persistentVolume:
+      size: 250Gi
+victoria-metrics-1:
+  server:
+    persistentVolume:
+      size: 250Gi
+
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 2Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    state:
+      tmpToPVC:
+        volumeSize: 2Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    vmagent:
+      persistence:
+        size: 10Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 600Mi
+  stackpacks:
+    pvc:
+      size: 1Gi
+
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 1Gi
+minio:
+  persistence:
+    size: 500Gi
+----
+
+--
+Ändern der Volumengröße Nicht-Ha::
++
+--
+
+[,yaml]
+----
+clickhouse:
+  persistence:
+    # Size of persistent volume for each clickhouse pod
+    size: 50Gi
+
+elasticsearch:
+  volumeClaimTemplate:
+    resources:
+      requests:
+        # size of volume for each Elasticsearch pod
+        storage: 250Gi
+
+hbase:
+  stackgraph:
+    persistence:
+      # Size of persistent volume for the single stackgraph hbase pod
+      size: 100Gi
+
+kafka:
+  persistence:
+    # size of persistent volume for each Kafka pod
+    size: 100Gi
+
+
+zookeeper:
+  persistence:
+    # size of persistent volume for each Zookeeper pod
+    size: 8Gi
+
+victoria-metrics-0:
+  server:
+    persistentVolume:
+      size: 50Gi
+
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 2Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    state:
+      tmpToPVC:
+        volumeSize: 2Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 2Gi
+    vmagent:
+      persistence:
+        size: 10Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 600Mi
+  stackpacks:
+    localpvc:
+      size: 1Gi
+    pvc:
+      size: 1Gi
+
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 1Gi
+minio:
+  persistence:
+    size: 500Gi
+----
+
+--
+====
+
+[NOTE]
+====
+Das NonHa-Beispiel gehört zur größten NonHa-Instanz, die 100 Knoten beobachten und Daten 2 Wochen lang aufbewahren soll.
+====
