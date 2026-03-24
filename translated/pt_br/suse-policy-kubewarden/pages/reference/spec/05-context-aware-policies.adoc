@@ -1,0 +1,166 @@
+include::partial$variables.adoc[]
+= Políticas sensíveis ao contexto
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Explore os recursos de política com reconhecimento de contexto no controle de admissão, incluindo acesso a recursos e armazenamento em cache, para otimizar a avaliação de políticas.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "context-aware-policies"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "policy specification", "context aware policies"]
+:sidebar_label: Políticas sensíveis ao contexto
+:current-version: {page-origin-branch}
+
+O site `+policy-server+` tem a capacidade de expor as informações do cluster às políticas, de modo que elas possam tomar decisões com base em outros recursos existentes, e não apenas com base nos detalhes fornecidos pela solicitação de admissão.
+
+O servidor de políticas que hospeda a política recupera os recursos do Kubernetes. As regras RBAC aplicadas à conta de serviço do servidor de políticas regulam o acesso ao Kubernetes.
+
+O servidor de políticas `+default+` implantado pelos gráficos do {project-name} Helm tem acesso aos seguintes recursos do Kubernetes:
+
+* Namespaces
+* Serviços
+* Ingresso
+
+[CAUTION]
+====
+
+O servidor de políticas realiza o armazenamento em cache dos resultados obtidos do servidor da API do Kubernetes para reduzir a quantidade de carga nessa parte central do Kubernetes. Isso significa que as informações podem estar desatualizadas ou ausentes.
+
+====
+
+
+== Matriz de suporte
+
+[cols=",^,"]
+|===
+| Tipo de apólice | Suporte | Notas
+
+| Linguagens de programação tradicionais
+| ✅
+| -
+
+| Rego
+| ✅
+| Desde o lançamento do {short-project-name} 1.9
+
+| WASI
+| ✅
+| Desde a versão {short-project-name} 1.10.0, somente para o Go SDK
+|===
+
+== Restrições
+
+{short-project-name}é reduzir o número de consultas ao servidor de API do Kubernetes. O site {short-project-name} considera duas restrições:
+
+* Uso de memória: O processo do Policy Server armazena em cache os dados obtidos do Kubernetes na memória. Quanto mais dados forem buscados, mais os pods do servidor de políticas consumirão memória.
+* Consistência: O cache mantido pelo Policy Server pode conter dados obsoletos. Novos recursos podem estar faltando, recursos excluídos podem ainda estar disponíveis e os alterados podem ter dados antigos. Isso pode afetar a avaliação da política.
+
+=== Listagem de vários recursos
+
+{short-project-name} As políticas podem buscar vários recursos ao mesmo tempo. Por exemplo, eles podem fazer uma consulta do tipo "get all the Pods defined inside of the `+default+`namespace that have the label `+color+` set to ``+green+``".
+
+Com essa consulta, o Policy Server obtém todos os recursos que correspondem aos critérios do usuário. A obtenção de recursos é feita em lotes para reduzir a carga no servidor da API do Kubernetes. Antes de armazenar os recursos na memória, o Policy Server elimina o atributo `+managedFields+` de cada recurso para reduzir a quantidade de memória consumida. Esse atributo não é útil para políticas e ocupa uma quantidade significativa de memória.
+
+Em seguida, o servidor de políticas cria umhttps://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes[Kubernetes watch] para manter a lista de objetos em cache atualizada. O Servidor de políticas não controla a velocidade com que o Servidor de API do Kubernetes envia notificações sobre alterações de recursos. Isso depende de diferentes fatores externos, como o número de watches criados em relação ao servidor da API do Kubernetes e sua carga.
+
+Por fim, o código atual tem a seguinte limitação. Dadas essas duas consultas:
+
+* `+kubectl get pods -n default+`
+* `+kubectl get pods -n default -l color=green+`
+
+O Policy Server cria dois watches e duplica todos os pods da segunda consulta. Essa limitação deverá ser removida em versões futuras do {short-project-name}.
+
+=== Obtenção de um recurso específico
+
+{short-project-name} As políticas podem obter um recurso específico definido dentro do cluster.
+Por exemplo, eles podem fazer uma consulta como "get the Pod named `+psql-0+` defined within of the `+db+` namespace" (obter o pod chamado definido dentro do namespace ).
+
+Por padrão, essa consulta busca o objeto e o armazena em um cache na memória por cinco segundos. Durante esses cinco segundos, as políticas recebem dados em cache.
+
+O autor da política também pode decidir fazer uma consulta direta, ignorando o cache.
+Dados atualizados são sempre servidos. Isso causa mais carga no servidor da API do Kubernetes (dependendo da frequência do acionamento da política) e introduz mais latência na avaliação de uma solicitação de admissão.
+
+O comportamento de consulta direta, ou em cache, é configurado em um nível por consulta pelo autor da política usando os SDKs do {short-project-name}.
+
+== ClusterAdmissionPolicies
+
+ClusterAdmissionPolicies tem o campohttps://doc.crds.dev/github.com/kubewarden/kubewarden-controller/policies.kubewarden.io/ClusterAdmissionPolicy/v1#spec-contextAwareResources[spec.contextAwareResources].
+Esse campo fornece uma lista de recursos do site `+GroupVersionKind+` que a política precisa acessar. Isso permite que os redatores de políticas enviem as "permissões" de que a política precisa junto com a política. Além disso, isso permite que os operadores de políticas revisem as "permissões" necessárias para a política no momento da implantação.
+
+=== Testar localmente as políticas sensíveis ao contexto
+
+Além de executar políticas em um cluster para testes de ponta a ponta, você pode usar o utilitário`+kwctl+` CLI para executar políticas e simulações de solicitações no cluster.
+
+Para isso, o `+kwctl run+` pode primeiro registrar todas as interações com o cluster em um arquivo:
+
+[subs="+attributes",console]
+----
+kwctl run \
+    --allow-context-aware \
+    -r request.json \
+    --record-host-capabilities-interactions replay-session.yml \
+    annotated-policy.wasm
+----
+
+que cria o seguinte arquivo `+replay-session.yml+`:
+
+[subs="+attributes",yaml]
+----
+# replay-session.yml
+---
+- type: Exchange
+  request: |
+    !KubernetesGetResource
+    api_version: /v1
+    kind: Pod
+    name: p-testing
+    namespace: local
+    disable_cache: true
+  response:
+    type: Success
+    payload: '{"apiVersion":"","kind":"Pod", <snipped> }'
+----
+
+Usando a sessão de reprodução, agora você pode simular as interações do cluster sem a necessidade de um cluster, o que é ideal para testes de CI e de ponta a ponta:
+
+[subs="+attributes",console]
+----
+kwctl run \
+    --allow-context-aware \
+    -r request.json \
+    --replay-host-capabilities-interactions replay-session.yml \
+    annotated-policy.wasm
+----
+
+== SDKs de idiomas
+
+Os SDKs de linguagem que oferecem suporte ao contexto de cluster expõem funções que permitem que as políticas recuperem o estado atual do cluster.
+
+[TIP]
+====
+
+Se você quiser obter mais informações sobre a função waPC usada pelos SDKs, consulte a documentação de referência xref:reference/spec/host-capabilities/06-kubernetes.adoc[dos recursos do Kubernetes].
+
+====
+
+
+=== Ferrugem
+
+Consulte as funções que expõem essa funcionalidade emhttps://docs.rs/kubewarden-policy-sdk/0.8.7/kubewarden_policy_sdk[documentação de referência do Rust SDK].
+
+=== Ir
+
+Consulte as funções que expõem essa funcionalidade emhttps://pkg.go.dev/github.com/kubewarden/policy-sdk-go[documentação de referência do Go SDK].
+
+== Políticas da Rego
+
+=== Gatekeeper
+
+A exposição de informações com reconhecimento de contexto está sob a chave `+data.inventory+`, como o Gatekeeper.
+
+O povoamento do inventário é feito com os recursos aos quais a política tem acesso por meio do campo `+spec.contextAwareResources+`.
+
+=== Agente de política aberta
+
+A exposição de informações com reconhecimento de contexto está na chave `+data.kubernetes+`, como ohttps://github.com/open-policy-agent/kube-mgmt[`+kube-mgmt+`] faz por padrão.
+
+A população do inventário é composta pelos recursos aos quais a política tem acesso por meio do campo`+spec.contextAwareResources+`.
