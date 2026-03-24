@@ -1,0 +1,199 @@
+include::partial$variables.adoc[]
+= 検証 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} チームが作成したさまざまな成果物を検証し、SBOM と実績ファイルを使用して安全なサプライチェーンを確保する。
+:doc-persona: ["kubewarden-operator", "kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["security", "verifying-kubewarden"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"security"、"verification"]]。
+:current-version: {page-origin-branch}
+
+{project-name} スタックは、さまざまな証明と保証を提供する：
+
+- 証明の証明：ビルドプロセス、ビルドの依存関係を知らせ、ビルドの複製を支援する。https://slsa.dev/spec/v1.0/[]SLSA スタンダード（当社の場合はレベル 3）を導入する。
+- SBOMの認証：ソフトウェアの依存関係を含む。{short-project-name} 、その依存関係の脆弱性を確認する。
+- サイン入りの工芸品：アーティファクトが本物かどうかを示すことで、サプライチェーンの安全性を提供する。これには、成果物だけでなく、実績証明やSBOM証明も含まれる。
+
+{short-project-name} アーティファクト、実績証明、SBOMは、https://docs.sigstore.dev[] Sigstoreを使用し、キーレスワークフローで署名される。これは、署名証明書に以下の情報が含まれていることを意味する。`+*+` は、以下の文字と一致する：
+
+* 発行者 `+https://token.actions.githubusercontent.com+`
+* を主題とする： `+https://github.com/kubewarden/*+`
+* x509 certificate extension for GHA, "github_workflow_repository": `+kubewarden/*+`
+
+[IMPORTANT]
+====
+このチュートリアルの`+--certificate-identity-regexp+` cosign CLIフラグで使用されているサブジェクトは、説明を簡単にするために`+https://github.com/kubewarden/*+` 。しかし、これでは同じ接頭辞を持つリポジトリからの成果物が検証をバイパスしてしまう。例：`+github.com/kubewarden/policy-server1+`.
+
+より安全なチェックを望むなら、完全なURLを使う必要がある：
+
+----
+https://github.com/kubewarden/policy-server/.github/workflows/container-image.yml@refs/tags/v1.30.0
+----
+
+URLには、リポジトリのフルパス、ワークフローのファイルパス、バージョンタグが含まれていることに注意してください。このベストプラクティスに従えば、完全なURLでcosign CLIフラグ`+--certificate-identity+` 。
+====
+
+{short-project-name} チームはまた、安全なサプライチェーンを改善し、スタック全体をSLSAレベル3に準拠させるべく努力している。したがって、主な成果物にはSBOMファイルと実績ファイルも含まれる。以下のセクションでは、{short-project-name} チームが作成したさまざまな成果物を検証する方法と、SBOM と実績ファイルを使用して成果物の安全なサプライチェーンを確保する方法を示す。
+
+[#container-images]
+== コンテナ画像
+
+{short-project-name} チームが作成したキーレス署名付きコンテナ・イメージを検証するには、`+cosign+` CLI ツールを使用できます。例えば、`+kubewarden/policy-server+` イメージを検証するには、以下のコマンドを実行します：
+
+[source, console]
+----
+cosign verify ghcr.io/kubewarden/policy-server:v1.30.0 \
+  --certificate-identity-regexp 'https://github.com/kubewarden/*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+Verification for ghcr.io/kubewarden/policy-server:v1.30.0 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate was verified using trusted certificate authority certificates
+
+<snipped json>
+----
+
+そして、返されたJSONの証明書に正しい発行者、サブジェクト、`+github_workflow_repository+` の拡張子が含まれていることを確認できる。
+
+で確認することもできる。link:https://github.com/rancherlabs/slsactl[`+slsactl+`].
+例えば、バージョン1.30.0の場合：
+
+[source, console]
+----
+slsactl verify ghcr.io/kubewarden/policy-server:v1.30.0
+----
+
+`+kubewarden/kubewarden-controller+` や`+kubewarden/audit-scanner+` など、{short-project-name} チームが制作した他のすべての画像についても同様である。
+
+また、すべてのコンテナ・イメージにはSBOMファイルと証明ファイルがあり、これを使用することで、イメージの安全なサプライチェーンを確保することができる。認証ファイルは、コンポーネントのリリースページにあるか、OCIレジストリのコンテナイメージに添付されている。
+
+私たちはDockerを使ってイメージとそのアテストを構築しています。しかし、cosignコマンドhttps://github.com/sigstore/cosign/issues/2688[まだサポートしていない] は、DockerがOCIレジストリから生成した証明書の検証を。
+このため、リリースページまたはレジストリからファイルをダウンロードし、ローカルで検証する必要がある。OCIレジストリから認証ファイルをダウンロードしたい場合は、https://docs.docker.com/build/metadata/attestations/attestation-storage/[Docker documentation]に従い、`+crane+` または`+docker+` のようなツールを使って、レジストリからファイルをダウンロードすることができます。
+
+{short-project-name} コンポーネントのリリースページから認証ファイルをダウンロードする場合は、そのファイルを確認してください：
+
+[,console]
+----
+$ cosign verify-blob --bundle audit-scanner-attestation-amd64-checksum-cosign.bundle \
+    --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+    --certificate-identity="https://github.com/kubewarden/audit-scanner/.github/workflows/attestation.yml@refs/tags/v1.30.0" \
+    audit-scanner-attestation-amd64-checksum.txt
+Verified OK
+----
+
+ファイルの完全性が確認されたので、SBOMファイルとProvenanceファイルを検査することができます。
+これらの情報は、link:https://github.com/rancherlabs/slsactl[]`slsactl.
+例えば、バージョン1.30.0の場合：
+
+[,console]
+----
+slsactl download provenance ghcr.io/kubewarden/policy-server:v1.30.0
+slsactl download sbom ghcr.io/kubewarden/policy-server:v1.30.0
+----
+
+== ヘルムチャート
+
+{short-project-name} Helm チャートは、`+https://+` の従来の Helm リポジトリにあります。 https://charts.kubewarden.io.
+
+同じHelmチャートはSigstoreのキーレス署名によって署名され、OCIアーティファクトとしてHelmチャートとその出所証明の両方を保持するOCIリポジトリにプッシュされる。
+
+ヘルム海図は、必要なアーティファクトをすべて記載したhttps://hauler.dev[Hauler]manifest と共に公表される。
+
+=== 運搬業者との確認
+
+Haulerはダウンロード時に自動的にアーティファクトを検証する。詳しくはxref:/howtos/airgap/03-hauler.adoc[ドキュメントを]ご覧ください。
+
+=== 手動による検証
+
+Helm 3.8.0以降、HelmはOCIレジストリをサポートしていますが、OCIレジストリには制約があるため、`+helm+` 。https://github.com/orgs/kubewarden/packages?tab=packages&q=charts[GitHubのContainer Registryに] 。
+
+Helmチャートを検証するには、`+cosign+` がインストールされている必要があります。次に、例えば以下のコマンドを実行する：
+
+----
+cosign verify ghcr.io/kubewarden/charts/kubewarden-defaults:1.5.4 \
+  --certificate-identity-regexp 'https://github.com/kubewarden/*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+Verification for ghcr.io/kubewarden/charts/kubewarden-defaults:1.5.4 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate was verified using trusted certificate authority certificates
+
+<snipped json>
+----
+
+そして、返されたjson内の証明書が正しい発行者、サブジェクト、`+github_workflow_repository+` 拡張子を含んでいることを検証できる。
+
+チャートの認証は、アーティファクト・レイヤーとしてOCIレジストリにプッシュされる。検証方法については、xref:#container-images[コンテナ・イメージの]セクションを参照のこと。
+
+{short-project-name} チャートは、`+imagelist.txt+` と (`+policylist.txt+` が必要な場合) をチャートの内側に表示する。したがって、すでにチャートを検証していれば、それらのリストを使って、消費されたコンテナ・イメージとポリシーを検証することができる。
+
+{short-project-name} また、ヘルム海図に関しても通常の慣例に従っている。したがって、https://github.com/cvila84/helm-image[helm-imageの]ようなプラグインを使うか、以下のスクリプトを使えば、Helmチャートのすべての画像を見つけることもできる：
+
+[subs="+attributes",bash]
+----
+#!/usr/bin/env bash
+helm pull --untar kubewarden/kubewarden-controller && \
+helm pull --untar kubewarden/kubewarden-defaults && \
+{ helm template ./kubewarden-controller; helm template ./kubewarden-defaults } \
+    | yq '..|.image? | select(.)' \
+    | sort -u | sed 's/"//g'
+----
+
+これは私たちに与えてくれる：
+
+----
+ghcr.io/kubewarden/kubewarden-controller:v0.5.5
+ghcr.io/kubewarden/policy-server:v0.3.1
+ghcr.io/kubewarden/kubectl:v1.21.4
+----
+
+リスト内の各画像について、xref:#container-images[前のセクションの]指示に従ってシグストアの署名を確認します。
+
+== kwctl
+
+kwctlバイナリは、https://docs.sigstore.dev/cosign/signing/signing_with_blobs/[Sigstoreのブロブ署名を]使用して署名されています。
+
+https://github.com/kubewarden/kwctl/releases/[`+kwctl+`リリース] をダウンロードする際、各 zip ファイルには検証に使用できる Sigstore バンドルファイルが含まれています:`+kwctl-*bundle.sigstore+`.
+
+kwctlを検証するには、cosignがインストールされている必要がある：
+
+----
+cosign verify-blob \
+  --bundle kwctl-linux-x86_64.bundle.sigstore \
+  --certificate-identity-regexp 'https://github.com/kubewarden/*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  kwctl-linux-x86_64
+
+Verified OK
+----
+
+そして、返されたjson内の証明書が正しい発行者、サブジェクト、`+github_workflow_repository+` 拡張子を含んでいることを検証できる。
+
+SBOMは署名され、プロジェクトのhttps://github.com/kubewarden/kwctl/releases[GitHub Releasesで]公開される。
+
+`+kwctl+` の証明は、以下を用いて検証される。https://cli.github.com/manual/gh_attestation_verify[`+gh attestation verify+`].例えば、`+gh attestation verify kwctl-linux-x86_64 --repo kubewarden/kwctl+` 。
+
+== ポリシー
+
+{short-project-name} チームが管理するポリシーもSigstoreプロジェクトを使って署名される。通常のコンテナ・イメージと同様に、`+cosign+` を使って検証することができる：
+
+----
+cosign verify ghcr.io/kubewarden/policies/verify-image-signatures:v0.2.5 \
+  --certificate-identity-regexp 'https://github.com/kubewarden/*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+Verification for ghcr.io/kubewarden/policies/verify-image-signatures:v0.2.5 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate was verified using trusted certificate authority certificates
+
+  <snipped json>
+----
+
+そして、返されたjson内の証明書が正しい発行者、サブジェクト、`+github_workflow_repository+` 拡張子を含んでいることを検証できる。
