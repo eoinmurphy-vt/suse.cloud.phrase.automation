@@ -1,0 +1,396 @@
+include::partial$variables.adoc[]
+= Utilisation de Pod Security Admission avec {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurer l'admission de la sécurité des pods dans un cluster Kubernetes avec {project-name}'s pour sécuriser les pods.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-distributor", "kubewarden-integrator"].
+:doc-topic: ["pod-security-admission-with-kubewarden"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "pod security admission", "pod security policy", "kubernetes"]
+:sidebar_label: Admission à la sécurité des pods
+:sidebar_position: 30
+:current-version: {page-origin-branch}
+
+Les politiques de sécurité des pods (PSP) sont supprimées depuis la version 1.25 de Kubernetes.
+Ils sont remplacés par le système d (PSA) https://kubernetes.io/docs/concepts/security/pod-security-admission/['admission à la sécurité des pods].
+
+PSA simplifie la sécurisation des pods dans les clusters Kubernetes.
+
+La PSA comporte trois profils (décrits https://kubernetes.io/docs/concepts/security/pod-security-standards/[à l'adresse]) pour les espaces de noms :
+
+* *privilégiée*, offrant le plus large éventail de permissions
+* *la ligne de base*, afin d'empêcher toute nouvelle escalade des privilèges
+* *restreint*, restreint à durcir Gousses
+
+Un contrôleur PSA prend des mesures en cas de détection d'une violation.
+Les actions sont les suivantes : `+enforce+`, `+audit+`, et `+warn+`.
+Ils peuvent être configurés.
+
+Au moment de la rédaction de ce document, avec Kubernetes 1.28, le contrôleur PSA présente les limitations suivantes :
+
+* Aucune capacité de mutation
+* Les objets de niveau supérieur (comme `+Deployment+`, `+Job+`) ne sont évalués que lorsque les modes `+audit+` ou `+warn+` sont activés.
+
+{short-project-name} peut être utilisé pour *intégrer* un profil PSA afin d'éviter ces limitations.
+
+[NOTE]
+====
+
+Vous pouvez utiliser {short-project-name} pour remplacer l'ancienne configuration PSP, comme indiqué dans xref:howtos/psp-migration.adoc[PSP migration.]
+Toutefois, l'objectif de cet article est de montrer comment {short-project-name} peut compléter le nouveau PSA.
+====
+
+
+== Exemple
+
+Dans cet exemple, nous créons un espace de noms et nous appliquons des règles restrictives en matière de PSA :
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-namespace
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.25
+EOF
+----
+
+Ce profil PSA ne permet pas de créer des conteneurs qui exécutent leur application en tant qu'utilisateur `+root+`.
+Lors de la définition de ce conteneur :
+
+* l'attribut `+runAsNonRoot+` doit être défini comme suit `+true+`
+* celui de `+runAsUser+` ne peut pas être réglé sur `+0+`.
+
+Ainsi, la ressource suivante n'atteindra pas l'état souhaité :
+
+.`+kubectl+` commande configurant une ressource avec `+runAsUser: 0+` (marqué comme ➀)
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 0 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 0+`
+=====
+
+Si nous vérifions le déploiement, nous pouvons voir que le PSA empêche la création du pod :
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:09:56Z",
+  "lastUpdateTime": "2022-10-28T19:09:56Z",
+  "message": "pods \"nginx-deployment-5f98b4db8c-2m96l\" is forbidden: violates PodSecurity \"restricted:v1.25\": runAsUser=0 (container \"nginx\" must not set runAsUser=0)",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+Vous pouvez résoudre ce problème en supprimant le site `+runAsUser: 0+` de la définition du conteneur :
+
+.`+kubectl+` pour configurer une ressource sans `+runAsUser: 0+`
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+=====
+
+La PSA autorise maintenant une tentative de création de pods, mais elle échoue toujours.
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace
+NAME                                READY   STATUS                       RESTARTS   AGE
+nginx-deployment-57d8568bbb-h4bx7   0/1     CreateContainerConfigError   0          47s
+----
+
+C'est parce que la définition du conteneur n'a pas spécifié l'utilisateur à utiliser lors du lancement d'un programme à l'intérieur du conteneur.
+Si c'est le cas, le programme s'exécute par défaut en tant qu'utilisateur root.
+La directive `+runAsNonRoot+` ne l'autorise pas :
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-h4bx7 -o json | jq ".status.containerStatuses"
+[
+  {
+    "image": "nginx:1.14.2",
+    "imageID": "",
+    "lastState": {},
+    "name": "nginx",
+    "ready": false,
+    "restartCount": 0,
+    "started": false,
+    "state": {
+      "waiting": {
+        "message": "container has runAsNonRoot and image will run as root (pod: \"nginx-deployment-57d8568bbb-8mvkc_my-namespace(add7bcc5-3d23-43d0-94e9-6e78f887a53f)\", container: nginx)",
+        "reason": "CreateContainerConfigError"
+      }
+    }
+  }
+]
+----
+
+C'est là que {short-project-name} peut vous aider.
+Vous pouvez utiliser la https://artifacthub.io/packages/kubewarden/user-group-psp/user-group-psp[`+user-group-policy+`] pour modifier la définition du déploiement.
+Cela permet de configurer un utilisateur par défaut pour les conteneurs en omettant cette information.
+
+[NOTE]
+====
+
+Pour cet exemple, vous avez besoin de la pile {short-project-name} dans le cluster Kubernetes.
+Voir le xref:quick-start.adoc[QuickStart] pour plus de détails.
+====
+
+
+Il est possible d'imposer une fourchette d'ID utilisateur, par exemple 1000--2000 et 4000--5000 :
+
+.Commande kubectl imposant une plage d'identifiants d'utilisateurs
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: user-group-psp
+spec:
+  policyServer: default
+  module: registry://ghcr.io/kubewarden/policies/user-group-psp:latest
+  rules:
+  - apiGroups: ["", "apps"]
+    apiVersions: ["v1"]
+    resources: ["pods", "deployments"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      overwrite: false
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 4000
+          max: 5000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+----
+
+======
+
+Vérifiez que la politique est active avant de continuer :
+
+[subs="+attributes",shell]
+----
+kubectl get clusteradmissionpolicy.policies.kubewarden.io/user-group-psp
+----
+
+Lorsque la politique est active, recréez le déploiement :
+
+.commande kubectl recréant le déploiement
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl delete deployment -n my-namespace nginx-deployment && \
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+
+======
+
+Le déploiement est maintenant modifié par la politique de {short-project-name} qui autorise le démarrage du pod.
+Le conteneur défini dans le Pod a une valeur par défaut de `+runAsUser+`:
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-nv8fj -o json | jq ".spec.containers[].securityContext"
+{
+  "allowPrivilegeEscalation": false,
+  "capabilities": {
+    "drop": [
+      "ALL"
+    ]
+  },
+  "runAsNonRoot": true,
+  "runAsUser": 1000,
+  "seccompProfile": {
+    "type": "RuntimeDefault"
+  }
+}
+----
+
+L'intégration de {short-project-name} peut faire plus dans ce scénario.
+Il peut vérifier la valeur du site `+runAsUser+` fourni.
+
+Cette ressource est rejetée par la politique {short-project-name} décrite plus haut :
+
+.Commande kubectl pour montrer le rejet des ressources
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment2
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 7000 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 7000+`
+======
+
+Il est rejeté parce que la valeur `+runAsUser+` est définie sur `+7000+`, ce qui est en dehors des plages autorisées par la politique :
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:22:04Z",
+  "lastUpdateTime": "2022-10-28T19:22:04Z",
+  "message": "admission webhook \"clusterwide-user-group-psp.kubewarden.admission\" denied the request: User ID outside defined ranges",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+== Résumé
+
+PSA offre un moyen simple de sécuriser les clusters Kubernetes.
+L'objectif principal de la PSA est la simplicité et elle n'a pas la puissance et la flexibilité de l'ancienne PSP.
+
+L'utilisation de {short-project-name} avec PSA permet de combler cette lacune.
