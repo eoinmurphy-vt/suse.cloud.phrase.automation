@@ -1,0 +1,61 @@
+include::partial$variables.adoc[]
+= ロギング
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} の SLOG ライブラリとの統合を使用し、初期化することで、ポリシーのロギング機能を設定します。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "logging"]
+:doc-type: ["tutorial"]
+:keywords: ["{project-name}", kubewarden, "kubernetes", "logging"]
+:sidebar_label: ロギング
+:current-version: {page-origin-branch}
+
+ポリシーにロギングを実行させることができる。
+`+policy-server+` または`+kwctl+` は、これらのログエントリーを適切な情報とともに転送する。
+
+Rust SDKに選ばれたロギング・ライブラリは以下の通りです。https://github.com/slog-rs/slog[`+slog+`].
+人気のある有名なクレートで、{project-name} ときれいに統合できる。
+
+== ロガーの初期化
+
+このプロジェクトでは、ポリシーの必要な場所からログインできるグローバル・シンクを作成することを推奨している。
+これには、`+lazy_static+` 木箱を使う：
+
+[subs="+attributes",rust]
+----
+use slog::{o, Logger};
+
+lazy_static! {
+    static ref LOG_DRAIN: Logger = Logger::root(
+        logging::KubewardenDrain::new(),
+        o!("policy" => "sample-policy")
+    );
+}
+----
+
+== ロガーの消費
+
+これで、`+validate+` 、または`+validate_settings+` 関数内から、`+slog+` によってエクスポートされたマクロを使用して、サポートされている各ロギング・レベルに一致するロギングを行うことができます：
+
+[subs="+attributes",rust]
+----
+use slog::{info, o, warn, Logger};
+
+fn validate(payload: &[u8]) -> CallResult {
+    // ...
+    info!(LOG_DRAIN, "starting validation");
+    // ...
+    warn!(
+        LOG_DRAIN, "structured log";
+        "some_resource_name" => &some_resource_name
+    );
+    // ...
+}
+----
+
+`+slog+` ライブラリは、グローバル変数で初期化されたドレインにすべてのログを送信する。
+これは、ポリシーを実行するポリシー・エバリュエータに同期する。
+これは`+kwctl+` か`+policy-server+` のどちらかである。
+次に、ポリシーエバリュエータはこの情報をログに記録し、Kubernetesリクエスト`+uid+` などの既知のコンテキスト情報をさらに追加する。
+
+slogが提供するhttps://docs.rs/slog/2.7.0/slog/macro.log.html[ロギング・マクロの]詳細については、https://docs.rs/slog/2.7.0/slog/index.html[ドキュメントを]参照のこと。
