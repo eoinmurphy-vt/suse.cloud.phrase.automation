@@ -1,0 +1,199 @@
+= 自动升级
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2025-09-16
+:page-revdate: {revdate}
+
+== 概述
+
+您可以使用 Rancher 的系统升级控制器管理 K3s 集群升级。这是一种基于 Kubernetes 的集群升级方法。它利用https://github.com/rancher/system-upgrade-controller/blob/master/doc/plan.md#planspec[`+Plan+`]自定义资源来声明要升级哪些节点以及升级到哪个版本。
+
+该计划规定了升级政策和要求。它还通过https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/[标签选择器]定义了哪些节点应该升级。有关适合 K3s 集群升级的默认计划，请参阅下文。有关更多高级计划配置选项，请参阅上面链接的计划文档。
+
+系统升级控制器通过监控计划和选择运行升级https://kubernetes.io/docs/concepts/workloads/controllers/jobs-run-to-completion/[作业]的节点来安排升级。当作业成功运行完成后，控制器会相应地标注运行该作业的节点。
+
+[WARNING]
+====
+如果 K3s 集群由 Rancher 管理，则应使用 Rancher UI 管理升级。
+
+* 如果 K3s 集群已导入（注册）Rancher，Rancher 默认会管理系统升级控制器的部署和计划。除非您已禁用 Rancher 中的版本管理，否则请勿执行本页上的步骤。
+  有关详细信息，请参阅https://rancher.github.io/product-docs-playbook/rancher-manager/latest/en/cluster-deployment/register-existing-clusters.html#_configuring_version_management_for_suse_rancher_prime_rke2_and_suse_rancher_prime_k3s_clusters[为 RKE2 和 K3s 集群配置版本管理]。
+* 如果 K3s 集群由 Rancher 提供，Rancher 会使用系统代理管理版本升级。请勿按照本页上的步骤操作。
+* 如果 K3s 群集*不是*由 Rancher 管理，则可按照以下步骤操作。
+====
+
+== 使用系统升级控制器
+
+要实现自动升级，必须执行以下操作：
+
+. 将系统升级控制器安装到群集中
+. 创建计划，说明哪些节点组需要升级，以及如何升级。
+
+有关系统升级控制器的设计和架构或其与 K3s 集成的更多详情，请参阅以下 Git 仓库：
+
+* https://github.com/rancher/system-upgrade-controller[system-upgrade-controller]
+* https://github.com/k3s-io/k3s-upgrade[k3s-upgrade]
+
+[TIP]
+====
+当尝试升级到新版本的 K3s 时，https://kubernetes.io/docs/setup/release/version-skew-policy/[Kubernetes 版本倾斜策略]适用。确保您的计划在升级时不会跳过中间的次要版本。系统升级控制器本身无法防止 Kubernetes 版本发生不支持的变更。
+====
+
+
+=== 安装
+
+system-upgrade-controller 清单会安装自定义资源定义、部署、服务账户、群集角色绑定和配置图。要安装这些组件，请运行以下命令：
+
+[,bash]
+----
+kubectl apply -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/crd.yaml -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/system-upgrade-controller.yaml
+----
+
+可以通过前面提到的 configmap 对控制器进行配置和自定义，但必须删除控制器 pod 才能应用更改。
+
+=== 配置
+
+服务器节点应始终先于代理节点升级。因此，建议您至少创建两个计划：一个用于升级服务器（控制面）节点的计划，一个用于升级代理节点的计划。您可以根据需要创建其他计划，以控制升级在节点间的展开。创建计划后，控制器就会接收这些计划并开始升级群集。
+
+以下两个示例计划以稳定版xref:upgrades/manual.adoc#_release_channels[发布通道]为目标，持续将群集升级到当前的稳定版：
+
+[,yaml]
+----
+# Server plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: In
+      values:
+      - "true"
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+---
+# Agent plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: agent-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: DoesNotExist
+  prepare:
+    args:
+    - prepare
+    - server-plan
+    image: rancher/k3s-upgrade
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+----
+
+关于这些计划，有几件重要的事情值得一提：
+
+. 计划必须在部署控制器的同一命名空间中创建。
+. `+concurrency+` 字段表示可以同时升级多少个节点。
+. 服务器计划通过指定一个标签选择器来选择带有`+node-role.kubernetes.io/control-plane+` 标签的节点，从而锁定服务器节点。代理计划通过指定一个标签选择器来选择没有该标签的节点，从而锁定代理节点。
+. 代理计划中的`+prepare+` 步骤会导致该计划的升级任务在执行前等待服务器计划完成。这一逻辑内置于用于准备步骤的图像中，而不是系统-升级-控制器本身的一部分。
+. 这两个计划都将`+channel+` 字段设置为稳定版渠道 URL。这将导致控制器监控该 URL，并在解析到新版本时升级群集。这与xref:upgrades/manual.adoc#_release_channels[释放通道]配合得很好。因此，您可以通过以下通道配置您的计划，以确保您的群集始终自动升级到最新的 K3s 稳定版本。或者，也可以省略`+channel+` 字段，将`+version+` 字段设置为 K3s 的特定版本：
++
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  version: v1.33.4+k3s1
+----
+
+一旦控制器从版本字段或通过轮询通道服务器检测到计划的目标版本已解决，升级就会立即开始。修改计划会导致控制器重新评估计划，并确定是否需要再次升级。如果配置了通道，URL 也会定期轮询，以检查是否有新版本。
+
+您可以通过 kubectl 查看计划和作业，监控升级进度：
+
+[,bash]
+----
+kubectl -n system-upgrade get plans -o wide
+kubectl -n system-upgrade get jobs
+----
+
+=== 安排升级
+
+通过在计划规格中设置`+window+` 字段，可限制计划在特定时间窗口内执行。时间窗口字段与https://kured.dev/docs/configuration/#setting-a-schedule[计划表选项] kured兼容，格式也相同。例如
+
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  window:
+    days:
+      - monday
+      - tuesday
+      - wednesday
+      - thursday
+      - friday
+    startTime: 19:00
+    endTime: 21:00
+    timeZone: UTC
+----
+
+执行计划升级的任务不会在时间窗口外创建。创建任务后，计划可在窗口关闭后继续运行。
+
+== 防止降级
+
+[IMPORTANT]
+.版本闸门
+====
+从 2023-07 版本开始（https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.27.4%2Bk3s1[v1.27.4+k3s1]、https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.26.7%2Bk3s1[] v1. https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.25.12%2Bk3s1[26.7+k3s1、]、https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.24.16%2Bk3s1[v1.25.12+k3s1]
+====
+
+
+Kubernetes 不支持控制平面组件的降级。升级计划使用的 k3s-upgrade 映像将拒绝降级 K3，导致计划失败。在计划中配置了`+cordon: true+` 的节点将在故障发生后保持封锁。
+
+下面是一个群集示例，显示了失败的升级 pod 和封锁的节点：
+
+[,console]
+----
+$ kubectl get pods -n system-upgrade
+NAME                                                              READY   STATUS    RESTARTS   AGE
+apply-k3s-server-on-ip-172-31-0-16-with-7af95590a5af8e8c3-2cdc6   0/1     Error     0          9m25s
+apply-k3s-server-on-ip-172-31-10-23-with-7af95590a5af8e8c-9xvwg   0/1     Error     0          14m
+apply-k3s-server-on-ip-172-31-13-213-with-7af95590a5af8e8-8j72v   0/1     Error     0          18m
+system-upgrade-controller-7c4b84d5d9-kkzr6                        1/1     Running   0          20m
+$ kubectl get nodes
+NAME               STATUS                     ROLES                       AGE   VERSION
+ip-172-31-0-16     Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-10-23    Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-13-213   Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-2-13     Ready                      <none>                      19h   v1.27.4+k3s1
+----
+
+您可以通过以下任一方法将封锁节点恢复服务：
+
+* 更改计划的版本或通道，使其目标版本与集群上当前运行的版本相同或更新，以便计划成功。
+* 删除计划并手动解除对节点的约束。
+使用`+kubectl get plan -n system-upgrade+` 查找计划名称，然后使用`+kubectl delete plan -n system-upgrade PLAN_NAME+` 删除该计划。删除计划后，使用`+kubectl uncordon NODE_NAME+` 解除对每个节点的约束。
+
+== 安全
+
+启动的升级任务必须具有很高的权限，才能对底层节点进行更改。默认配置如下：
+
+* 主机`+IPC+` 、`+NET+` 和`+PID+` 命名空间
+* `+CAP_SYS_BOOT+` 能力
+* 主机 root 挂载在`+/host+` 上，具有读写权限
