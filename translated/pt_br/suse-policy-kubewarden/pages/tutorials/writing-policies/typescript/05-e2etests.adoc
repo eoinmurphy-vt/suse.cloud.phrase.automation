@@ -1,0 +1,259 @@
+include::partial$variables.adoc[]
+= Testes de ponta a ponta
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Saiba como escrever e executar testes abrangentes de ponta a ponta para o comportamento da política usando BATS e kwctl.
+:keywords: "{project-name}", kubewarden, kubernetes, políticas de teste, typescript, teste e2e
+:doc-type: tutorial
+:doc-topic: {project-name}, kubewarden, writing-policies, typescript, end-to-end-testing
+:doc-persona: kubewarden-policy-developer
+:current-version: {page-origin-branch}
+
+Esta seção mostra como você pode escrever testes de ponta a ponta executados no binário real do WebAssembly produzido pela cadeia de ferramentas de compilação do Javy.
+
+== Pré-requisitos
+
+Lembre-se de que você precisa dessas ferramentas em sua máquina de desenvolvimento:
+
+* `+bats+`: Usado para escrever os testes e automatizar sua execução.
+* `+kwctl+` >= v1.30: Ferramenta CLI fornecida por {project-name} para executar suas políticas fora do Kubernetes, entre outras ações. Isso é abordado na xref:/tutorials/testing-policies/index.adoc[seção de políticas de teste] da documentação.
+
+== Testes de redação
+
+Você usará o site `+bats+` para escrever e automatizar seus testes. Cada teste tem as seguintes etapas:
+
+. Execute a política usando `+kwctl run+` diretamente com o arquivo de recurso JSON.
+. Executar asserções em relação à saída produzida por `+kwctl+`.
+
+Todos os testes de ponta a ponta estão em um arquivo chamado `+e2e.bats+`. O projeto scaffolding do projeto inclui um exemplo, `+e2e.bats+`. Você precisa ampliar seu conteúdo para fornecer uma cobertura de teste abrangente para o comportamento de sua política.
+
+== Arquivos de dados de teste
+
+Os casos de teste de ponta a ponta testam a criação de recursos específicos do Kubernetes.
+
+Por exemplo, ao testar a criação de um recurso de Pod:
+
+[source,json]
+----
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "test-pod"
+  },
+  "spec": {
+    "containers": [
+      {
+        "name": "nginx",
+        "image": "nginx:latest"
+      }
+    ]
+  }
+}
+----
+
+O caso de teste de ponta a ponta usa um arquivo JSON que contém um Kubernetes AdmissionReview. Esses objetos JSON AdmissionReviews JSONs são os que são enviados para a API do Kubernetes para que sejam xref:/reference/spec/03-validating-policies.adoc#an-example[validados].
+
+Você pode obter objetos JSON do AdmissionReviews usando `+kwctl scaffold admission-request+`.
+Dê uma olhada em `+test_data/pod.json+` para ver um JSON de AdmissionRequest com um Pod.
+
+== Casos de teste básicos
+
+O modelo já oferece vários testes básicos. Veja como deve ser o arquivo `+e2e.bats+` completo:
+
+[source,bash]
+----
+#!/usr/bin/env bats
+----
+
+Aqui estão os testes existentes com explicações:
+
+=== Teste 1: Rejeitar nomes de host negados
+
+[source,bash]
+----
+@test "reject because hostname is on deny list" {
+  run kwctl run annotated-policy.wasm -r test_data/pod_with_hostname.json --settings-json '{"denied_hostnames": ["forbidden-host", "test-hostname"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request rejected
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Pod hostname 'test-hostname' is not allowed.*") -ne 0 ]
+}
+----
+
+Esse teste garante que a política rejeite Pods quando seu nome de host estiver na lista de negação.
+
+=== Teste 2: Aceitar nomes de host permitidos
+
+[source,bash]
+----
+@test "accept because hostname is not on the deny list" {
+  run kwctl run annotated-policy.wasm -r test_data/pod_with_hostname.json --settings-json '{"denied_hostnames": ["forbidden-host"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+Esse teste verifica se a política aceita Pods quando o nome do host não está na lista de negação.
+
+=== Teste 3: Aceitar quando nenhuma configuração for fornecida
+
+[source,bash]
+----
+@test "accept because the deny list is empty" {
+  run kwctl run annotated-policy.wasm -r test_data/pod_with_hostname.json
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+Esse teste garante que a política aceita solicitações quando você não fornece nenhuma configuração.
+
+=== Teste 4: Aceitar pods sem nomes de host
+
+[source,bash]
+----
+@test "accept because pod has no hostname set" {
+  run kwctl run annotated-policy.wasm -r test_data/pod.json --settings-json '{"denied_hostnames": ["forbidden-host"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request accepted (no hostname to check)
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+Esse teste verifica se a política aceita Pods sem nomes de host, independentemente da lista de negação.
+
+=== Teste 5: Aceitar recursos que não sejam do iPod
+
+[source,bash]
+----
+@test "accept non-pod resources" {
+  run kwctl run annotated-policy.wasm -r test_data/service.json --settings-json '{"denied_hostnames": ["forbidden-host"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request accepted (not a pod)
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+Esse teste garante que a política aceite recursos que não sejam Pods, uma vez que a política valida apenas os nomes de host do Pod.
+
+== Cobertura de teste estendida
+
+Você pode ampliar a cobertura do teste adicionando mais cenários de teste:
+
+=== Teste 6: Validação de configurações
+
+Você também pode adicionar testes para verificar se a validação das configurações funciona corretamente:
+
+[source,bash]
+----
+@test "accept valid settings" {
+  run kwctl run annotated-policy.wasm -r test_data/pod.json --settings-json '{"denied_hostnames": ["host1", "host2"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # settings are valid, request processed normally
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+=== Teste 7: Casos extremos
+
+[source,bash]
+----
+@test "reject with multiple denied hostnames" {
+  run kwctl run annotated-policy.wasm -r test_data/pod_with_hostname.json --settings-json '{"denied_hostnames": ["bad-host", "test-hostname", "forbidden-host"]}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request rejected
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : ".*Pod hostname 'test-hostname' is not allowed.*") -ne 0 ]
+}
+----
+
+[source,bash]
+----
+@test "accept with empty denied hostnames array" {
+  run kwctl run annotated-policy.wasm -r test_data/pod_with_hostname.json --settings-json '{"denied_hostnames": []}'
+
+  # this prints the output when one of the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+----
+
+== Execução dos testes
+
+Você pode executar todos os testes de ponta a ponta usando esse comando:
+
+[source,console]
+----
+make e2e
+----
+
+Isso produz resultados como:
+
+[source,console]
+----
+bats e2e.bats
+e2e.bats
+ ✓ reject because hostname is on the deny list
+ ✓ accept because hostname is not on the deny list
+ ✓ accept because the deny list is empty
+ ✓ accept because pod has no hostname set
+ ✓ accept non-pod resources
+ ✓ accept valid settings
+ ✓ reject with multiple denied hostnames
+ ✓ accept with empty denied hostnames array
+
+8 tests, 0 failures
+----
+
+== Compreensão da saída do teste
+
+Cada teste usa o site `+kwctl+` para executar a política e as verificações:
+
+* Status de saída: O comando `+kwctl+` deve ser encerrado com o status 0 para a execução bem-sucedida da política.
+* Campo permitido: A saída JSON contém um campo `+allowed+` indicando se a solicitação foi aceita.
+* Conteúdo da mensagem: Para solicitações rejeitadas, a saída contém uma mensagem de erro descritiva.
+
+As declarações `+echo "output = $\{output}"+` em cada teste ajudam na depuração, mostrando a saída real da política quando um teste falha.
+
+== Conclusão
+
+Os testes de ponta a ponta oferecem uma cobertura abrangente do comportamento da política, testando o binário real do WebAssembly. Isso garante que a política funcione corretamente quando implantada em {short-project-name}, e não apenas no ambiente de desenvolvimento do TypeScript.
+
+[TIP]
+====
+Para obter exemplos mais abrangentes de testes de ponta a ponta, você pode explorar o https://github.com/kubewarden/policy-sdk-js/blob/main/demo_policy/e2e.bats[código-fonte do], que inclui testes e2e abrangentes que demonstram cada um dos recursos de host do {short-project-name}. Esses testes podem servir de inspiração para testar recursos de política mais avançados, como redes, operações criptográficas e interações de registro da OCI.
+====
