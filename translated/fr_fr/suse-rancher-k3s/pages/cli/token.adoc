@@ -1,0 +1,235 @@
+= jeton k3s
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-05-26
+:page-revdate: {revdate}
+
+K3s utilise des jetons pour sécuriser le processus de jonction des nœuds et pour crypter les informations confidentielles qui sont conservées dans le magasin de données. Les jetons authentifient la grappe auprès du nœud qui la rejoint, et le nœud auprès de la grappe.
+
+== Format du jeton
+
+Les jetons K3s peuvent être spécifiés dans un format sécurisé ou court. Le format sécurisé est préférable, car il permet au client d'authentifier l'identité de la grappe qu'il rejoint avant d'envoyer les informations d'identification.
+
+=== Sécurisé
+
+Le format du jeton sécurisé (parfois appelé jeton "complet") contient les éléments suivants :
+
+`+<prefix><cluster CA hash>::<credentials>+`
+
+* `+prefix+`: un préfixe fixe `+K10+` qui identifie le format du jeton.
+* `+cluster CA hash+`: Le hachage du certificat de l'autorité de certification du serveur de la grappe, utilisé pour authentifier le serveur auprès du nœud de jonction.
+ ** Pour les certificats d'autorité de certification auto-signés, il s'agit de la somme SHA256 du certificat formaté PEM, tel qu'il est stocké sur le disque.
+ ** Pour les certificats d'AC personnalisés, il s'agit de la somme SHA256 du codage DER du certificat racine, communément appelé empreinte digitale du certificat.
+* `+credentials+`: Le nom d'utilisateur et le mot de passe, ou le jeton de support, utilisés pour authentifier le nœud de jonction dans le cluster.
+
+==== TLS Bootstrapping
+
+Lorsqu'un jeton sécurisé est spécifié, le nœud de jonction effectue les étapes suivantes pour valider l'identité du serveur auquel il s'est connecté, avant de transmettre les informations d'identification :
+
+. Avec la vérification TLS désactivée, téléchargez le paquet d'AC à partir de `+/cacerts+` sur le serveur qu'il rejoint.
+. Calculez le hachage SHA256 du certificat de l'autorité de certification, comme décrit ci-dessus.
+. Comparez le hachage SHA256 calculé au hachage du jeton.
+. Si le hachage correspond, vérifiez que le certificat présenté par le serveur peut être validé par le groupe d'autorités de certification du serveur.
+. Si le certificat du serveur est valide, présentez les informations d'identification pour rejoindre le cluster en utilisant l'authentification de base ou par jeton porteur, en fonction du type de jeton.
+
+=== Court
+
+Le format de jeton court ne comprend que le mot de passe ou le jeton de support utilisé pour authentifier le nœud de jonction dans le cluster.
+
+Si un jeton court est utilisé, le nœud de jonction fait implicitement confiance à la liasse d'AC présentée par le serveur ; les étapes 2 à 4 du processus d'amorçage TLS sont sautées. La connexion initiale peut être vulnérable à une attaque de https://en.wikipedia.org/wiki/Man-in-the-middle_attack[type "man-in-the-middle" (].
+
+== Types de jetons
+
+K3s prend en charge trois types de jetons. Seul le jeton serveur est disponible par défaut ; les autres types de jetons doivent être configurés ou créés par l'administrateur.
+
+|===
+| Type | Option CLI | Variable d'environnement
+
+| Serveur
+| `+--token+`
+| `+K3S_TOKEN+`
+
+| Agent
+| `+--agent-token+`
+| `+K3S_AGENT_TOKEN+`
+
+| Bootstrap
+| `+n/a+`
+| `+n/a+`
+|===
+
+[#_server]
+=== Serveur
+
+Si aucun jeton n'est fourni lors du démarrage du premier serveur du cluster, un jeton est créé avec un mot de passe aléatoire. Le jeton du serveur est toujours écrit sur `+/var/lib/rancher/k3s/server/token+`, dans un format sécurisé.
+
+Le jeton de serveur peut être utilisé pour joindre les nœuds de serveur et d'agent au cluster. Toute personne ayant accès au jeton de serveur dispose essentiellement d'un accès administrateur complet à la grappe. Ce jeton doit être gardé précieusement.
+
+Le jeton du serveur est également utilisé comme phrase de passe https://en.wikipedia.org/wiki/PBKDF2[PBKDF2] pour chiffrer les informations confidentielles qui sont conservées dans le magasin de données, connues sous le nom de données d'amorçage. Les données de démarrage sont essentielles pour configurer de nouveaux nœuds de serveur ou restaurer un instantané. C'est pourquoi le jeton doit être sauvegardé en même temps que le datastore du cluster lui-même.
+
+[CAUTION]
+====
+À moins que des certificats CA personnalisés ne soient utilisés, seul le format de jeton court (avec mot de passe uniquement) peut être utilisé lors du démarrage du premier serveur de la grappe. En effet, le hachage de l'autorité de certification du cluster ne peut être connu qu'après que le serveur a généré les certificats auto-signés de l'autorité de certification du cluster.
+====
+
+
+Pour plus d'informations sur l'utilisation de certificats d'autorité de certification personnalisés, consultez la xref:cli/certificate.adoc[documentation de`+k3s certificate+` ]. +
+Pour plus d'informations sur la sauvegarde de votre cluster, consultez la documentation xref:datastore/backup-restore.adoc[Sauvegarde et restauration].
+
+=== Agent
+
+Par défaut, le jeton de l'agent est le même que celui du serveur. Le jeton d'agent peut être défini avant ou après le démarrage du cluster, en modifiant l'option CLI ou la variable d'environnement sur tous les serveurs du cluster. Le jeton d'agent est similaire au jeton de serveur en ce sens qu'il est configuré de manière statique et qu'il n'expire pas.
+
+Le jeton de l'agent est écrit sur `+/var/lib/rancher/k3s/server/agent-token+`, dans un format sécurisé. Si aucun jeton d'agent n'est spécifié, ce fichier est un lien vers le jeton de serveur.
+
+=== Bootstrap
+
+[IMPORTANT]
+.Version Gate
+====
+La prise en charge de la commande `+k3s token+` et la possibilité de rejoindre des nœuds avec des jetons d'amorçage sont disponibles à partir des versions 2023-02 (v1.26.2+k3s1, v1.25.7+k3s1, v1.24.11+k3s1, v1.23.17+k3s1).
+====
+
+K3s prend en charge lesagent https://kubernetes.io/docs/reference/access-authn-authz/bootstrap-tokens/[jetons d'amorçage de l'] générés dynamiquement et expirant automatiquement.
+
+[#_k3s_token_1]
+== jeton k3s
+
+L'outil CLI du jeton k3s gère :
+
+* Le cycle de vie des jetons d'amorçage, en utilisant le même code de génération et de validation que les jetons d'amorçage `+kubeadm token+`. Notez que les deux CLI sont similaires.
+* La rotation du jeton du serveur
+
+----
+NAME:
+   k3s token - Manage tokens
+
+USAGE:
+   k3s token command [command options] [arguments...]
+
+COMMANDS:
+   create    Create bootstrap tokens on the server
+   delete    Delete bootstrap tokens on the server
+   generate  Generate and print a bootstrap token, but do not create it on the server
+   list      List bootstrap tokens on the server
+   rotate    Rotate original server token with a new token
+
+OPTIONS:
+   --help, -h  show help
+----
+
+[discrete]
+=== `+k3s token create [token]+`
+
+Créer un nouveau jeton. `+[token]+` est le jeton à écrire, tel qu'il est généré par `+k3s token generate+`. Si aucun jeton n'est donné, un jeton aléatoire sera généré.
+
+Un jeton au format sécurisé, comprenant le hachage de l'autorité de certification du cluster, sera écrit sur stdout. La sortie de cette commande doit être sauvegardée, car la partie secrète du jeton ne peut pas être affichée à nouveau.
+
+|===
+| Drapeau | Description
+
+| `+--data-dir+` valeur
+| Dossier contenant l'état (par défaut : /var/lib/rancher/k3s ou ${HOME}/.rancher/k3s si vous n'êtes pas root)
+
+| `+--kubeconfig+` valeur
+| Serveur auquel se connecter [$KUBECONFIG]
+
+| `+--description+` valeur
+| Une description conviviale de l'utilisation de ce jeton
+
+| `+--groups+` valeur
+| Groupes supplémentaires pour lesquels ce jeton sera authentifié lorsqu'il sera utilisé pour l'authentification. (par défaut : Valeur par défaut : "system:bootstrappers:k3s:default-node-token")
+
+| `+--ttl+` valeur
+| La durée avant que le jeton ne soit automatiquement supprimé (par exemple 1s, 2m, 3h). Si la valeur est "0", le jeton n'expirera jamais (valeur par défaut) : 24h0m0s)
+
+| `+--usages+` valeur
+| Décrit les façons dont ce jeton peut être utilisé. (par défaut : "signature, authentification")
+|===
+
+[discrete]
+=== `+k3s token delete+`
+
+Supprimer un ou plusieurs jetons. Le jeton complet peut être fourni, ou seulement l'identifiant du jeton.
+
+|===
+| Drapeau | Description
+
+| `+--data-dir+` valeur
+| Dossier contenant l'état (par défaut : /var/lib/rancher/k3s ou ${HOME}/.rancher/k3s si vous n'êtes pas root)
+
+| `+--kubeconfig+` valeur
+| Serveur auquel se connecter [$KUBECONFIG]
+|===
+
+[discrete]
+=== `+k3s token generate+`
+
+Générer un jeton d'amorçage aléatoire.
+
+Il n'est pas nécessaire d'utiliser cette commande pour générer un jeton. Vous pouvez le faire vous-même à condition qu'il soit au format `+[a-z0-9]\{6}.[a-z0-9]\{16}+`, où la première partie est l'identifiant du jeton et la deuxième partie le secret.
+
+|===
+| Drapeau | Description
+
+| `+--data-dir+` valeur
+| Dossier contenant l'état (par défaut : /var/lib/rancher/k3s ou ${HOME}/.rancher/k3s si vous n'êtes pas root)
+
+| `+--kubeconfig+` valeur
+| Serveur auquel se connecter [$KUBECONFIG]
+|===
+
+[discrete]
+=== `+k3s token list+`
+
+Liste des jetons d'amorçage, avec leur identifiant, leur description et leur durée de vie restante.
+
+|===
+| Drapeau | Description
+
+| `+--data-dir+` valeur
+| Dossier contenant l'état (par défaut : /var/lib/rancher/k3s ou ${HOME}/.rancher/k3s si vous n'êtes pas root)
+
+| `+--kubeconfig+` valeur
+| Serveur auquel se connecter [$KUBECONFIG]
+
+| `+--output+` valeur
+| Format de sortie. Options valides : text, json (par défaut : "text")
+|===
+
+[discrete]
+=== `+k3s token rotate+`
+
+[IMPORTANT]
+.Version Gate
+====
+Disponible à partir des versions d'octobre 2023 (v1.28.2+k3s1, v1.27.7+k3s1, v1.26.10+k3s1, v1.25.15+k3s1).
+====
+
+
+Remplacer le jeton de serveur d'origine par un nouveau jeton de serveur. Après l'exécution de cette commande, tous les serveurs et tous les agents qui se sont joints à l'origine avec l'ancien jeton doivent être redémarrés avec le nouveau jeton.
+
+Si vous ne spécifiez pas de nouveau jeton, un jeton sera généré pour vous.
+
+|===
+| Drapeau | Description
+
+| `+--data-dir+` valeur
+| Dossier contenant l'état (par défaut : /var/lib/rancher/k3s ou ${HOME}/.rancher/k3s si vous n'êtes pas root)
+
+| `+--kubeconfig+` valeur
+| Serveur auquel se connecter [$KUBECONFIG]
+
+| `+--server+` valeur
+| Serveur auquel se connecter (par défaut : "https://127.0.0.1:6443") [$K3S_URL]
+
+| `+--token+` valeur
+| Jeton existant utilisé pour joindre un serveur ou un agent à un cluster [$K3S_TOKEN].
+
+| `+--new-token+` valeur
+| Nouveau jeton qui remplace le jeton existant
+|===
+
+[WARNING]
+====
+Les instantanés pris avant la rotation nécessiteront l'ancien jeton de serveur lors de la restauration du cluster.
+====
