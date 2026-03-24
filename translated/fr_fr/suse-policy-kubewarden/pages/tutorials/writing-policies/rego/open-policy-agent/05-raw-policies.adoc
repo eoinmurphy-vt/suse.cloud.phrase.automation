@@ -1,0 +1,90 @@
+include::partial$variables.adoc[]
+= Rédaction de politiques brutes
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Apprenez à rédiger des politiques brutes qui évaluent des documents JSON arbitraires et appliquent des règles de contrôle d'accès dans votre système.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "raw-policies"].
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "raw policies", "open policy agent", "opa", "rego"].
+:sidebar_label: Politiques brutes
+:current-version: {page-origin-branch}
+
+Les politiques brutes sont des politiques qui peuvent évaluer des documents JSON arbitraires.
+Pour plus d'informations sur les politiques brutes, veuillez consulter la page surxref:howtos/raw-policies.adoc[les politiques brutes].
+
+== Exemple
+
+Les exemples suivants devraient vous sembler familiers si vous avez terminé la page dexref:tutorials/writing-policies/rego/open-policy-agent/02-create-policy.adoc[validation de] ce tutoriel.
+
+[NOTE]
+====
+N'oubliez pas de marquer la politique comme `+raw+`, en utilisant le champ `+policyType+` dans la configuration `+metadata.yml+`.
+Veuillez vous référer à la spécification desxref:tutorials/writing-policies//metadata.adoc[métadonnées]pour plus d'informations.
+====
+
+
+=== Validation
+
+Vous allez écrire une politique qui accepte une requête dans le format suivant :
+
+[subs="+attributes",json]
+----
+{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "products"
+  }
+}
+----
+
+Il valide le fait que seul l'utilisateur `+admin+` peut supprimer des ressources.
+
+Commencez par échafauder une politique en utilisant le l'OPAhttps://github.com/kubewarden/opa-policy-template[modèle de politique de].
+
+Vous devez d'abord modifier le fichier `+policy.rego+` pour qu'il ressemble à ceci :
+
+[,rego]
+----
+package validation
+
+deny[msg] {
+    input.request.action == "delete"
+    input.request.user != "admin"
+    msg := sprintf("user %v is not allowed to delete resources", [input.request.user])
+}
+----
+
+Le module `+utility/policy.rego+` doit être modifié pour supprimer le code spécifique à Kubernetes :
+
+[,rego]
+----
+package policy
+
+import data.validation
+
+main = {
+    "response": response,
+}
+
+# OPA policy responses need the uid field to be set.
+# If the request doesn't contain a uid, set it to an empty string.
+default uid = ""
+
+uid = input.request.uid
+
+response = {
+    "uid": uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", validation.deny)
+    reason != ""
+} else = {
+    "uid": uid,
+    "allowed": true,
+} {
+    true
+}
+----
