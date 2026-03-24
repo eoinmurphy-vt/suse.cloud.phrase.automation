@@ -1,0 +1,99 @@
+include::partial$variables.adoc[]
+= Testes para autores de políticas
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Saiba como testar autores de políticas com o kwctl, usando bats ou testes padrão, especificamente para políticas {project-name} no Wasm.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["testing-policies", "policy-authors"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "policy testing", "policy author", "rust", "go", "assemblyscript", "development environment"]
+:current-version: {page-origin-branch}
+
+{project-name} As políticas são programas regulares compilados como WebAssembly (Wasm).
+Como em qualquer tipo de programa, é importante ter uma boa cobertura de teste.
+
+Os autores de políticas podem usar seus ambientes de desenvolvimento favoritos.
+Você pode usar ferramentas conhecidas e estruturas de teste para verificar o desenvolvimento.
+
+Essas políticas do {short-project-name} são exemplos escritos emxref:tutorials/writing-policies/rust/01-intro-rust.adoc[Rust] exref:tutorials/writing-policies/go/01-intro-go.adoc[Go]:
+
+* https://github.com/kubewarden/psp-apparmor[psp-apparmor]
+* https://github.com/kubewarden/ingress-policy[política de entrada]
+
+Eles têm conjuntos de testes usando testes padrão para seus ambientes de desenvolvimento.
+
+As políticas usam o GitHub Actions para seus pipelines de CI.
+
+== Testes de ponta a ponta
+
+Você também pode escrever testes que são executados no binário do Wasm que contém sua política.
+Para fazer isso sem precisar implantar um cluster do Kubernetes, você pode usar estas ferramentas:
+
+* https://github.com/bats-core/bats-core[tacos]: é escrever testes e automatizar sua execução.
+* https://github.com/kubewarden/kwctl[`+kwctl+`]Ferramenta CLI padrão do {short-project-name} que o ajuda com operações relacionadas a políticas: extrair, inspecionar, anotar, enviar e executar.
+
+Para usar o `+kwctl run+`, você precisa do seguinte:
+
+. A referência do arquivo binário Wasm da política a ser executada.
+A política {short-project-name} pode ser carregada a partir de:
+ ** o sistema de arquivos local (`+file://+`)
+ ** um servidor HTTP(s) (`+https://+`
+ ** um registro de OCI (`+registry://+`).
+. O objeto de solicitação de admissão a ser testado.
+Você o fornece por meio do argumento `+--request-path+` ou em `+stdin+`, definindo `+--request-path+` para `+-+`.
+. As configurações de política para tempo de execução como um JSON em linha por meio do sinalizador `+--settings-json+`.
+Ou um arquivo JSON ou YAML, carregado do sistema de arquivos via `+--settings-path+`.
+
+Após o teste `+kwctl+`, imprime o objeto `+ValidationResponse+` na saída padrão.
+
+É assim que você usa o site `+kwctl+` para testar o binário Wasm do https://github.com/kubewarden/ingress-policy[`+ingress-policy+`] mencionado anteriormente:
+
+[subs="+attributes",console]
+----
+$ curl https://raw.githubusercontent.com/kubewarden/ingress-policy/v0.1.8/test_data/ingress-wildcard.json 2> /dev/null | \
+    kwctl run \
+        --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+        --request-path - \
+        registry://ghcr.io/kubewarden/policies/ingress:v0.1.8 | jq
+----
+
+Você pode fazer o download de binários pré-construídos do `+kwctl+`https://github.com/kubewarden/kwctl/releases[ aqui].
+
+Usando o site `+bats+`, você pode escrever um teste que execute esse comando e procure os resultados esperados:
+
+.Um teste de morcegos
+[%collapsible]
+======
+
+[,bash]
+----
+@test "all is good" {
+  run kwctl run \
+    --request-path test_data/ingress-wildcard.json \
+    --settings-json '{"allowPorts": [80], "denyPorts": [3000]}' \
+    ingress-policy.wasm
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # settings validation passed
+  [[ "$output" == *"valid: true"* ]]
+
+  # request accepted
+  [[ "$output" == *"allowed: true"* ]]
+}
+----
+
+======
+
+Você pode colocar o código em um arquivo, `+e2e.bats+`, por exemplo, e depois invocar `+bats+` por:
+
+[subs="+attributes",console]
+----
+$ bats e2e.bats
+ ✓ all is good
+
+1 tests, 0 failures
+----
+
+xref:tutorials/writing-policies/go/05-e2e-tests.adoc[Esta]seção da documentação contém mais informações sobre como escrever testes de ponta a ponta de suas políticas.
