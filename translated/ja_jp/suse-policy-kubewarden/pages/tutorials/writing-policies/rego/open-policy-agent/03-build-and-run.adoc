@@ -1,0 +1,116 @@
+include::partial$variables.adoc[]
+= OPAポリシーの構築と実行 {short-project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Rego ポリシーパッケージを構築し、それを WASM ターゲットにコンパイルし、kwctl と統合することで、プロジェクト用のカスタム OPA ポリシーを構築します。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "build-and-run"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"build and run"、"open policy agent"、"opa"、"rego"]]。
+:current-version: {page-origin-branch}
+
+前のセクションで、あなたはレゴ・ポリシーを書いた。
+構造はこうだ：
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
+
+== ビルド
+
+建てるために：
+
+[subs="+attributes",console]
+----
+$ opa build -t wasm -e policy/main policy.rego request.rego
+----
+
+これにより、レゴ・ポリシーが構築される：
+
+* `+target+`: `+wasm+`.
+あなたは、`+wasm+` ターゲットのポリシーを構築したい。
+* `+entrypoint+`: `+policy/main+`.
+エントリーポイントは、`+policy+` パッケージ内の`+main+` ルールである。
+* `+policy.rego+`:
+`+policy.rego+` ファイルをビルドしてインクルードする。
+* `+request.rego+`:
+`+request.rego+` ファイルをビルドしてインクルードする。
+
+ビルドが完了すると、`+opa build+` が`+bundle.tar.gz+` ファイルを生成している。
+それを取り出すことができる：
+
+[subs="+attributes",console]
+----
+$ tar -xf bundle.tar.gz /policy.wasm
+----
+
+これでツリーは次のようになった：
+
+[subs="+attributes",console]
+----
+.
+├── bundle.tar.gz
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+├── policy.wasm
+└── request.rego
+
+1 directory, 6 file
+----
+
+`+policy.wasm+` ：
+
+[subs="+attributes",console]
+----
+$ file policy.wasm
+policy.wasm: WebAssembly (wasm) binary module version 0x1 (MVP)
+----
+
+さあ、実行だ。
+
+== 走る
+
+`+kwctl+` 、ポリシーを実行する：
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/other-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": true
+}
+----
+
+このリクエストは、`+other+` 名前空間を指すリクエストなので、ポリシーによって受け入れられる。
+
+* `+execution-mode+`: `+opa+`.
+レゴ・ポリシーは、オープン・ポリシー・エージェントまたはゲートキーパーをターゲットにすることができる。
+`+kwctl+` 、どのような政策を実行しているのかを伝えなければならない。
+* `+request-path+`:
+`+kwctl+` がポリシーを評価のために送る、記録されたリクエストの場所。
+
+ここで、`+default+` ネームスペース内にポッドを作成するリクエストを評価してみる：
+
+[subs="+attributes",console]
+----
+$ kwctl run -e opa --request-path data/default-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "it is forbidden to use the default namespace"
+  }
+}
+----
+
+ポリシーはリクエストを拒否し、その理由をAPIサーバーに伝え、ユーザーやAPIコンシューマーに返す。
