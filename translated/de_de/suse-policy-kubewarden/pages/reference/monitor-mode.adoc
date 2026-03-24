@@ -1,0 +1,70 @@
+include::partial$variables.adoc[]
+= Monitor-Modus
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren Sie ClusterAdmissionPolicies oder AdmissionPolicies für den Überwachungsmodus, um Richtlinienaktionen zu verfolgen und zu analysieren, ohne eingehende Anforderungen zu ändern.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "monitor-mode"]
+:doc-type: ["reference"]
+:keywords: ["kubernetes", "kubewarden", "monitor mode"]
+:sidebar_label: Monitor-Modus
+:sidebar_position: 50
+:current-version: {page-origin-branch}
+
+Wenn Sie eine Richtlinie definieren, können Sie zwischen zwei Modi wählen, die in der xref:reference/CRDs.adoc#admissionpolicyspec[`+spec.mode+`].
+Eine Richtlinie wird standardmäßig unter `+mode: protect+` bereitgestellt.
+Die Richtlinie nimmt dann Anfragen an, lehnt sie ab oder ändert sie ab.
+
+Sie können eine Richtlinie im Überwachungsmodus bereitstellen. Im Monitor-Modus:
+
+* Die Richtlinie nimmt alle Anfragen an, als ob sie nicht installiert wäre.
+* Die `+policy-server+` verfolgt die Politik ganz normal. Wenn eine Anfrage abgelehnt wird oder eine Richtlinie eine Mutation vorschlägt, enthält der Trace die Details.
+* Die `+policy-server+` Metriken werden normal aktualisiert, wobei der Modus im metrischen Gepäck enthalten ist. Daher ist es einfach, die Richtlinien nach dem Modus zu filtern und sich auf diejenigen zu konzentrieren, die im Modus `+monitor+` bereitgestellt werden.
+
+`+mode+` ist ein Attribut, das in den Ressourcen `+ClusterAdmissionPolicy+` und`+AdmissionPolicy+` enthalten ist. Es gibt zwei Werte, die das Attribut `+mode+` annehmen kann: `+monitor+` und `+protect+`. Die Standardeinstellung für `+mode+` ist `+protect+`, wenn sie nicht angegeben wird.
+
+Um eine Richtlinie in `+monitor mode+` zu erstellen, müssen Sie die Anweisung `mode: monitor` als Teil der Spezifikation der Ressource aufnehmen. Zum Beispiel im Abschnitt`+spec+` (gekennzeichnet mit ➀) auf dieser `+ClusterAdmissionPolicy+`:
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-capabilities
+spec:
+  mode: monitor <1>
+  policyServer: reserved-instance-for-tenant-a
+  module: registry://ghcr.io/kubewarden/policies/psp-capabilities:v0.1.3
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    allowed_capabilities:
+    - CHOWN
+    required_drop_capabilities:
+    - NET_ADMIN
+----
+<1> Das Attribut `+mode: monitor+` befindet sich im Abschnitt `+spec+`.
+
+== Ändern des Richtlinienmodus
+
+Aus Sicherheitsgründen kann ein Benutzer mit der Berechtigung `+UPDATE+` für Richtlinienressourcen die Richtlinie restriktiver gestalten. Das bedeutet, dass Sie die `+mode+` eines bestehenden `+ClusterAdmissionPolicy+` oder `+AdmissionPolicy+` von `+monitor+` auf`+protect+` ändern können.
+
+Es ist jedoch nicht möglich, die `+mode+` eines bestehenden `+ClusterAdmissionPolicy+` oder`+AdmissionPolicy+` von `+protect+` auf `+monitor+` zu ändern.
+
+Um also die `+mode+` einer Richtlinie von `+protect+` in `+monitor+` zu ändern, müssen Sie die Richtlinie löschen und im Modus `+monitor+` neu erstellen. Das Umschalten einer Richtlinie von`+protect+` auf `+monitor+` ist dasselbe wie das Löschen der Richtlinie, so dass dieser Ansatz voraussetzt, dass der Benutzer über die Berechtigung zum Löschen von Richtlinien verfügt.
+
+== Eine Anmerkung zu mutierenden Politiken
+
+Die Mutation von Richtlinien im Modus `+monitor+` führt keine Mutation an der Ressource durch.
+Im Modus `+monitor+` protokollieren Richtlinien, was sie getan hätten. Sie protokollieren auch das Mutationsfeld, das sie im Modus `+protect+` erzeugt hätten.
+
+[WARNING]
+====
+Befindet sich eine mutierende Richtlinie im Modus `+monitor+`, bewerten spätere Richtlinien eine unveränderte und damit andere Ressource als im Modus`+protect+`.
+====
