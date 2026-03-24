@@ -1,0 +1,110 @@
+include::partial$variables.adoc[]
+= Definición de la configuración de las políticas
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Defina la configuración y la estructura de las políticas en su código para establecer una base que permita validar la integridad de las políticas mediante una gestión eficaz de la configuración. Asegúrese de que se realiza un seguimiento de todos los cambios, por ejemplo, quién realizó el cambio, cuándo y qué se modificó.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "policy-settings"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "writing policies", "policy settings", "rust"]
+:sidebar_label: Definición de la configuración de las políticas
+:current-version: {page-origin-branch}
+
+== Estructura de la configuración de la política
+
+En primer lugar, defina la estructura que contiene la configuración de la política.
+
+Abra el archivo `+demo/src/settings.rs+` y cambie la definición de `+Settings+``+struct+` para que tenga el siguiente aspecto:
+
+[subs="+attributes",rust]
+----
+pub(crate) struct Settings {
+    pub invalid_names: HashSet<String>,
+}
+----
+
+Esto coloca automáticamente la lista de nombres no válidos en una colección Set.
+
+== La función de validación de los ajustes
+
+A continuación, escriba una función de validación de la configuración para asegurarse de que la política se ejecuta siempre con al menos un nombre no válido.
+
+Esto se consigue cambiando la implementación del rasgo `+Validatable+`.
+
+Cambia la implementación de andamiaje definida en `+src/settings.rs+` para que tenga este aspecto:
+
+[subs="+attributes",rust]
+----
+impl kubewarden::settings::Validatable for Settings {
+    fn validate(&self) -> Result<(), String> {
+        if self.invalid_names.is_empty() {
+            Err(String::from("No invalid name specified. Specify at least one invalid name to match"))
+        } else {
+            Ok(())
+        }
+    }
+}
+----
+
+== Añadir pruebas unitarias
+
+Ahora puedes escribir una prueba unitaria para asegurarte de que la validación de la configuración funciona.
+Puede hacerlo de la https://doc.rust-lang.org/stable/book/ch11-00-testing.html[forma habitual de Rust en].
+
+Ya hay algunas pruebas predeterminadas en la parte inferior del archivo `+src/settings.rs+`. Reemplace el código generado automáticamente para que tenga este aspecto:
+
+[subs="+attributes",rust]
+----
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use kubewarden_policy_sdk::settings::Validatable;
+
+    #[test]
+    fn accept_settings_with_a_list_of_invalid_names() -> Result<(), ()> {
+        let mut invalid_names = HashSet::new();
+        invalid_names.insert(String::from("bad_name1"));
+        invalid_names.insert(String::from("bad_name2"));
+
+        let settings = Settings { invalid_names };
+
+        assert!(settings.validate().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn reject_settings_without_a_list_of_invalid_names() -> Result<(), ()> {
+        let invalid_names = HashSet::<String>::new();
+        let settings = Settings { invalid_names };
+
+        assert!(settings.validate().is_err());
+        Ok(())
+    }
+}
+----
+
+Ahora puede ejecutar las pruebas unitarias haciendo:
+
+[subs="+attributes",console]
+----
+cargo test
+----
+
+Esto produce una salida similar a la siguiente:
+
+[subs="+attributes",console]
+----
+   Compiling demo v0.1.0 (/home/jhk/projects/suse/tmp/demo)
+    Finished test [unoptimized + debuginfo] target(s) in 0.59s
+     Running unittests src/lib.rs (target/debug/deps/demo-bea8e11b21717093)
+
+running 5 tests
+test settings::tests::accept_settings_with_a_list_of_invalid_names ... ok
+test settings::tests::reject_settings_without_a_list_of_invalid_names ... ok
+test tests::reject_pod_with_invalid_name ... ok
+test tests::accept_request_with_non_pod_resource ... ok
+test tests::accept_pod_with_valid_name ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+----
