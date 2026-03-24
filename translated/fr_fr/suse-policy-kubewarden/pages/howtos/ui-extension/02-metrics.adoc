@@ -1,0 +1,110 @@
+include::partial$variables.adoc[]
+= Contrôle
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurer la surveillance des environnements Rancher en intégrant {project-name} et Prometheus.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "metrics-and-monitoring"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "user interface extension", "metrics", "monitoring"]
+:current-version: {page-origin-branch}
+
+Rancher dispose d'un outil de cluster pour la surveillance qui utilise Grafana et Prometheus. Vous pouvez utiliser cet outil, en l'intégrant à {project-name}, pour afficher les mesures globales d'un serveur de politiques ou les mesures d'une politique donnée.
+
+[CAUTION]
+====
+
+Vous avez besoin d'un cluster avec au moins 4 cœurs pour installer l'outil de surveillance.
+
+====
+
+
+== Conditions préalables
+
+Vous avez besoin de l'opérateur Prometheus. Suivezxref:howtos/telemetry/30-metrics-qs.adoc#_install_prometheus[les instructions suivantes] pour l'installer.
+
+== Install
+
+=== Créer les ServiceMonitors
+
+* Importez le manifeste pour créer les ServiceMonitors.
+* Vous devez spécifier l'espace de noms de l'installation {short-project-name} 
+
+Ces étapes sont une adaptation desxref:howtos/telemetry/30-metrics-qs.adoc[instructions relatives aux mesures de télémétrie].
+
+[subs="+attributes",yaml]
+----
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubewarden-controller
+  namespace: cattle-kubewarden-system
+spec:
+  endpoints:
+    - interval: 10s
+      port: metrics
+  namespaceSelector:
+    matchNames:
+      - cattle-kubewarden-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubewarden-controller
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubewarden-policy-server
+  namespace: cattle-kubewarden-system
+spec:
+  endpoints:
+    - interval: 10s
+      port: metrics
+  namespaceSelector:
+    matchNames:
+      - cattle-kubewarden-system
+  selector:
+    matchLabels:
+      app: kubewarden-policy-server-default
+----
+
+=== Activer la télémétrie pour votre ressource `+rancher-kubewarden-controller+` 
+
+* Naviguez vers Apps & Marketplace → Apps installées.
+* Sélectionnez l'action `+Edit/Upgrade+` pour votre ressource `+rancher-kubewarden-controller+`.
+* Modifiez le YAML de `+telemetry+` en `+enabled: "true"+` et vérifiez que le port de métrique est correct.
+
+[,yml]
+----
+telemetry:
+  metrics: true
+  mode: sidecar
+  sidecar:
+    metrics:
+      port: 8080
+----
+
+[NOTE]
+====
+
+Il se peut que vous deviez redéployer vos ressources de surveillance pour que le nouveau ConfigMap soit chargé. Vous pouvez le faire à partir de Workloads → Deployments. Sélectionnez toutes les ressources de l'espace de noms `+cattle-monitoring-system+` et sélectionnez l'action `+Redeploy+`.
+
+====
+
+
+=== Créer le tableau de bord Grafana ConfigMap pour les politiques et le serveur de politiques.
+
+[NOTE]
+====
+Cette méthode est adaptée aux installations à gaine d'air.
+====
+
+
+Les tableaux de bord sont uniques entre Policy Server et Policies, vous devez donc séparer la création.
+
+Dans la vue détaillée d'un serveur de politiques ou d'une politique spécifique :
+
+* Naviguez jusqu'à l'onglet "Metrics".
+* Suivez l'invite pour créer le ConfigMap.
+* Recharger la page pour mettre à jour la vue Grafana (Grafana peut être lent à reconnaître le nouveau tableau de bord).
+
+Vous devriez être en mesure d'afficher les paramètres d'un serveur de politiques ou d'une politique donnée sur la page de détail de chaque ressource respective. Vous pouvez également consulter les tableaux de bord{short-project-name} dans l'interface Grafana, ou les événements dans l'interface Prometheus.
