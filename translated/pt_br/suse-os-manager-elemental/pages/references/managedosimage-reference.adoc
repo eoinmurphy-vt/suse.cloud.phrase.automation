@@ -1,0 +1,259 @@
+= Referência de ManagedOSImage
+:revdate: 2025-11-06
+:page-revdate: {revdate}
+
+O recurso ManagedOSImage é responsável por definir uma imagem ou versão de imagem do sistema operacional que precisa ser aplicada a cada nó em um conjunto de clusters direcionados. Depois de criado, o recurso ManagedOSImage pode ser atualizado com um novo `+osImage+` ou `+managedOSVersionName+` para acionar uma nova atualização. Da mesma forma, uma ManagedOSImage existente pode ser atualizada para direcionar novos clusters.
+
+Há várias chaves que podem ser configuradas em uma especificação de recurso `+ManagedOSImage+`.
+
+.upgrade-cluster-target.yaml
+[,yaml]
+----
+include::example$upgrade/upgrade-cluster-target.yaml[]
+----
+
+== `+ManagedOSImageSpec+` referência
+
+|===
+| Chave | Tipo | Valor padrão | Descrição
+
+| osImage
+| string
+| vazio
+| A imagem totalmente qualificada para a qual atualizar os nós. Esse valor tem prioridade sobre `+managedOSVersionName+` se ambos estiverem configurados.
+
+| managedOSVersionName
+| string
+| vazio
+| O nome de um `+ManagedOSVersion+` para o qual atualizar os nós.
+
+| cloudConfig
+| object
+| nulo
+| Uma configuração de inicialização na nuvem ou yip para aplicar aos nós durante as atualizações. Veja <<_cloudconfig,a referência>>.
+
+| nodeSelector
+| object
+| nulo
+| Esse seletor pode ser usado para direcionar nós específicos no site `+clusterTargets+`. Veja <<_nodeselector,a referência>>.
+
+| concorrência
+| int
+| 1
+| Quantos nós do mesmo cluster devem ser atualizados ao mesmo tempo.
+
+| cordão
+| bool
+| verdadeiro
+| Defina como true se os nós devem ser isolados antes de aplicar a atualização. Não é eficaz quando `+drain+` também está configurado.
+
+| drenagem
+| object
+| Ver ref
+| Configure se e como os nós devem ser drenados antes de aplicar a atualização. Veja <<_drain,a referência>>.
+
+| preparar
+| object
+| nulo
+| O contêiner prepare init, se especificado, é executado antes do cordon/drain, que é executado antes do contêiner de upgrade. Veja <<_prepare,a referência>>.
+
+| upgradeContainer
+| object
+| nulo
+| O contêiner de upgrade que executará o upgrade nos nós. Veja <<_upgradecontainer,a referência>>.
+
+| clusterRolloutStrategy
+| object
+| nulo
+| O RolloverStrategy controla a distribuição do pacote de upgrade entre os clusters. Veja <<_clusterrolloutstrategy,a referência>>.
+
+| clusterTargets
+| lista
+| nulo
+| Declara os clusters para os quais será implantado o plano de upgrade. Veja <<_clustertargets,a referência>>.
+|===
+
+== `+cloudConfig+`
+
+Isso descreve uma configuração cloud-init ou yip que será copiada para cada nó atualizado para o caminho `+/oem/90_operator.yaml+`. +
+Essa configuração será aplicada pelo sistema após a reinicialização. +
+Para obter mais informações e exemplos, consulte a xref:references/cloud-config-reference.adoc[referência] `+MachineRegistration+` `+spec.config.cloud-config+`.
+
+== `+nodeSelector+`
+
+Esse https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors[seletor de rótulo] pode ser usado para restringir os upgrades a apenas um determinado conjunto de nós dentro dos clusters visados.
+
+.Clique aqui para obter detalhes
+[%collapsible]
+====
+[,yaml]
+----
+nodeSelector:
+  matchExpressions:
+  - {key: my-node/label, operator: Exists}
+----
+====
+
+== `+drain+`
+
+Configure se e como os nós devem ser drenados. +
+Para desativar a drenagem durante os upgrades, você pode configurar esse campo para `+null+`. +
+A drenagem é ativada por padrão.
+
+As configurações de drenagem se traduzem diretamente no comando https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[drain] kubectl que está sendo executado no nó antes da atualização.
+
+|===
+| Chave | Tipo | Valor padrão | Descrição
+
+| tempo limite
+| time.Duration
+| nulo
+| O tempo de espera antes de desistir de drenar um nó; zero significa infinito.
+
+| gracePeriod
+| int
+| nulo
+| Período de tempo, em segundos, dado a cada pod para que ele seja encerrado de forma graciosa. Se for negativo, será usado o valor padrão especificado no pod.
+
+| deleteEmptydirData
+| bool
+| verdadeiro
+| Continue mesmo se houver pods usando emptyDir (dados locais que serão excluídos quando o nó for drenado).
+
+| ignoreDaemonSets
+| bool
+| verdadeiro
+| Ignorar pods gerenciados pelo DaemonSet.
+
+| força
+| bool
+| verdadeiro
+| Continue mesmo que haja pods que não declarem um controlador.
+
+| disableEviction
+| bool
+| falso
+| Força o dreno a usar a exclusão, mesmo que haja suporte para o despejo. Isso ignorará a verificação de PodDisruptionBudgets; use com cautela.
+
+| skipWaitForDeleteTimeout
+| int
+| 60
+| Se o DeletionTimestamp do pod for superior a N segundos, ignore a espera pelo pod. Os segundos devem ser maiores que 0 para pular.
+
+| podSelector
+| seletor de rótulos
+| nulo
+| Seletor de rótulos para filtrar pods no nó. Somente os pods selecionados serão expulsos.
+|===
+
+== `+prepare+`
+
+Define um contêiner `+prepare+` Init que é executado antes do contêiner `+upgrade+` que executa o trabalho de upgrade em um nó. +
+As chaves se traduzem diretamente na especificação https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[do contêiner]. +
+Observe que o sistema de arquivos do nó é montado em `+/host+` dentro do contêiner.
+
+|===
+| Chave | Tipo | Valor padrão | Descrição
+
+| imagem
+| string
+| vazio
+| Nome da imagem do contêiner.
+
+| comando
+| lista
+| vazio
+| Matriz de pontos de entrada.
+
+| argumentos
+| lista
+| vazio
+| Argumentos para o ponto de entrada.
+
+| env
+| lista
+| vazio
+| Lista de variáveis de ambiente a serem definidas no contêiner.
+
+| envFrom
+| lista
+| vazio
+| Lista de fontes para preencher as variáveis de ambiente no contêiner.
+
+| volumes
+| lista
+| vazio
+| Lista de volumes do site `+hostPath+`. Veja <<_prepare_volumes,a referência>>.
+
+| securityContext
+| object
+| nulo
+| As opções de segurança com as quais o contêiner efêmero deve ser executado.
+|===
+
+=== `+prepare.volumes+`
+
+Cada definição de volume será traduzida para um volume https://kubernetes.io/docs/concepts/storage/volumes/#hostpath-volume-types[hostPath] (`+source+`) que será montado no contêiner (`+destination+`). +
+Observe que, por padrão, o sistema de arquivos raiz do host `+/+` sempre será montado em `+/host+`.
+
+|===
+| Chave | Tipo | Valor padrão | Descrição
+
+| nome
+| string
+| vazio
+| Nome do volume.
+
+| fonte
+| string
+| vazio
+| Caminho do volume HostPath.
+
+| destino
+| string
+| vazio
+| Caminho de montagem do volume HostPath.
+|===
+
+.Clique aqui para obter detalhes
+[%collapsible]
+====
+[,yaml]
+----
+volumes:
+  - name: my-custom-volume
+    source: /foo
+    destination: /foo
+----
+====
+
+== `+upgradeContainer+`
+
+Define o contêiner `+upgrade+` que executa o trabalho de upgrade em um nó. +
+As chaves se traduzem diretamente na especificação https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[do contêiner]. +
+Observe que o sistema de arquivos do nó é montado em `+/host+` dentro do contêiner.
+
+[CAUTION]
+====
+Ao usar qualquer xref:operator-operational-tasks/custom-images.adoc[imagem baseada em] {elemental-product-name} ou xref:operator-operational-tasks/custom-images.adoc[{elemental-product-name}, espera-se que você edite apenas a chave] `+env+` para definir opcionalmente as variáveis `+FORCE+`, `+UPGRADE_RECOVERY+` ou `+UPGRADE_RECOVERY_ONLY+`. +
+Para obter mais informações, leia a documentação de xref:node-operational-tasks/upgrade.adoc#_upgrade_via_command_line_interface[upgrade]. +
+Qualquer outra alteração no site `+upgradeContainer+` pode resultar em problemas durante os upgrades. +
+====
+
+== `+clusterRolloutStrategy+`
+
+Isso controla a distribuição do pacote entre os clusters. Para obter mais informações, leia a https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_rolloutstrategy[documentação de referência do site].
+
+== `+clusterTargets+`
+
+Selecione os clusters a serem direcionados para o upgrade da imagem do sistema operacional. Para obter mais informações, leia a https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_bundletarget[documentação de referência do site].
+
+.Clique aqui para obter detalhes
+[%collapsible]
+====
+[,yaml]
+----
+clusterTargets:
+  - clusterName: volcano
+----
+====
