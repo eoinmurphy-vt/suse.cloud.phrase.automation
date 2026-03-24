@@ -1,0 +1,53 @@
+= Como criar imagens de disco brutas para o Raspberry Pi
+:revdate: 2024-09-24
+:page-revdate: {revdate}
+
+Este guia mostrará como podemos criar uma imagem de disco bruta que pode ser gravada em um cartão SD e inicializada sem nenhuma outra mídia de instalação.
+
+[CAUTION]
+====
+Todos os dados contidos no cartão SD serão apagados. Use apenas um cartão SD que não contenha nada de importante.
+
+O cartão SD deve ser razoavelmente grande (32 GB ou mais) e *rápido* (!!).
+====
+
+.Recurso SeedImage
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  type: raw
+  baseImage: registry.opensuse.org/isv/rancher/elemental/staging/containers/suse/sl-micro/6.0/baremetal-os-container:latest
+  targetPlatform: linux/arm64
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+Verifique os registros do pod de compilação que está sendo usado:
+
+[,shell]
+----
+kubectl logs -n fleet-default fire-img -f -c build
+----
+
+Quando a compilação for concluída, poderemos fazer o download do arquivo de imagem usando o wget:
+
+[,shell]
+----
+wget --no-check-certificate $(kubectl get seedimage -n fleet-default fire-img -o jsonpath="{.status.downloadURL}") -O sle-micro.arm64.raw
+----
+
+Agora podemos gravar a imagem `+.raw+` no cartão SD. Isso pode ser feito com `+dd+` na linha de comando do Linux, se você estiver familiarizado com esse comando.https://www.opensuse.org[O openSUSE] tem boas instruções sobre como gravar uma imagem em uma mídia de armazenamento para https://en.opensuse.org/SDB:Live_USB_stick[Linux],https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_Windows[Windows] e https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_macOS[OS X].
+
+== Partida da máquina
+
+A imagem de disco bruta incluirá apenas a partição EFI, a partição OEM e a partição de recuperação. Na primeira inicialização, o sistema será inicializado no sistema de recuperação para expandir e adicionar partições ausentes. Após a expansão, ele será registrado no rancher e reinicializado.
+
+Se ocorrer um erro durante a fase de registro, o diário poderá ser encontrado usando`+journalctl -u elemental-register-reset+`.
