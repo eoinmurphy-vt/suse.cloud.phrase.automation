@@ -1,0 +1,165 @@
+include::partial$variables.adoc[]
+= Criação de uma nova política
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Crie uma política que avalie todos os recursos com espaço de nome e proíba sua criação no espaço de nome padrão para aprendizado prático.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "create-policy"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "criando uma política", "agente de política aberta", "opa", "rego"].
+:sidebar_label: Criação de uma nova política
+:current-version: {page-origin-branch}
+
+Você pode criar uma política de amostra que ajude a entender os conceitos importantes.
+
+[NOTE]
+====
+Há um https://github.com/kubewarden/opa-policy-template[] kubewarden/opa-policy-template que você pode usar para portar uma política existente.
+====
+
+
+== Requisitos
+
+Nesta seção, você escreverá, compilará e executará uma política.
+Você precisa dessas ferramentas para concluir este tutorial:
+
+* https://github.com/open-policy-agent/opa/releases[`+opa+`]Se você não tiver uma política, use a CLI do `+opa+` para criar sua política como um alvo `+wasm+`.
+* https://github.com/kubewarden/kwctl/releases[`+kwctl+`]: você usará o site `+kwctl+` para executar sua política criada.
+
+== A política
+
+Você criará uma política que avalia qualquer tipo de recurso namespaced.
+Seu objetivo é proibir a criação de qualquer recurso se o namespace de destino for `+default+`. Caso contrário, a solicitação será aceita.
+Comece criando uma pasta chamada `+opa-policy+`.
+
+Crie uma pasta chamada `+data+` na pasta `+opa-policy+`.
+Essa pasta tem os objetos `+AdmissionReview+` registrados do servidor da API do Kubernetes.
+Eles foram reduzidos para simplificar o exercício, para que você possa se concentrar nas partes que importam.
+
+Crie um arquivo `+default-ns.json+` com o seguinte conteúdo dentro do diretório `+data+`:
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "default",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+Isso simula a criação de uma operação de pod dentro do namespace `+default+`.
+Agora, crie outro exemplo de solicitação em `+other-ns.json+` dentro do diretório `+data+`:
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "other",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+Você pode ver que isso simula outra solicitação de criação de pod, desta vez em um namespace chamado `+other+`.
+
+Volte para a pasta `+opa-policy+` e comece a escrever sua política Rego.
+
+Nessa pasta, crie um arquivo chamado `+request.rego+` na pasta `+opa-policy+`.
+O nome pode ser qualquer um, mas você o usará para este exercício.
+Esse é um arquivo Rego que tem um código utilitário referente à solicitação/resposta em si.
+Em particular, ele permite que você simplifique o código da política e reutilize essa parte comum em diferentes políticas.
+
+Os conteúdos são:
+
+[,rego]
+----
+package policy
+
+import data.kubernetes.admission
+
+main = {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": response,
+}
+
+response = {
+    "uid": input.request.uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", admission.deny)
+    reason != ""
+} else = {
+    "uid": input.request.uid,
+    "allowed": true,
+} {
+    true
+}
+----
+
+Não há necessidade, neste momento, de entrar em detalhes sobre o código Rego.
+Você pode obter informações sobre ele em seu https://www.openpolicyagent.org/docs/latest/policy-language/[site].
+
+Nesse caso, ele retorna `+allowed: true+` ou `+allowed: false+`.
+Isso depende do fato de o outro pacote,`+data.kubernetes.admission+`, ter alguma instrução `+deny+` que seja avaliada como `+true+`.
+
+Se qualquer `+data.kubernetes.admission.deny+` for avaliado como `+true+`, o `+response+` aqui será avaliado como o primeiro bloco.
+Caso contrário, ele avalia o segundo bloco, levando à aceitação.
+Como nenhum bloco `+deny+` foi avaliado em `+true+`, isso significa que a política está aceitando a solicitação.
+
+Essa é apenas a estrutura da política, a utilidade.
+Agora, crie outro arquivo, chamado, por exemplo,`+policy.rego+` dentro da nossa pasta `+opa-policy+` com esse conteúdo:
+
+[,rego]
+----
+package kubernetes.admission
+
+deny[msg] {
+    input.request.object.metadata.namespace == "default"
+    msg := "it is forbidden to use the default namespace"
+}
+----
+
+Essa é a parte importante de sua apólice.
+A instrução `+deny+` é avaliada como `+true+` se todas as instruções dentro dela forem avaliadas como `+true+`.
+Nesse caso, há apenas um comando, que verifica se o namespace é `+default+`.
+
+Pelo design do Open Policy Agent, o`+input+` tem o objeto query-able com o objeto `+AdmissionReview+`, de modo que podemos inspecioná-lo convenientemente.
+
+Se tudo tiver corrido bem, sua árvore deverá se parecer com o seguinte:
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
