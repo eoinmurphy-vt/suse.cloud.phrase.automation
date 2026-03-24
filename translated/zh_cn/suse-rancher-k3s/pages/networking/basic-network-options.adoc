@@ -1,0 +1,247 @@
+= 基本网络选项
+:page-languages: [EN, JA, KO, ZH]
+:revdate: 2025-12-31
+:page-revdate: {revdate}
+
+本页介绍 K3s 网络配置选项，包括配置或更换 Flannel 以及配置 IPv6 或 dualStack。
+
+== 法兰绒选择
+
+https://github.com/flannel-io/flannel/blob/master/README.md[Flannel]是实现 Kubernetes 容器网络接口 (CNI) 的轻量级第 3 层网络结构提供商。这就是通常所说的 CNI 插件。
+
+* 通道选项只能在服务器节点上设置，且必须与群集中所有服务器上的相同。
+* Flannel 的默认后台是`+vxlan+` 。要启用加密，请使用`+wireguard-native+` 后台。
+* 在装有最新版 Ubuntu 的 Rasperry Pi 上使用`+vxlan+` 需要xref:installation/requirements.adoc#os_tab_raspberry_pi[额外的准备工作]。
+* 在某些 Linux 发行版上使用`+wireguard-native+` 作为 Flannel 后端可能需要额外的模块。详情请参见https://www.wireguard.com/install/[WireGuard 安装指南]。
+WireGuard 安装步骤将确保为操作系统安装适当的内核模块。
+在尝试使用 WireGuard Flannel 后端之前，必须确保每个节点（包括服务器和代理）上都有可用的 WireGuard 内核模块。
+
+|===
+| CLI 标志和值 | 说明
+
+| `+--flannel-ipv6-masq+`
+| 对 IPv6 流量应用伪装规则（默认为 IPv4）。仅适用于双协议栈或仅 IPv6 群集。兼容除`+none+` 之外的任何 Flannel 后端。
+
+| `+--flannel-external-ip+`
+| 将节点外部 IP 地址作为通道流量的目的地，而不是内部 IP 地址。仅适用于在节点上设置--node-external-ip。
+
+| `+--flannel-backend=vxlan+`
+| 使用 VXLAN 对数据包进行封装。在 Raspberry Pi 上可能需要额外的内核模块。
+
+| `+--flannel-backend=host-gw+`
+| 使用 IP 路由通过节点 IP 连接 pod 子网。要求集群中所有节点之间都有直接的第 2 层连接。
+
+| `+--flannel-backend=wireguard-native+`
+| 使用 WireGuard 对网络流量进行封装和加密。可能需要额外的内核模块。
+
+| `+--flannel-backend=ipsec+`
+| 通过`+swanctl+` 二进制文件使用 strongSwan IPSec 加密网络流量。(已弃用；将在 v1.27.0 中删除）
+
+| `+--flannel-backend=none+`
+| 完全禁用法兰绒。
+|===
+
+[IMPORTANT]
+.版本闸门
+====
+
+从 2022-12 版本（v1.26.0+k3s1、v1.25.5+k3s1、v1.24.9+k3s1、v1.23.15+k3s1）开始，K3s 不再包含 strongSwan`+swanctl+` 和`+charon+` 二进制文件。如果您想使用`+ipsec+` 后端，请在升级或安装这些版本之前在您的节点上安装正确的软件包。
+====
+
+[#_migrating_from_wireguard_or_ipsec_to_wireguard_native]
+=== 从`+wireguard+` 或`+ipsec+` 迁移到 `+wireguard-native+`
+
+传统的`+wireguard+` 后端需要在主机上安装`+wg+` 工具。在 K3s v1.26 及更高版本中，该后端不可用，取而代之的是直接与内核连接的`+wireguard-native+` 后端。
+
+传统的`+ipsec+` 后端需要在主机上安装`+swanctl+` 和`+charon+` 二进制文件。K3s v1.27 及更高版本中没有该后台，而是使用`+wireguard-native+` 后台。
+
+我们建议用户尽快迁移到新的后台。迁移过程中，节点需要短时间停机，以适应新的配置。您应遵循以下两个步骤：
+
+. 更新所有服务器节点上的 K3s 配置。如果使用配置文件，`+/etc/rancher/k3s/config.yaml+` 应包括`+flannel-backend: wireguard-native+` ，而不是`+flannel-backend: wireguard+` 或`+flannel-backend: ipsec+` 。如果通过 systemd 单元中的 CLI 标志配置 K3，则应更改相应的标志。
+. 重启所有节点，从服务器开始。
+
+=== 法兰绒代理选项
+
+这些选项适用于每个代理，并且是该节点上运行的 Flannel 实例所特有的。
+
+|===
+| CLI 标志 | 说明
+
+| `+--flannel-iface+` 价值
+| 覆盖默认通道接口
+
+| `+--flannel-conf+` 价值
+| 覆盖默认法兰绒配置文件
+
+| `+--flannel-cni-conf+` 价值
+| 覆盖默认的法兰绒 cni 配置文件
+|===
+
+== 自定义 CNI
+
+使用`+--flannel-backend=none+` 启动 K3s，并安装所选的 CNI。大多数 CNI 插件都有自己的网络策略引擎，因此建议同时设置`+--disable-network-policy+` 以避免冲突。需要考虑的一些重要信息
+
+[tabs,,sync-group-id=cni]
+======
+运河::
++
+--
+访问https://docs.tigera.io/calico/latest/getting-started/kubernetes/flannel/install-for-flannel#installing-calico-for-policy-and-flannel-aka-canal-for-networking[Canal Docs]网站。按照步骤安装 Canal。例如，修改运河 YAML，以便在`+container_settings+` 部分允许 IP 转发：
+
+[,yaml]
+----
+"container_settings": {
+  "allow_ip_forwarding": true
+}
+----
+
+应用运河 YAML。
+
+在主机上运行以下命令，确保设置已应用：
+
+[,bash]
+----
+cat /etc/cni/net.d/10-canal.conflist
+----
+
+你会看到 IP 转发设置为 true。
+--
+
+花布::
++
+--
+请遵循https://docs.tigera.io/calico/latest/reference/configure-cni-plugins[Calico CNI 插件指南]。例如，修改 Calico YAML，以便在`+container_settings+` 部分允许 IP 转发：
+
+[,yaml]
+----
+"container_settings": {
+  "allow_ip_forwarding": true
+}
+----
+
+应用 Calico YAML。
+
+在主机上运行以下命令，确保设置已应用：
+
+[,bash]
+----
+cat /etc/cni/net.d/10-calico.conflist
+----
+
+你会看到 IP 转发设置为 true。
+--
+
+纤毛::
++
+--
+在运行`+k3s-killall.sh+` 或`+k3s-uninstall.sh+` 之前，必须手动删除`+cilium_host+` 、`+cilium_net+` 和`+cilium_vxlan+` 接口。如果不这样做，当 K3s 停止时，可能会失去与主机的网络连接。
+
+[,bash]
+----
+ip link delete cilium_host
+ip link delete cilium_net
+ip link delete cilium_vxlan
+----
+
+此外，应删除 cilium 的 iptables 规则：
+
+[,bash]
+----
+iptables-save | grep -iv cilium | iptables-restore
+ip6tables-save | grep -iv cilium | ip6tables-restore
+----
+--
+======
+
+== 控制平面出口选择器配置
+
+K3s 代理和服务器在节点之间维护网络套接字隧道，用于封装控制面（apiserver）和代理（kubelet 和 containerd）组件之间的双向通信。
+这样，代理就可以在不向传入连接暴露 kubelet 和容器运行时流端口的情况下运行，控制平面也可以在禁用代理的情况下连接群集服务。
+该功能等同于其他 Kubernetes 发行版常用的https://kubernetes.io/docs/tasks/extend-kubernetes/setup-konnectivity/[] Konnectivity 服务，通过 apiserver 的出口选择器配置进行管理。
+
+默认模式为`+agent+` 。运行xref:advanced.adoc#_running_agentless_servers_experimental[无代理服务器]时，建议使用`+pod+` 或`+cluster+` 模式，以便让 apiserver 在没有 flannel 和 kube-proxy 的情况下访问集群服务端点。
+
+出口选择器模式可在服务器上通过`+--egress-selector-mode+` 标志进行配置，并提供四种模式：
+
+* `+disabled+`:apiserver 不使用代理隧道与 kubelet 或集群端点通信。
+该模式要求服务器运行 kubelet、CNI 和 kube-proxy，并与代理直接连接，否则 apiserver 将无法访问服务端点或执行`+kubectl exec+` 和`+kubectl logs+` 。
+* `+agent+` (默认）：apiserver 使用代理隧道与 kubelet 通信。
+该模式要求服务器同时运行 kubelet、CNI 和 kube-proxy，否则 apiserver 将无法访问服务端点。
+* `+pod+`:apiserver 使用代理隧道与 kubelet 和服务端点通信，通过观察节点和端点将端点连接路由到正确的代理。 +
+*注意*：使用使用自己的 IPAM 且不尊重节点 PodCIDR 分配的 CNI 时，该模式将不起作用。这些 CNI 应使用`+cluster+` 或`+agent+` 模式。
+* `+cluster+`:apiserver 使用代理隧道与 kubelet 和服务端点通信，通过观察 Pod 和端点将端点连接路由到正确的代理。这种模式在不同的集群配置中具有最高的可移植性，但代价是增加了开销。
+
+== 双协议栈（IPv4 + IPv6）网络
+
+[IMPORTANT]
+.版本闸门
+====
+
+从https://github.com/k3s-io/k3s/releases/tag/v1.21.0%2Bk3s1[v1.21.0+k3s1] 开始提供实验支持。 +
+https://github.com/k3s-io/k3s/releases/tag/v1.23.7%2Bk3s1[v1.23.7+k3s1] 提供稳定支持。
+====
+
+
+[CAUTION]
+.已知问题
+====
+
+在 1.27 版之前，Kuberneteshttps://github.com/kubernetes/kubernetes/issues/111695[问题 #111695]会导致 Kubelet 忽略节点 IPv6 地址（如果您有双协议栈环境，且群集流量不使用主网络接口）。要避免此错误，请使用 1.27 或更新版本，或在 K3s 服务器和代理中添加以下标记：
+
+----
+--kubelet-arg="node-ip=0.0.0.0" # To proritize IPv4 traffic
+#OR
+--kubelet-arg="node-ip=::" # To proritize IPv6 traffic
+----
+====
+
+
+必须在首次创建群集时配置双协议栈网络。现有群集一旦作为仅 IPv4 启动，就无法启用该功能。
+
+要在 K3 中启用双协议栈，必须在所有服务器节点上提供有效的双协议栈`+cluster-cidr+` 和`+service-cidr+` 。这是一个有效配置的示例：
+
+----
+--cluster-cidr=10.42.0.0/16,2001:db8:42::/56 --service-cidr=10.43.0.0/16,2001:db8:43::/112
+----
+
+请注意，您可以配置任何有效的`+cluster-cidr+` 和`+service-cidr+` 值，但建议使用上述掩码。如果更改`+cluster-cidr+` 屏蔽，还应更改`+node-cidr-mask-size-ipv4+` 和`+node-cidr-mask-size-ipv6+` 值，以便与计划的每个节点 pod 和节点总数相匹配。`+service-cidr+` 支持的最大掩码是 IPv4 的 /12 和 IPv6 的 /112。如果在公共云中部署，请记住允许 ipv6 流量。
+
+在使用非公开路由的 IPv6 地址（例如 ULA 范围内的地址）时，可能需要添加`+--flannel-ipv6-masq+` 选项来启用 IPv6 NAT，因为默认情况下，pod 会使用其 pod IPv6 地址来处理外向流量。
+但是，如果使用公开路由的 IPv6 地址，则需要确保这些地址路由到群集。否则，pod 将无法接收来自其 IPv6 地址的数据包响应。虽然 K3s 无法自动向外部路由基础设施通报哪个节点使用哪个地址，但群集成员可以正确转发 pod 流量，因此您可以将路由指向属于群集的任何节点。
+
+如果您使用的是自定义 CNI 插件，即 Flannel 以外的 CNI 插件，则可能需要进行额外配置。请查阅插件的双协议栈文档，确认是否可以启用网络策略。
+
+[CAUTION]
+.已知问题
+====
+在以 IPv6 作为主族定义 cluster-cidr 和 service-cidr 时，应明确设置所有群组成员的 node-ip，并将节点所需的 IPv6 地址作为第一个地址。默认情况下，kubelet 始终使用 IPv4 作为主地址族。
+====
+
+== 单协议栈 IPv6 网络
+
+[IMPORTANT]
+.版本闸门
+====
+自https://github.com/k3s-io/k3s/releases/tag/v1.22.9%2Bk3s1[v1.22.9+k3s1]起可用
+====
+
+
+[CAUTION]
+.已知问题
+====
+如果 IPv6 默认路由是通过路由器广告 (RA) 设置的，则需要设置 sysctl`+net.ipv6.conf.all.accept_ra=2+` ；否则，一旦默认路由过期，节点就会放弃默认路由。请注意，接受 RA 可能会增加https://github.com/kubernetes/kubernetes/issues/91507[中间人攻击]的风险。
+====
+
+
+使用`+--cluster-cidr+` 和`+--service-cidr+` 标志，K3 支持单栈 IPv6 群集（不含 IPv4 的群集）。这是一个有效配置的示例：
+
+[,bash]
+----
+--cluster-cidr=2001:db8:42::/56 --service-cidr=2001:db8:43::/112
+----
+
+在使用非公开路由的 IPv6 地址（例如 ULA 范围内的地址）时，可能需要添加`+--flannel-ipv6-masq+` 选项来启用 IPv6 NAT，因为默认情况下，pod 会使用其 pod IPv6 地址来处理外向流量。
+
+== 无主机名的节点
+
+一些云提供商（如 Linode）会创建以 "localhost "作为主机名的机器，而其他云提供商可能根本不会设置主机名。这会导致域名解析问题。您可以使用`+--node-name+` 标志或`+K3S_NODE_NAME+` 环境变量运行 K3s，这样就可以通过节点名称解决这个问题。
