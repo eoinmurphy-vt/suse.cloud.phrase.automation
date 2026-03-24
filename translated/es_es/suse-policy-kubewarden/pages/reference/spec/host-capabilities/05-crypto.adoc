@@ -1,0 +1,73 @@
+include::partial$variables.adoc[]
+= Capacidades criptográficas
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Conozca las capacidades y funciones criptográficas del host Wasm para evaluar los certificados PKI en uso.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "host-capabilities", "cryptographic-capabilities"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "especificación de políticas", "capacidades criptográficas"]
+:sidebar_label: Capacidades criptográficas
+:current-version: {page-origin-branch}
+
+Debido a las restricciones de Wasm en el momento de escribir esto, algunas bibliotecas criptográficas no pueden ser compiladas a Wasm. Mientras tanto, las políticas de {project-name} que necesiten esas bibliotecas pueden realizar callbacks para evaluar las funciones criptográficas en el lado del host. Reciben el resultado y continúan con sus tareas.
+
+== Comportamiento
+
+El host Wasm se basa en `+rustls-wepki+` para la implementación de certificados x.509 y PKI. Es decir:
+
+- Uso clave: Hemos optado por aceptar cualquier uso de la clave, lo que ayuda a cubrir varios casos de uso (como de costumbre, póngase en contacto si desea discutir diferentes enfoques).
+- Cadenas de certificados: Se considerará que un certificado no es de confianza si su CA intermedia ha caducado.
+- Fechas de expiración de los certificados: Si se proporciona una cadena de certificados, siempre validaremos todo el periodo de validez del certificado. Wepki no comprueba la caducidad de la CA raíz.
+- Siempre validamos el certificado, y si no se proporciona ninguna cadena, se utiliza la CA de Mozilla.
+
+== Contrato de protocolo WaPC
+
+Si está implementando su propio SDK de lenguaje, estas son las funciones que realizan comprobaciones criptográficas expuestas por el host:
+
+=== función waPC - `+v1/is_certificate_trusted+` entrada
+
+[,hcl]
+----
+# Certificate:
+{
+  # **mandatory**: Which encoding is used by the certificate
+  # Either the string "Pem" or "Der".
+  "encoding": string,
+  # Actual certificate
+  # The certificate is UTF-8 encoded.
+  # It's an array of bytes of the unicode code pointers of a PEM/DER encoded
+  # certificate string.
+  "data": [byte(int), ..., byte(int)]
+}
+
+{
+  # **mandatory**: PEM-encoded certificate to verify
+  "cert": Certificate,
+  # optional:
+  "cert_chain": [
+      # list of certs, ordered by trust
+      # usage (intermediates first, root last)
+      # If not provided, Mozilla's CA is used.
+      Certificate,
+      ...
+      Certificate,
+    ],
+  # RFC 3339 time format string, to check expiration
+  # against.
+  # If missing, time is now.
+  "not_after": string
+}
+----
+
+=== Función waPC - `+v1/is_certificate_trusted+` output
+
+[,hcl]
+----
+{
+   # true if certificate verified:
+   "trusted": boolean,
+   # empty if trusted == true:
+   "reason": string
+}
+----
