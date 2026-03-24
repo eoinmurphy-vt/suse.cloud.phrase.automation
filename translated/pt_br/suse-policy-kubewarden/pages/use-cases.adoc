@@ -1,0 +1,77 @@
+include::partial$variables.adoc[]
+= {project-name} casos de uso
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:sidebar_label: Casos de uso
+:sidebar_position: 74
+:description: Saiba mais sobre vários casos de uso do {project-name} em diferentes ambientes e personas do Kubernetes, incluindo vários cenários.
+:keywords: {project-name}documentação, casos de uso, estudos de caso
+:doc-persona: kubewarden-all
+:doc-type: explicação
+:doc-topic: explicação
+
+Estes são alguns exemplos de casos de uso para as xref:/personas.adoc[personas] do {project-name}.
+
+== Caso A: Como operador do Kubernetes, quero garantir que meu cluster esteja seguro e em conformidade.
+
+Implantei o site {project-name} e sua configuração padrão com o gráfico`+kubewarden-defaults+` Helm, no espaço de nome `+kubewarden+`. Isso implanta um PolicyServer padrão e ClusterAdmissionPolicies recomendado no namespace`+kubewarden+`, exclusivamente sob o controle do operador do Kubernetes.
+
+Como operador, posso adicionar mais PolicyServers em um Namespace gerenciado (como`+kubewarden+`) para distribuir a carga e a tolerância a falhas.
+
+Os operadores podem implementar mais ClusterAdmissionPolicies e ClusterAdmissionPolicyGroups. Eles verificam todos os recursos do Kubernetes, para qualquer tipo de operação (GET, CREATE, UPDATE, PATCH, DELETE, PROXY). Isso garante que as operações no cluster sejam seguras e estejam em conformidade.
+
+Isso inclui:
+
+* segurança
+* conformidade (com os padrões do setor ou com as normas da empresa)
+* otimização de recursos (por meio de políticas mutantes)
+* governança de ambientes Kubernetes (por meio de rótulos e convenções de nomenclatura)
+* melhores práticas
+* verificação de imagem
+
+As expectativas de segurança mudam com o tempo. As implementações anteriormente corretas no cluster podem não ser mais assim. No entanto, o site {short-project-name} já aceitou essas operações no cluster. Nessas situações, o operador pode implantar o recurso Audit Scanner, um CronJob que é executado periodicamente e avalia os recursos existentes no cluster. Isso verifica se o cluster está seguro e em conformidade, mesmo com o passar do tempo.
+
+O operador pode configurar políticas no modo `+monitor+` em vez do modo `+protect+`, para aprender com o estado do cluster sem bloquear as operações.
+
+Os operadores podem receber informações das políticas e da pilha {short-project-name} consumindo registros e informações do OpenTelemetry para métricas e rastreamento.
+
+== Caso B: Como operador do Kubernetes, quero fornecer uma estrutura aos meus usuários do Kubernetes para que eles possam fazer o autoatendimento em seus Namespaces.
+
+Como operador, implanto o {short-project-name} como no Caso A para um conjunto de políticas de minha escolha. Isso me fornece uma linha de base segura no cluster, da qual outros usuários não podem escapar.
+
+Além do Caso A, tenho diferentes personas por Namespaces: talvez equipes, administradores de equipes, implantações de teste e outros. Eu permito que cada administrador de Namespace faça o autoatendimento, permitindo que ele implemente PolicyServers em seu Namespace, juntamente com AdmissionPolicies e AdmissionPolicyGroups com namespaced.
+Essa arquitetura significa que eles estão no controle do PolicyServer e das políticas. As políticas se aplicam apenas ao seu Namespace e restringem o uso de recursos ao seu Namespace.
+
+Ele também permite que o operador segregue locatários barulhentos, reservando PolicyServers de alto desempenho para os locatários e tarefas que precisam de alto rendimento e baixa latência, por exemplo.
+
+== Caso C: Como autor de políticas, quero usar as ferramentas e as linguagens que conheço para escrever novas políticas.
+
+{short-project-name} consegue isso oferecendo suporte a qualquer linguagem que compile para o WebAssembly como possíveis linguagens de destino para políticas. Isso significa que os autores de políticas podem reutilizar seus fluxos de trabalho (`+git+`, CI, editores, revisões por pares etc.) e ferramentas: idiomas, bibliotecas de idiomas, estruturas e chicotes de teste etc.
+
+Ele permite a reutilização de linguagens específicas de domínio (como Rego, CEL, YAML+macros da Kyverno) ou linguagens de uso geral (como Go, Rust, C#, Javascript, qualquer uma que compile para o Wasm). {short-project-name} fornecexref:/tutorials/writing-policies/index.adoc[SDKs] para algumas linguagens como suporte de primeira classe.
+
+{short-project-name} As políticas podem ser simples ou complexasxref:/explanations/context-aware-policies.adoc[com reconhecimento de contexto].
+As políticas com reconhecimento de contexto também são usadas para fazer interface com cargas de trabalho separadas (por exemplo, para obter informações de um serviço de longa duração de um scanner de imagens).
+
+== Caso D: Como integrador de sistemas, quero reutilizar o site {short-project-name} como parte de minha solução de segurança e conformidade.
+
+Como integrador de sistemas, quero reutilizar o site {short-project-name} e, possivelmente, reutilizar outras soluções, incluindo-as no site {short-project-name}.
+
+Como integrador de sistemas, posso reutilizar partes do site {short-project-name}. Por exemplo, o`+policy-server+`, para policiar recursos, internos ou externos ao cluster do Kubernetes por meio do recurso xref:/howtos/raw-policies.adoc["políticas brutas"].
+
+Os integradores de sistemas podem optar por implementar o `+kubewarden-controller+` ou gerenciar os CRDs por conta própria. Eles podem optar por implementar ou dimensionar o Audit Scanner conforme necessário.
+
+Os integradores de sistemas podem criar novos componentes. Por exemplo, um scanner de imagens e uma interface com ele por meio de uma política com reconhecimento de contexto, sem ter uma implementação monolítica em um controlador do Kubernetes.
+
+== Não objetivos
+
+{short-project-name} não tem essa intenção:
+
+- Substituir os recursos de segurança incorporados do Kubernetes, mas complementá-los:
+  - {short-project-name} fornece migração de PSPs.
+  - Você pode reutilizar ValidatingAdmissionPolicies e políticas CEL com {short-project-name}'s `+cel-policy+`.
+  - {short-project-name} podem ser mutantes, enquanto o Pod Security Admission não pode.
+  - {short-project-name} As políticas se beneficiam dos recursos da pilha {short-project-name} (scanner de auditoria, telemetria, gerenciamento de CRD).
+- Fornecer segurança em tempo de execução, como detecção de intrusão ou isolamento de contêineres em tempo de execução.
+- Fornecer proteção de clusters ao sistema host.
+- Fornecer flexibilidade infinita de execução de políticas. Para evitar ataques de DoS, os tempos de processamento das políticas são limitados.
