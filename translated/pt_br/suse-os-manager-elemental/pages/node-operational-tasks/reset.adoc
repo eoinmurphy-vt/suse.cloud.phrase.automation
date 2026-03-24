@@ -1,0 +1,74 @@
+= Reinicialização da máquina
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Há duas maneiras de redefinir as máquinas {elemental-product-name} para seu estado original ou desativá-las:
+
+. Ao excluir um cluster, todas as máquinas associadas serão redefinidas
++
+image::reset-cluster-deletion.png[Excluir um cluster para redefinir todas as máquinas]
+
+. Ao gerenciar um cluster, basta excluir o nó que precisa ser redefinido
++
+image::reset-single-node-deletion.png[Excluir um único nó para redefini-lo]
+
+== Redefinir o fluxo de trabalho
+
+Quando o site `+MachineInventory+` relacionado for sinalizado para exclusão, um plano de redefinição será executado pelo site `+elemental-system-agent+` em execução na máquina.
+
+Se a máquina ainda estiver funcionando, esse plano o fará:
+
+. Reinicialize o computador no modo de recuperação.
+. Execute `+systemctl start elemental-register-reset+`. +
+Isso buscará o site `+MachineRegistration+` remoto e aplicará as opções do site `+spec.config.elemental.reset+` para redefinir a máquina. +
+Um novo `+MachineInventory+` será criado e o `+spec.config.cloud-config+` definido no `+MachineRegistration+` será aplicado novamente.
+
+Observe que a referência `+MachineRegistration+` *não* será alterada, a máquina *não* será reinstalada, a partição `+COS_PERSISTENT+` e `+COS_OEM+` será limpa por padrão se a redefinição for `+enabled+`. Para obter mais informações, você pode consultar a xref:installation/installation.adoc#_deployed_partition_table[Tabela de partição].
+
+Como o `+cloud-config+` é reaplicado durante o fluxo de trabalho de redefinição, você pode redefinir uma máquina para aplicar atualizações da definição do `+MachineRegistration+`, por exemplo, para girar as credenciais e as chaves autorizadas do `+users+`. É altamente recomendável ativar a opção `+reset-oem+` para evitar conflitos com configurações de nuvem configuradas anteriormente.
+
+Se você precisar vincular uma máquina a um `+MachineRegistration+` diferente e acionar uma nova instalação completa, será necessário reprovisioná-la novamente usando uma nova imagem.
+
+== Habilitar a reinicialização da máquina
+
+Para permitir que as máquinas sejam reinicializadas automaticamente, o sinalizador `+spec.config.elemental.reset.enabled+` do `+MachineRegistration+` deve ser alternado. +
+Essa configuração está desativada por padrão, mas, uma vez ativada, todos os `+MachineInventory+` recém-criados herdarão essa configuração automaticamente. +
+Por exemplo:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      reset:
+        enabled: true
+        reset-persistent: true
+        reset-oem: true
+        # These cloud-init configs will be created during reset and will persist on the system after
+        config-urls:
+          - "https://my.cloud.init/reset-plan-1.yaml"
+          - "https://my.cloud.init/reset-plan-2.yaml"
+        # You can select a different image to run the reset.
+        # Note that this image will not be installed on the system.
+        system-uri: "my.oci.registry/reset-image:latest"
+        power-off: false
+        reboot: true
+----
+
+Também é possível habilitar a redefinição em um nível `+MachineInventory+`, por exemplo, em cenários em que algumas máquinas são físicas e se beneficiarão de uma redefinição automática, enquanto outras são virtuais e podem simplesmente ser destruídas e reprovisionadas conforme necessário. +
+Para sinalizar um único `+MachineInventory+` para permitir a redefinição, você pode usar a anotação `+elemental.cattle.io/resettable: true+`. +
+Por exemplo:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineInventory
+metadata:
+  annotations:
+    elemental.cattle.io/resettable: "true"
+----
