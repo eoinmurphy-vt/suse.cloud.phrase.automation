@@ -1,0 +1,221 @@
+include::partial$variables.adoc[]
+= 新しい変異ポリシーの作成
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 新しい{project-name} 変異ポリシーを設定して、カスタムアノテーションを持つ受信オブジェクトを変異させ、それをテストする。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "new-mutation-policy"]
+:doc-type: ["tutorial"]
+:keywords: kubewarden", "kubernetes", "creating new mutation policy", "mutation policy", "rust"] ["kubewarden", "kubernetes", "creating new mutation policy", "mutation policy", "rust"].
+:sidebar_label: 新しい変異ポリシーの作成
+:current-version: {page-origin-branch}
+
+変異ポリシーは検証ポリシーと似ているが、入力されるオブジェクトを変異させる能力も持っている。
+
+彼らはできる：
+
+* リクエストを拒否する
+* 受信オブジェクトを変更せずにリクエストを受け入れる
+* 着信オブジェクトを必要に応じて変異させ、リクエストを受け入れる。
+
+{project-name} 変異ポリシーの書き方は簡単だ。
+前のセクションで作成した検証ポリシーを使用し、いくつかの変更を加えて、変異ポリシーに変更します。
+
+このポリシーでは、先ほど定義したのと同じ検証ロジックを使用しますが、有効な名前を持つすべてのPodにアノテーションを追加します。
+
+このようなポッドを作ろうとしている：
+
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+----
+
+このポッドの作成につながる：
+
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  annotations:
+    kubewarden.policy.demo/inspected: true
+spec:
+  containers:
+    - name: nginx
+      image: nginx:latest
+----
+
+== 突然変異コードを書く
+
+変異コードは`+validate+` 関数の中にある。
+の代わりにhttps://docs.rs/kubewarden-policy-sdk/0.1.0/kubewarden_policy_sdk/fn.mutate_request.html[`+mutate_request+`]の代わりにhttps://docs.rs/kubewarden-policy-sdk/0.1.0/kubewarden_policy_sdk/fn.accept_request.html[`+accept_request+`].
+
+これが、`+lib.rs+` の`+validate+` 関数のあるべき姿である：
+
+[subs="+attributes",rust]
+----
+fn validate(payload: &[u8]) -> CallResult {
+    let validation_request: ValidationRequest<Settings> = ValidationRequest::new(payload)?;
+
+    info!(LOG_DRAIN, "starting validation");
+    if validation_request.request.kind.kind != apicore::Pod::KIND {
+        warn!(LOG_DRAIN, "Policy validates Pods only. Accepting resource"; "kind" => &validation_request.request.kind.kind);
+        return kubewarden::accept_request();
+    }
+
+    match serde_json::from_value::<apicore::Pod>(validation_request.request.object) {
+        // NOTE 1
+        Ok(mut pod) => {
+            let pod_name = pod.metadata.name.clone().unwrap_or_default();
+            if validation_request
+                .settings
+                .invalid_names
+                .contains(&pod_name)
+            {
+                kubewarden::reject_request(
+                    Some(format!("pod name {:?} is not accepted", pod_name)),
+                    None,
+                    None,
+                    None,
+                )
+            } else {
+                // NOTE 2
+                let mut new_annotations = pod.metadata.annotations.clone().unwrap_or_default();
+                new_annotations.insert(
+                    String::from("kubewarden.policy.demo/inspected"),
+                    String::from("true"),
+                );
+                pod.metadata.annotations = Some(new_annotations);
+
+                // NOTE 3
+                let mutated_object = serde_json::to_value(pod)?;
+                kubewarden::mutate_request(mutated_object)
+            }
+        }
+        Err(_) => {
+            // We were forwarded a request we cannot unmarshal or
+            // understand, just accept it
+            kubewarden::accept_request()
+        }
+    }
+}
+----
+
+以前のコードと比較して、あなたは3つの変更を加えた：
+
+. `+pod+` オブジェクトはミュータブルと定義した。`+mut+` キーワードを参照のこと。これは、`+metadata.annotations+` 属性を拡張するために必要である。
+// TODO: How best to describe the use of clone().
+. これは、既存の`+annotations+` 、新しいものを追加し、最後に更新された`+annotations+` オブジェクトを元の`+pod+` インスタンスに戻すコードである。
+. `+pod+` オブジェクトを一般的な`+serde_json::Value+` にシリアライズし、変異のレスポンスを返す。
+
+これらの変更を終えたら、再びユニットテストを実行しよう：
+
+[subs="+attributes",console]
+----
+$ cargo test
+   Compiling demo-a v0.1.0 (/home/jhk/projects/suse/tmp/demo)
+    Finished test [unoptimized + debuginfo] target(s) in 0.95s
+     Running unittests src/lib.rs (target/debug/deps/demo_a-634b88b0dcb6e707)
+
+running 5 tests
+test settings::tests::reject_settings_without_a_list_of_invalid_names ... ok
+test settings::tests::accept_settings_with_a_list_of_invalid_names ... ok
+test tests::accept_request_with_non_pod_resource ... ok
+test tests::reject_pod_with_invalid_name ... ok
+test tests::accept_pod_with_valid_name ... FAILED
+
+failures:
+
+---- tests::accept_pod_with_valid_name stdout ----
+{"column":5,"file":"src/lib.rs","level":"info","line":34,"message":"starting validation","policy":"sample-policy"}
+thread 'tests::accept_pod_with_valid_name' panicked at src/lib.rs:98:9:
+Something mutated with test case: Pod creation with valid name
+note: run with `+RUST_BACKTRACE=1+` environment variable to display a backtrace
+
+
+failures:
+    tests::accept_pod_with_valid_name
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+----
+
+ご覧のように、レスポンスに変異したオブジェクトが含まれているため、`+accept_pod_with_valid_name+` 。
+我々のコードは機能しているようだ。
+
+== ユニットテストの更新
+
+`+lib.rs+` の`+accept_pod_with_valid_name+` を更新すると、次のようになる：
+
+[subs="+attributes",rust]
+----
+#[test]
+fn accept_pod_with_valid_name() -> Result<(), ()> {
+    let mut invalid_names = HashSet::new();
+    invalid_names.insert(String::from("bad_name1"));
+    let settings = Settings { invalid_names };
+
+    let request_file = "test_data/pod_creation.json";
+    let tc = Testcase {
+        name: String::from("Pod creation with valid name"),
+        fixture_file: String::from(request_file),
+        expected_validation_result: true,
+        settings,
+    };
+
+    let res = tc.eval(validate).unwrap();
+    // NOTE 1
+    assert!(
+        res.mutated_object.is_some(),
+        "Expected accepted object to be mutated",
+    );
+
+    // NOTE 2
+    let final_pod =
+        serde_json::from_value::<apicore::Pod>(res.mutated_object.unwrap()).unwrap();
+    let final_annotations = final_pod.metadata.annotations.unwrap();
+    assert_eq!(
+        final_annotations.get_key_value("kubewarden.policy.demo/inspected"),
+        Some((
+            &String::from("kubewarden.policy.demo/inspected"),
+            &String::from("true")
+        )),
+    );
+
+    Ok(())
+}
+----
+
+最初のテストと比較して、2つの変更がある：
+
+. `+assert!+` 、リクエストはまだ受け入れられるが、変異したオブジェクトも含まれるように変更する。
+. レスポンスの一部である変異したオブジェクトを起点に、`+Pod+` インスタンスを作成。
+変異したPodオブジェクトが正しい`+metadata.annotations+` 。
+
+もう一度テストを行い、今度はすべてパスする：
+
+[subs="+attributes",shell]
+----
+$ cargo test
+   Compiling demo-a v0.1.0 (/home/jhk/projects/suse/tmp/demo)
+    Finished test [unoptimized + debuginfo] target(s) in 1.25s
+     Running unittests src/lib.rs (target/debug/deps/demo_a-634b88b0dcb6e707)
+
+running 5 tests
+test settings::tests::accept_settings_with_a_list_of_invalid_names ... ok
+test settings::tests::reject_settings_without_a_list_of_invalid_names ... ok
+test tests::accept_request_with_non_pod_resource ... ok
+test tests::reject_pod_with_invalid_name ... ok
+test tests::accept_pod_with_valid_name ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+----
+
+見ての通り、突然変異ポリシーの作成は簡単だ。
