@@ -1,0 +1,90 @@
+include::partial$variables.adoc[]
+= 编写原始政策
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解如何编写可评估任意 JSON 文档的原始策略，并在系统中执行访问控制规则。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "raw-policies"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"原始策略"、"开放策略代理"、"opa"、"rego"]
+:sidebar_label: 原始政策
+:current-version: {page-origin-branch}
+
+原始策略是可以评估任意 JSON 文档的策略。
+有关原始政策的更多信息，请参阅xref:howtos/raw-policies.adoc[原始政策]页面。
+
+== 示例
+
+如果您完成了本教程的xref:tutorials/writing-policies/rego/open-policy-agent/02-create-policy.adoc[验证]页面，下面的示例应该不会陌生。
+
+[NOTE]
+====
+切记通过`+metadata.yml+` 配置中的`+policyType+` 字段将策略标记为`+raw+` 。
+更多信息请参阅xref:tutorials/writing-policies//metadata.adoc[元数据]规范。
+====
+
+
+=== 验证
+
+你要编写一条策略，接受以下格式的请求：
+
+[subs="+attributes",json]
+----
+{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "products"
+  }
+}
+----
+
+它验证只有`+admin+` 用户才能删除资源。
+
+首先，使用https://github.com/kubewarden/opa-policy-template[政策模板] OPA为政策搭建脚手架。
+
+首先，您需要修改`+policy.rego+` 文件，使其看起来像这样：
+
+[,rego]
+----
+package validation
+
+deny[msg] {
+    input.request.action == "delete"
+    input.request.user != "admin"
+    msg := sprintf("user %v is not allowed to delete resources", [input.request.user])
+}
+----
+
+`+utility/policy.rego+` 模块需要修改，以删除特定于 Kubernetes 的代码：
+
+[,rego]
+----
+package policy
+
+import data.validation
+
+main = {
+    "response": response,
+}
+
+# OPA policy responses need the uid field to be set.
+# If the request doesn't contain a uid, set it to an empty string.
+default uid = ""
+
+uid = input.request.uid
+
+response = {
+    "uid": uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", validation.deny)
+    reason != ""
+} else = {
+    "uid": uid,
+    "allowed": true,
+} {
+    true
+}
+----
