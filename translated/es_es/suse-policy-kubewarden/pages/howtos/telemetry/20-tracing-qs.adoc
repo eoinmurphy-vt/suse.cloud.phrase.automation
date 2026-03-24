@@ -1,0 +1,367 @@
+include::partial$variables.adoc[]
+= Inicio rápido del rastreo
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Habilite la función de seguimiento para el servidor de directivas mediante esta guía de inicio rápido para recopilar detalles detallados sobre las evaluaciones de directivas, que se pueden utilizar para depurar problemas de SUSE Security Admission.
+:doc-persona: ["kubewarden-operator", "kubewarden-integrator"]
+:doc-topic: ["operator-manual", "telemetry", "tracing", "quick-start"]
+:doc-type: ["howto"]
+:keywords: ["kubewarden", "kubernetes", "tracing", "quickstart"]
+:sidebar_label: Rastreando
+:current-version: {page-origin-branch}
+
+Esta sección muestra cómo habilitar el soporte de rastreo para Policy Server.
+
+[NOTE]
+====
+
+Antes de continuar, asegúrese de haber completado la sección anterior dexref:howtos/telemetry/10-opentelemetry-qs.adoc#_install_opentelemetry[OpenTelemetry]de esta documentación. Es necesario para que esta sección funcione correctamente.
+
+====
+
+
+El rastreo permite recopilar información detallada sobre las evaluaciones de las políticas. Puede ser una herramienta útil para depurar problemas en el despliegue y las políticas de {project-name}.
+
+Usted utiliza https://www.jaegertracing.io/[Jaeger] -- utilizado para recibir, almacenar y visualizar eventos de rastreo.
+
+== Instalar Jaeger
+
+El https://github.com/jaegertracing/jaeger-operator[operador de Jaeger]permite gestionar todos los componentes de Jaeger. Puede instalar el Operador Jaeger utilizando las cartas Helm.
+
+[NOTE]
+====
+
+En el momento de redactar este documento (2022-06-21), sólo determinadas versiones de Jaeger son compatibles con Cert Manager,https://github.com/jaegertracing/helm-charts/blob/main/charts/jaeger-operator/COMPATIBILITY.md[consulte la tabla de compatibilidad].
+
+====
+
+Para instalar el Helm Chart:
+
+[subs="+attributes",console]
+----
+helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+
+helm upgrade -i --wait \
+  --namespace jaeger \
+  --create-namespace \
+  --version 2.49.0 \
+  jaeger-operator jaegertracing/jaeger-operator \
+  --set rbac.clusterRole=true
+----
+
+[CAUTION]
+====
+
+Esto *no es adecuado para el despliegue de producción*. Debería consultar la página https://www.jaegertracing.io/docs/latest/kubernetes/[documentación oficial] de Jaeger.
+
+====
+
+Para crear un recurso Jaeger:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: my-open-telemetry
+  namespace: jaeger
+spec: {}
+EOF
+----
+
+Una vez creados los recursos del Operador Jaeger, dispondrá de un Servicio en`+my-open-telemetry-collector.jaeger.svc.cluster.local+`. La interfaz de consulta de Jaeger está expuesta por el servicio `+my-open-telemetry-query+` en el espacio de nombres `+jaeger+`.
+
+== Instale {short-project-name}
+
+Ahora puede proceder al despliegue de {short-project-name} de la forma habitual.
+
+[NOTE]
+====
+
+El `+cert-manager+` es un requisito de OpenTelemetry, pero ya lo ha instalado en una sección anterior de esta documentación.
+
+====
+
+Como primer paso, añada el repositorio Helm que contiene{short-project-name}:
+
+[subs="+attributes",console]
+----
+helm repo add kubewarden https://charts.kubewarden.io
+----
+
+A continuación, se instalan las definiciones de recursos personalizadas (CRD) definidas por{short-project-name}:
+
+[subs="+attributes",console]
+----
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  kubewarden-crds kubewarden/kubewarden-crds
+----
+
+Ahora puede desplegar el resto de la pila {short-project-name}. El gráfico oficial de`+kubewarden-defaults+` helm crea un PolicyServer llamado `+default+`. Usted desea que esta instancia de PolicyServer tenga habilitado el rastreo.
+
+Para ello, debe especificar algunos valores adicionales para el gráfico`+kubewarden-controller+`. Debe crear un archivo `+values.yaml+` con el siguiente contenido:
+
+[subs="+attributes",yaml]
+----
+telemetry:
+  mode: sidecar
+  tracing: True
+  sidecar:
+    tracing:
+      jaeger:
+        endpoint: "my-open-telemetry-collector.jaeger.svc.cluster.local:4317"
+        tls:
+          insecure: true
+----
+
+[CAUTION]
+====
+
+Para simplificar, no hay cifrado de la comunicación entre el colector OpenTelemetry y el punto final Jaeger.
+
+Una vez más, esto *no es adecuado para un despliegue de producción*. Consulte la de Jaegerhttps://www.jaegertracing.io/docs/latest/kubernetes/[documentación oficial].
+
+====
+
+A continuación, puede proceder a la instalación de las cartas de navegación:
+
+[subs="+attributes",console]
+----
+helm install --wait --namespace kubewarden --create-namespace \
+  --values values.yaml \
+  kubewarden-controller kubewarden/kubewarden-controller
+
+helm install --wait --namespace kubewarden --create-namespace \
+  kubewarden-defaults kubewarden/kubewarden-defaults
+----
+
+Así se crea la instancia `+default+` de `+PolicyServer+`:
+
+[subs="+attributes",console]
+----
+kubectl get policyservers.policies.kubewarden.io
+NAME      AGE
+default   3m7s
+----
+
+Mirando más de cerca el Pod que ejecuta la instancia PolicyServer, puedes ver que tiene dos contenedores en él. El `+policy-server+` y el colector de telemetría abierta sidecar `+otc-container+`.
+
+== Aplicación de una política
+
+Para empezar, despliegue la política dehttps://github.com/kubewarden/safe-labels-policy[etiquetas seguras].
+
+Desea que la política se aplique sólo en los espacios de nombres que tengan una etiqueta `+environment+`con el valor `+production+`.
+
+A un Namespace que tenga dicha etiqueta:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-alpha-prod
+  labels:
+    environment: production
+EOF
+----
+
+A continuación, puede definir una ClusterAdmissionPolicy:
+
+[subs="+attributes",yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: safe-labels
+spec:
+  module: registry://ghcr.io/kubewarden/policies/safe-labels:v0.1.6
+  settings:
+    mandatory_labels:
+    - owner
+  rules:
+    - apiGroups:
+        - apps
+      apiVersions:
+        - v1
+      resources:
+        - deployments
+      operations:
+        - CREATE
+        - UPDATE
+  namespaceSelector:
+    matchExpressions:
+    - key: environment
+      operator: In
+      values: ["production"]
+  mutating: false
+EOF
+----
+
+Debe esperar a que la póliza se active:
+
+[subs="+attributes",console]
+----
+kubectl wait --for=condition=PolicyActive clusteradmissionpolicy/safe-labels
+----
+
+Una vez que la política esté activa, puedes probarla:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: team-alpha-prod
+  labels:
+    owner: octocat
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+La política permite la creación de este objeto de despliegue, ya que no infringe la política.
+
+La política bloquea este objeto de despliegue:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-without-labels
+  namespace: team-alpha-prod
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+La política no se aplica en otro Namespace.
+
+Este comando crea un nuevo espacio de nombres llamado `+team-alpha-staging+`:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-alpha-staging
+  labels:
+    environment: staging
+EOF
+----
+
+La política permite la creación de un recurso de despliegue, sin etiquetas, en el espacio de nombres `+team-alpha-staging+`:
+
+[subs="+attributes",console]
+----
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-without-labels
+  namespace: team-alpha-staging
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 0
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+EOF
+----
+
+Como era de esperar, este recurso se ha creado correctamente.
+
+== Explorar la interfaz de usuario de Jaeger
+
+Puede ver los eventos de rastreo enviados por la instancia PolicyServer a Jaeger, ya que hay un nuevo servicio `+kubewarden-policy-server+` listado en la UI:
+
+image::jaeger-ui-home.png[Salpicadero Jaeger]
+
+El recolector Jaeger está recibiendo las trazas generadas por su PolicyServer.
+
+Si ha instalado Traefik en la guía anterior, exponga la interfaz de usuario de consulta Jaeger con este `+Ingress+`:
+
+[,yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-open-telemetry-query
+  namespace: jaeger
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-open-telemetry-query
+                port:
+                  number: 16686
+EOF
+----
+
+Para acceder a la interfaz de usuario de Jaeger con Traefik, ejecute:
+
+[,console]
+----
+kubectl -n traefik port-forward service/traefik 8080:80
+----
+
+A continuación, vaya a `+\http://localhost:8080+`.
+
+Si prefiere prescindir de Traefik, acceda directamente a Jaeger:
+
+[,console]
+----
+kubectl -n jaeger port-forward service/my-open-telemetry-query 16686
+----
+
+A continuación, vaya a `+\http://localhost:16686+`.
