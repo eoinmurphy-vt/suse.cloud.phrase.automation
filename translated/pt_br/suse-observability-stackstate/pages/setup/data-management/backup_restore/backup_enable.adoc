@@ -1,0 +1,477 @@
+= Ativar backups
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Self-hosted
+
+[NOTE]
+====
+Esta página se aplica a {stackstate-product-name} v2.7.0 ou mais recente.
+====
+
+== Visão geral
+
+{stackstate-product-name} tem um mecanismo de backup integrado que pode ser configurado para armazenar backups no AWS S3, no Azure Blob Storage ou em um Kubernetes Persistent Volume.
+
+A maioria dos backups é ativada com um único valor do Helm `+global.backup.enabled+`. Os backups de configurações estão sempre ativados, mas se comportam de forma diferente com base nos seguintes valores:
+
+=== Escopo de backup
+
+O backup dos dados a seguir pode ser feito automaticamente:
+
+* *Configurações* (StackPacks, monitores, visualizações, tokens) - sempre ativadas:
+** Quando `+global.backup.enabled+` é `+true+`: os backups são armazenados via MinIO em seu backend de armazenamento configurado
+** Quando `+global.backup.enabled+` é `+false+`: os backups são armazenados em um Volume Persistente do Kubernetes dedicado, ignorando o MinIO
+* *Dados de topologia e configurações* armazenados no StackGraph - ativados quando `+global.backup.enabled+` é `+true+`
+* *Métricas* armazenadas na(s) instância(s) do Victoria Metrics de {stackstate-product-name}- ativadas quando `+global.backup.enabled+` é `+true+`
+* *Dados de telemetria* armazenados na instância do Elasticsearch de {stackstate-product-name}- ativados quando `+global.backup.enabled+` é `+true+`
+* *Dados do OpenTelemetry* armazenados na instância do ClickHouse de {stackstate-product-name}- ativado quando `+global.backup.enabled+` é `+true+`
+
+=== Opções de armazenamento
+
+Os backups usam o https://min.io/[MinIO (min.io)] como um gateway compatível com o S3 para seu backend de armazenamento. O MinIO é implantado automaticamente pelo Helm chart quando os backups são ativados.
+
+A instância integrada do MinIO pode ser configurada para armazenar os backups em três locais:
+
+* xref:/setup/data-management/backup_restore/backup_enable.adoc[AWS S3]
+* xref:/setup/data-management/backup_restore/backup_enable.adoc[Armazenamento de Blobs do Azure]
+* xref:/setup/data-management/backup_restore/backup_enable.adoc[Armazenamento do Kubernetes]
+
+== Ativar backups
+
+=== AWS S3
+
+[CAUTION]
+====
+
+*Criptografia*
+
+As chaves gerenciadas pelo Amazon S3 (SSE-S3) devem ser usadas ao criptografar os buckets do S3 que armazenam os backups.
+
+⚠️ Não há suporte para a criptografia com chaves do AWS KMS armazenadas no AWS Key Management Service (SSE-KMS). Isso resultará em erros como este nos logs do Elasticsearch:
+
+`+Caused by: org.elasticsearch.common.io.stream.NotSerializableExceptionWrapper: sdk_client_exception: Unable to verify integrity of data upload. Client calculated content hash (contentMD5: ZX4D/ZDUzZWRhNDUyZTI1MTc= in base 64) didn't match hash (etag: c75faa31280154027542f6530c9e543e in hex) calculated by Amazon S3. You may need to delete the data stored in Amazon S3. (metadata.contentMD5: null, md5DigestStream: com.amazonaws.services.s3.internal.MD5DigestCalculatingInputStream@5481a656, bucketName: suse-observability-elasticsearch-backup, key: tests-UG34QIV9s32tTzQWdPsZL/master.dat)\",+`
+====
+
+
+==== Uso de buckets S3 separados
+
+Para ativar os backups agendados para separar os buckets do AWS S3 (um por datastore), adicione o seguinte fragmento YAML ao arquivo Helm `+values.yaml+` usado para instalar o {stackstate-product-name}:
+
+[,yaml]
+----
+global:
+  backup:
+    enabled: true
+backup:
+  stackGraph:
+    bucketName: AWS_STACKGRAPH_BUCKET
+  elasticsearch:
+    bucketName: AWS_ELASTICSEARCH_BUCKET
+  configuration:
+    bucketName: AWS_CONFIGURATION_BUCKET
+victoria-metrics-0:
+  backup:
+    bucketName: AWS_VICTORIA_METRICS_BUCKET
+victoria-metrics-1:
+  backup:
+    bucketName: AWS_VICTORIA_METRICS_BUCKET
+clickhouse:
+  backup:
+    bucketName: AWS_CLICKHOUSE_BUCKET
+minio:
+  accessKey: YOUR_ACCESS_KEY
+  secretKey: YOUR_SECRET_KEY
+  s3gateway:
+    enabled: true
+    accessKey: AWS_ACCESS_KEY
+    secretKey: AWS_SECRET_KEY
+----
+
+Substitua os seguintes valores:
+
+* `+YOUR_ACCESS_KEY+` e `+YOUR_SECRET_KEY+` são as credenciais que serão usadas para proteger o sistema MinIO. Essas credenciais são definidas no sistema MinIO e usadas pelos trabalhos de backup automático e pelos trabalhos de restauração. Eles também são necessários se você quiser acessar manualmente o sistema MinIO.
+ ** YOUR_ACCESS_KEY deve conter de 5 a 20 caracteres alfanuméricos.
+ ** YOUR_SECRET_KEY deve conter de 8 a 40 caracteres alfanuméricos.
+* `+AWS_ACCESS_KEY+` e `+AWS_SECRET_KEY+` são as credenciais do AWS para o usuário IAM que tem acesso aos buckets do S3 onde os backups serão armazenados. Veja abaixo a política de permissão que precisa ser anexada a esse usuário.
+* `+AWS_*_BUCKET+` são os nomes dos buckets do S3 onde os backups devem ser armazenados.
++
+[Note]
+====
+Os nomes dos buckets do AWS S3 são globais em todo o AWS. Portanto, os buckets do S3, com o nome padrão (`+sts-elasticsearch-backup+`, `+sts-configuration-backup+`, `+sts-stackgraph-backup+`, `+sts-victoria-metrics-backup+` e `+sts-clickhouse-backup+` ), provavelmente não estarão disponíveis.
+====
+
+==== Usando um único bucket S3 com prefixos
+
+Em vez de usar buckets separados para cada datastore, você pode usar um único bucket S3 com prefixos diferentes:
+
+[,yaml]
+----
+global:
+  backup:
+    enabled: true
+backup:
+  elasticsearch:
+    bucketName: BUCKET
+    s3Prefix: elasticsearch
+  stackGraph:
+    bucketName: BUCKET
+    s3Prefix: stackgraph
+  configuration:
+    bucketName: BUCKET
+    s3Prefix: configuration
+victoria-metrics-0:
+  backup:
+    bucketName: BUCKET
+    s3Prefix: victoria-metrics-0
+victoria-metrics-1:
+  backup:
+    bucketName: BUCKET
+    s3Prefix: victoria-metrics-1
+clickhouse:
+  backup:
+    bucketName: BUCKET
+    s3Prefix: clickhouse
+minio:
+  accessKey: YOUR_ACCESS_KEY
+  secretKey: YOUR_SECRET_KEY
+  s3gateway:
+    enabled: true
+    accessKey: AWS_ACCESS_KEY
+    secretKey: AWS_SECRET_KEY
+----
+
+Substitua `+BUCKET+` pelo nome do seu bucket S3. Os backups para diferentes armazenamentos de dados são organizados usando os valores configurados em `+s3Prefix+`. Os mesmos valores `+YOUR_ACCESS_KEY+`, `+YOUR_SECRET_KEY+`, `+AWS_ACCESS_KEY+` e `+AWS_SECRET_KEY+` da seção anterior se aplicam aqui.
+
+=== Permissões do AWS S3
+
+O usuário do IAM identificado por `+AWS_ACCESS_KEY+` e `+AWS_SECRET_KEY+` deve ser configurado com a seguinte política de permissão para acessar os buckets do S3:
+
+[,javascript]
+----
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowListMinioBackupBuckets",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": [
+                "arn:aws:s3:::AWS_STACKGRAPH_BUCKET",
+                "arn:aws:s3:::AWS_ELASTICSEARCH_BUCKET",
+                "arn:aws:s3:::AWS_VICTORIA_METRICS_BUCKET",
+                "arn:aws:s3:::AWS_CLICKHOUSE_BUCKET",
+                "arn:aws:s3:::AWS_CONFIGURATION_BUCKET"
+            ]
+        },
+        {
+            "Sid": "AllowWriteMinioBackupBuckets",
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::AWS_STACKGRAPH_BUCKET/*",
+                "arn:aws:s3:::AWS_ELASTICSEARCH_BUCKET/*",
+                "arn:aws:s3:::AWS_VICTORIA_METRICS_BUCKET/*",
+                "arn:aws:s3:::AWS_CLICKHOUSE_BUCKET/*",
+                "arn:aws:s3:::AWS_CONFIGURATION_BUCKET"
+            ]
+        }
+    ]
+}
+----
+
+=== Armazenamento de Blobs do Azure
+
+==== Uso de recipientes separados
+
+Para habilitar backups em contêineres separados do Azure Blob Storage (um por datastore), adicione o seguinte fragmento YAML ao arquivo Helm `+values.yaml+` usado para instalar o {stackstate-product-name}:
+
+[,yaml]
+----
+global:
+  backup:
+    enabled: true
+minio:
+  accessKey: AZURE_STORAGE_ACCOUNT_NAME
+  secretKey: AZURE_STORAGE_ACCOUNT_KEY
+  azuregateway:
+    enabled: true
+----
+
+Substitua os seguintes valores:
+
+* `+AZURE_STORAGE_ACCOUNT_NAME+` - o https://learn.microsoft.com/en-us/azure/storage/common/storage-account-create?tabs=azure-portal[nome da conta de armazenamento do]
+* `+AZURE_STORAGE_ACCOUNT_KEY+` - a https://learn.microsoft.com/en-us/azure/storage/common/storage-account-keys-manage?tabs=azure-portal[chave da conta de armazenamento do] onde os backups devem ser armazenados.
+
+Os backups do StackGraph, Elasticsearch, Victoria Metrics e ClickHouse são armazenados em contêineres BLOB chamados `+sts-stackgraph-backup+`, `+sts-configuration-backup+`, `+sts-elasticsearch-backup+`, `+sts-victoria-metrics-backup+`, `+sts-clickhouse-backup+` respectivamente. Esses nomes podem ser alterados com a definição dos valores do Helm `+backup.stackGraph.bucketName+`, `+backup.elasticsearch.bucketName+`, `+victoria-metrics-0.backup.bucketName+`, `+victoria-metrics-1.backup.bucketName+` e `+clickhouse.backup.bucketName+` respectivamente.
+
+==== Uso de um único contêiner com prefixos
+
+Em vez de usar contêineres separados para cada datastore, você pode usar um único contêiner do Azure Blob Storage com prefixos diferentes:
+
+[,yaml]
+----
+global:
+  backup:
+    enabled: true
+backup:
+  elasticsearch:
+    bucketName: CONTAINER
+    s3Prefix: elasticsearch
+  stackGraph:
+    bucketName: CONTAINER
+    s3Prefix: stackgraph
+  configuration:
+    bucketName: CONTAINER
+    s3Prefix: configuration
+victoria-metrics-0:
+  backup:
+    bucketName: CONTAINER
+    s3Prefix: victoria-metrics-0
+victoria-metrics-1:
+  backup:
+    bucketName: CONTAINER
+    s3Prefix: victoria-metrics-1
+clickhouse:
+  backup:
+    bucketName: CONTAINER
+    s3Prefix: clickhouse
+minio:
+  accessKey: AZURE_STORAGE_ACCOUNT_NAME
+  secretKey: AZURE_STORAGE_ACCOUNT_KEY
+  azuregateway:
+    enabled: true
+----
+
+Substitua `+CONTAINER+` pelo nome do seu contêiner do Azure Blob Storage. Os backups para diferentes armazenamentos de dados serão organizados usando os valores configurados em `+s3Prefix+`. Os mesmos valores de `+AZURE_STORAGE_ACCOUNT_NAME+` e `+AZURE_STORAGE_ACCOUNT_KEY+` da seção anterior se aplicam aqui.
+
+=== Volume persistente do Kubernetes
+
+[CAUTION]
+====
+O uso do Kubernetes Persistent Volumes para backups tem limitações significativas:
+
+* Caro - os provedores de nuvem geralmente usam armazenamento em bloco (EBS/Azure Block), que é caro para backups grandes
+* Sem recuperação de desastres - os PVs são destruídos se o cluster for excluído
+* Não portátil - Não é possível restaurar os backups em um cluster diferente
+
+**Recomendação:** Em vez disso, use o AWS S3 ou o Azure Blob Storage para ambientes de produção.
+====
+
+==== Configuração básica
+
+Para ativar os backups no armazenamento local do cluster, ative o MinIO adicionando o seguinte fragmento YAML ao arquivo Helm `+values.yaml+` usado para instalar o {stackstate-product-name}:
+
+[,yaml]
+----
+global:
+  backup:
+    enabled: true
+minio:
+  accessKey: YOUR_ACCESS_KEY
+  secretKey: YOUR_SECRET_KEY
+  persistence:
+    enabled: true
+----
+
+Substitua os seguintes valores:
+
+* `+YOUR_ACCESS_KEY+` e `+YOUR_SECRET_KEY+` - as credenciais que serão usadas para proteger o sistema MinIO. Os trabalhos de backup automático e os trabalhos de restauração os usarão. Eles também são necessários para acessar manualmente o armazenamento MinIO. `+YOUR_ACCESS_KEY+` deve conter de 5 a 20 caracteres alfanuméricos e `+YOUR_SECRET_KEY+` deve conter de 8 a 40 caracteres alfanuméricos.
+
+== Dados de configuração e topologia (StackGraph)
+
+Os backups de dados de configuração e topologia (StackGraph) são backups completos, armazenados em um único arquivo com a extensão `+.graph+`. Cada arquivo contém um backup completo e pode ser movido, copiado ou excluído conforme necessário.
+
+=== Programação de backup
+
+Por padrão, os backups do StackGraph são criados diariamente às 03:00 AM, horário do servidor.
+
+O cronograma de backup pode ser configurado usando o valor do Helm `+backup.stackGraph.scheduled.schedule+`, especificado em https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/#_cron_schedule_syntax[Sintaxe do cronograma do Kubernetes (kubernetes.io)].
+
+=== Retenção de backup
+
+Por padrão, os backups do StackGraph são mantidos por 30 dias. Como os backups do StackGraph são backups completos, isso pode exigir muito armazenamento.
+
+O delta de retenção de backup pode ser configurado usando o valor do Helm `+backup.stackGraph.scheduled.backupRetentionTimeDelta+`, especificado no formato do argumento de data GNU `+--date+`. O padrão é `+30 days ago+`. Consulte https://www.gnu.org/software/coreutils/manual/html_node/Relative-items-in-date-strings.html[Itens relativos em cadeias de datas] para obter mais exemplos.
+
+=== Desativar backups programados
+
+Para desativar os backups agendados do StackGraph, defina o agendamento de backup para uma data distante no passado usando o valor do Helm `+backup.stackGraph.scheduled.schedule+`:
+
+[,yaml]
+----
+backup:
+  stackGraph:
+    scheduled:
+      schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+----
+
+== Configurações
+
+Settings (Configuração anteriormente) inclui instâncias instaladas de StackPacks com sua configuração e outras personalizações criadas pelo usuário, como monitores, exibições personalizadas e tokens de serviço.
+
+Os backups de configurações são leves (normalmente apenas alguns megabytes) e de rápida restauração, com tempo mínimo de inatividade. Depois que um backup de configurações for restaurado, os novos dados serão processados como antes, recriando a topologia, os estados de integridade e os alertas. No entanto, o histórico da topologia (incluindo a integridade) não é preservado nos backups de configurações - para isso, use o backup do StackGraph descrito acima.
+
+[NOTE]
+====
+*Os backups de configurações estão sempre ativados*, independentemente do valor de `+global.backup.enabled+`:
+
+* Quando `+global.backup.enabled+` é `+true+`: Os backups das configurações são armazenados via MinIO em seu backend de armazenamento configurado (AWS S3, Azure Blob Storage ou Kubernetes Persistent Volume)
+* Quando `+global.backup.enabled+` é `+false+`: Os backups das configurações são armazenados em um Volume Persistente do Kubernetes dedicado, ignorando o MinIO
+====
+
+=== Programação de backup
+
+Por padrão, os backups das configurações são criados diariamente às 04:00 AM, horário do servidor.
+
+O cronograma de backup pode ser configurado usando o valor do Helm `+backup.configuration.scheduled.schedule+`, especificado em https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/#_cron_schedule_syntax[Sintaxe do cronograma do Kubernetes (kubernetes.io)].
+
+=== Retenção de backup
+
+A retenção do backup depende da configuração `+global.backup.enabled+`:
+
+**Quando `+global.backup.enabled+` é `+true+`** (backups armazenados via MinIO):
+
+* Por padrão, os backups das configurações são mantidos por 365 dias
+* Configure a retenção usando `+backup.configuration.scheduled.backupRetentionTimeDelta+` - especificado no formato do argumento GNU date `+--date+`. O padrão é `+365 days ago+`
+
+**Quando `+global.backup.enabled+` é `+false+`** (backups armazenados em um PV dedicado):
+
+* Por padrão, os últimos 10 arquivos de backup são mantidos no Persistent Volume
+* Configure o número máximo de arquivos usando `+backup.configuration.maxLocalFiles+` (padrão: `+10+`)
+* Configure o tamanho do PV usando `+backup.configuration.scheduled.pvc.size+` (padrão: `+1Gi+`)
+
+Exemplo de configuração para armazenamento fotovoltaico dedicado:
+
+[,yaml]
+----
+backup:
+  configuration:
+    maxLocalFiles: 10
+    scheduled:
+      pvc:
+        size: '1Gi'
+----
+
+=== Desativar backups programados
+
+Para desativar os backups de configurações agendados, defina o agendamento de backup para uma data distante no passado usando o valor do Helm `+backup.configuration.scheduled.schedule+`:
+
+[,yaml]
+----
+backup:
+  configuration:
+    scheduled:
+      schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+----
+
+== Métricas (Victoria Metrics)
+
+O Victoria Metrics cria backups tirando um instantâneo dos dados de métricas atuais e armazenando apenas as alterações desde o último backup (abordagem incremental).
+
+[WARNING]
+====
+*Limitação do controle de versão do backup*
+
+Os backups do Victoria Metrics substituem o backup anterior sempre que um novo backup é executado. Isso significa que você só tem acesso ao *backup mais recente*, e não a um histórico de várias versões de backup.
+
+**Importante**: Se um backup falhar ou os dados forem corrompidos, os dados do backup anterior poderão ser perdidos. Somente o último backup bem-sucedido está disponível para restauração.
+
+**Exceção**: Se o volume de armazenamento do Victoria Metrics for esvaziado ou redefinido (por exemplo, o diretório `+/storage+` for montado vazio ou excluído), o sistema detectará isso e criará automaticamente uma nova série de backup. Nesse caso, tanto o backup antigo (antes da redefinição) quanto o novo backup serão preservados e estarão disponíveis para restauração.
+====
+
+[NOTE]
+====
+*Implantações de alta disponibilidade*
+
+As implantações de alta disponibilidade usam duas instâncias do Victoria Metrics (`+victoria-metrics-0+` e `+victoria-metrics-1+`). Os backups são configurados de forma independente para cada instância.
+====
+
+=== Programação de backup
+
+Os backups do Victoria Metrics são criados a cada 1 hora:
+
+* `+victoria-metrics-0+` - 25 minutos após a hora
+* `+victoria-metrics-1+` - 35 minutos após a hora
+
+=== Desativar backups programados
+
+Para desativar os backups agendados do Victoria Metrics, defina o agendamento de backup para ambas as instâncias em uma data distante no passado:
+
+[,yaml]
+----
+victoria-metrics-0:
+  backup:
+    scheduled:
+      schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+victoria-metrics-1:
+  backup:
+    scheduled:
+      schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+----
+
+== OpenTelemetry (ClickHouse)
+
+O ClickHouse usa backups incrementais e completos. Os backups antigos são excluídos com base na política de retenção configurada.
+
+=== Programação de backup
+
+Os backups do ClickHouse são criados:
+
+* Backup completo - às 00:45 todos os dias
+* Backup incremental - 45 minutos após a hora (das 3h às 12h)
+
+=== Retenção de backup
+
+Por padrão, a ferramenta mantém os últimos 308 backups (completos e incrementais), o que equivale a aproximadamente 14 dias.
+
+A retenção de backup pode ser configurada usando o valor do Helm `+clickhouse.backup.config.keep_remote+`.
+
+=== Desativar backups programados
+
+Para desativar os backups agendados do ClickHouse, defina os agendamentos de backup completo e incremental para uma data distante no passado:
+
+[,yaml]
+----
+clickhouse:
+  backup:
+    scheduled:
+      full_schedule: '0 0 1 1 1970'         # January 1, 1970 (epoch start)
+      incremental_schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+----
+
+== Dados de telemetria (Elasticsearch)
+
+Os snapshots do Elasticsearch são incrementais.
+
+=== Programação de instantâneos
+
+Os snapshots do Elasticsearch são criados diariamente às 03:00 AM, horário do servidor.
+
+=== Retenção de instantâneos
+
+Por padrão, os instantâneos do Elasticsearch são mantidos por 30 dias, com um mínimo de 5 instantâneos e um máximo de 30 instantâneos.
+
+O tempo de retenção e o número de instantâneos mantidos podem ser configurados usando os seguintes valores do Helm:
+
+* `+backup.elasticsearch.scheduled.snapshotRetentionExpireAfter+`, especificado em https://www.elastic.co/guide/en/elasticsearch/reference/7.6/common-options.html#_time_units[unidades de tempo do Elasticsearch (elastic.co)].
+* `+backup.elasticsearch.scheduled.snapshotRetentionMinCount+`
+* `+backup.elasticsearch.scheduled.snapshotRetentionMaxCount+`
+
+=== Desativar instantâneos programados
+
+Para desativar os instantâneos agendados do Elasticsearch, defina o agendamento do instantâneo para uma data distante no passado usando o valor do Helm `+backup.elasticsearch.scheduled.schedule+`:
+
+[,yaml]
+----
+backup:
+  elasticsearch:
+    scheduled:
+      schedule: '0 0 1 1 1970'  # January 1, 1970 (epoch start)
+----
