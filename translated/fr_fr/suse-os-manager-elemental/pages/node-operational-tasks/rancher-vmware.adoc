@@ -1,0 +1,148 @@
+= Comment utiliser {elemental-product-name} avec Rancher et VMware ?
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+== Extrait
+
+Dans ce document, nous verrons comment configurer une machine virtuelle dans VMware Workstation pour démarrer les nœuds Elemental.
+
+== Conditions préalables
+
+Rancher 2.8 ou plus est installé et fonctionne. Voir les guides de démarrage rapide.
+
+== Étape 1 : Créer le point final d'enregistrement
+
+Nous devons créer une image ISO pour démarrer les nœuds et les enregistrer dans l'instance Rancher. Pour cela, un point final d'enregistrementxref:references/machineregistration-reference.adoc[(] ressourcexref:references/machineregistration-reference.adoc[MachineRegistration] ) est nécessaire.
+
+Voir cet exemple de `+MachineRegistration+`:
+
+[,yaml]
+.registration.yaml
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      users:
+        - name: root
+          passwd: root
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineInventoryLabels:
+    element: fire
+    manufacturer: "${Product/Vendor}"
+    productName: "${Product/Name}"
+    serialNumber: "${Product/Serial Number}"
+    machineUUID: "${Product/UUID}"
+----
+
+L'enregistrement de machine ci-dessus suppose que les nœuds sont équipés de TPM 2.0. Si la machine cible virtualisée ne comprend pas de dispositif TPM virtuel, une émulation logicielle peut être configurée dans la section `+config.elemental.registration+`.
+
+Prenons l'exemple suivant :
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  ...
+spec:
+  config:
+    cloud-config:
+      ...
+    elemental:
+      install:
+        ...
+      registration:
+        emulate-tpm: true
+        emulated-tpm-seed: -1
+  machineInventoryLabels:
+    ...
+----
+
+`+emulated-tpm-seed: -1+` permet au client d'utiliser une graine aléatoire pour calculer le hachage du TPM, ce qui est utile pour pouvoir réutiliser la même définition de point final d'enregistrement pour plusieurs machines. Voir la xref:operator-operational-tasks/tpm.adoc[documentation] complémentaire xref:operator-operational-tasks/tpm.adoc[sur les MTP].
+
+== Étape 2 : Créer l'ISO d'installation
+
+Le support d'installation doit être lié à un point final d'enregistrement spécifique. Celle-ci est créée et gérée avec la ressource xref:references/seedimage-reference.adoc[SeedImage].
+
+Prenons l'exemple suivant :
+
+[,yaml]
+.seedimage.yaml
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  baseImage: registry.suse.com/suse/sle-micro-iso/5.5:2.0.2
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+Une fois la ressource SeedImage créée, elle commence à construire une ISO avec l'image du système d'exploitation fournie et à la lier au point final d'enregistrement donné. Une fois cela fait, une URL de téléchargement sera disponible dans l'état de la ressource SeedImage.
+
+Vous pouvez le télécharger avec :
+
+[,shell]
+----
+wget --no-check-certificate --content-disposition $(kubectl get seedimages.elemental.cattle.io -n fleet-default fire-img -o jsonpath="{.status.downloadURL}")
+----
+
+== Étape 3 : Amorcer le dispositif cible
+
+Idéalement, il suffirait de graver l'iso sur un disque usb et de démarrer votre périphérique en utilisant le périphérique usb. Une fois qu'il a démarré et qu'il est devenu actif dans Rancher sous l'inventaire des machines, vous pouvez sélectionner et créer un cluster à partir de lui, mais ici nous utiliserons un vm pour imiter un périphérique pour les tests.
+
+=== 3.1 Préparer la VM à émuler le TPM
+
+Dans VMware workstation, créez une vm comme vous le feriez normalement, en veillant à ce que la taille du disque dur soit d'au moins 40 Go.
+
+Modifiez maintenant les paramètres de la machine et allez dans l'onglet "Options". La toute dernière option est "Avancé".
+
+Cliquez sur "avancé" et dans la fenêtre de droite, changez le type de firmware de "BIOS" à "UEFI" et cochez l'option "Activer le démarrage sécurisé" comme suit :
+
+* Paramètres par défaut avec le BIOS sélectionné
+
+image::rancher-vmware-vm-boot-bios.png[Options de démarrage de la VM avec le BIOS]
+
+* Paramètres mis à jour avec UEFI sélectionné et démarrage sécurisé activé
+
+image::rancher-vmware-vm-boot-uefi.png[Options de démarrage de la VM avec l'UEFI]
+
+Dans le même onglet "Options", cliquez sur l'option "Contrôle d'accès" et cliquez sur "Chiffrer" à droite.
+
+image::rancher-vmware-access-control-menu.png[Menu de contrôle d'accès]
+
+Il vous sera demandé d'entrer un mot de passe pour crypter la machine. Entrez un mot de passe et cliquez sur "Encrypt"
+
+image::rancher-vmware-access-control-encrypt.png[Contrôle de l'accès aux données d'identification par cryptage]
+
+Cette étape est importante pour ajouter le matériel TPM. Revenez ensuite aux options matérielles et cliquez sur "Ajouter"
+
+Ajoutez le matériel TPM (Trusted Platform Module) et cliquez sur "Terminer".
+
+Une fois cette étape terminée, notre VM est prête.
+
+=== 3.2 Démarrer la VM avec l'ISO élémentaire
+
+Ajoutez ensuite l'ISO que nous avons créé plus tôt dans la VM et démarrez-la.
+
+Il devrait démarrer avec l'ISO et commencer à installer Elemental :
+
+image::rancher-vmware-elemental-install-grub.png[{elemental-product-name} OS install grub menu]
+
+image::rancher-vmware-elemental-install-logs.png[{elemental-product-name} Journaux d'installation du système d'exploitation]
+
+Une fois l'opération terminée, la VM sera redémarrée et apparaîtra comme active dans l'inventaire des machines dans Rancher.
