@@ -1,0 +1,50 @@
+= Dynamische Schwellenwertmonitore
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+== Übersicht
+
+Für Metriken, die im Laufe der Zeit stark schwanken und sich von Dienst zu Dienst unterscheiden, bietet ein dynamischer Schwellenwertmonitor eine einfache und leistungsstarke Erkennung von Anomalien.  Es verwendet Daten von vor 1, 2 oder 3 Wochen zusätzlich zur jüngsten Vergangenheit als Kontext zum Vergleich mit den aktuellen Daten.
+
+Die Daten aus dem "Kontrollfenster" werden mit den Daten aus dem historischen Kontext unter Verwendung des Anderson-Darling-Tests verglichen.  Dies erfordert nur sehr wenige Annahmen über die Datenverteilung.  Der Test ist besonders empfindlich gegenüber Ausreißern am oberen und unteren Ende der Verteilung.  Da die Datenwerte direkt verglichen werden, ohne Modellanpassung, ist der Dynamic Threshod Monitor sehr robust.
+
+Bei Metriken, die sich im Laufe der Zeit gleichmäßig verändern (z. B. auf einer Zeitskala von 5 Minuten), ist die effektive Anzahl der Datenpunkte kleiner als die Rohanzahl.  Der DT kompensiert dies, so dass ein und derselbe Monitor für eine Vielzahl von Metriken verwendet werden kann, ohne dass seine Parameter angepasst werden müssen.
+
+Es gibt eine Reihe von Parametern, die für die Überwachungsfunktion eingestellt werden können:
+
+* `+falsePositiveRate+``+!!float 1e-8+` - die Empfindlichkeit des Überwachungsgeräts gegenüber abweichendem Verhalten.  Ein niedrigerer Wert unterdrückt mehr (falsch) positive Ergebnisse, kann aber auch zu falsch negativen Ergebnissen (unbemerkte Anomalien) führen.
+* `+checkWindowMinutes+`: z.B. `+10+` Minuten - das Kontrollfenster muss ausgewogen sein zwischen schneller Alarmierung (kleine Werte) und richtig erkannten Anomalien (hohe Werte).  Eine Handvoll Datenpunkte funktioniert in der Praxis gut.
+* `+historicWindowMinutes+``+120+` (2 Stunden) - um die aktuelle Zeit herum, aber dann vor einer oder mehreren Wochen - also von 1 Stunde vor der aktuellen Zeit bis 1 Stunde danach.  Auch die 2 Stunden vor dem Kontrollfenster werden genutzt.  Der dynamische Schwellenwertmonitor vergleicht die Verteilung dieser historischen Daten mit den Datenpunkten im Prüffenster.
+* `+historySizeWeeks+``+2+` - die Anzahl der Wochen, aus denen die Daten für den historischen Kontext genommen werden.  Kann `+1+`, `+2+` oder `+3+` sein.
+* `+removeTrend+`Bei Metriken, die einen Trend aufweisen (z. B. die Anzahl der Anfragen), so dass der absolute Wert von Woche zu Woche unterschiedlich ist, kann dieser Trend (der Durchschnittswert) berücksichtigt werden.
+* `+includePreviousDay+`Typischerweise `+false+` - für Messgrößen, die kein wöchentliches, sondern nur ein tägliches Muster aufweisen, ermöglicht dies die Verwendung aktuellerer Daten
+
+== Beispiel eines dynamischen Schwellenwertmonitors
+
+Ein mit der Funktion Dynamischer Schwellenwert implementierter Monitor sieht folgendermaßen aus:
+
+----
+  - _type: "Monitor"
+    name: "<name of the monitor>"
+    identifier: "urn:custom:monitor:<identifier for the monitor>"
+    status: "DISABLED"
+    description: "<description>"
+    function: {{ get "urn:stackpack:aad-v2:shared:monitor-function:dt" }}
+    arguments:
+      telemetryQuery:
+        query: "<metric to bind to component>"
+        unit: s
+        aliasTemplate: "<name for the metric>"
+      topologyQuery: <topology query for the components to bind to>
+      falsePositiveRate: <floating point number, e.g. !!float 1e-8>
+      checkWindowMinutes: <integer, e.g. 10>
+      historicWindowMinutes: <integer, e.g. 120>
+      historySizeWeeks: <integer: 1, 2 or 3>
+      includePreviousDay: <boolean>
+      removeTrend: <boolean>
+    intervalSeconds: 60
+    remediationHint: "<how to remediate deviating states>"
+----
+
+Der Monitor kann mit Hilfe des Leitfadens unter xref:/use/alerting/k8s-add-monitors-cli.adoc[Hinzufügen eines Schwellenwertmonitors zu Komponenten unter Verwendung der CLI] implementiert werden
