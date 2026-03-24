@@ -1,0 +1,56 @@
+= 出口配置
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+所有 SDK，无论使用哪种语言，都使用相同的基本配置来定义 Open Telemetryhttps://opentelemetry.io/docs/concepts/glossary/#_service[服务名称]和输出端点（即遥测数据的发送位置）。
+
+这些可以通过设置仪器应用程序的环境变量来配置。
+
+在 Kubernetes 中，在工作负载的清单中设置这些环境变量（用应用服务的名称替换`+<the-service-name>+` ）：
+
+[,yaml]
+----
+...
+spec:
+  containers:
+  - env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://opentelemetry-collector.open-telemetry.svc.cluster.local:4317
+    - name: OTEL_SERVICE_NAME
+      value: <the-service-name>
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: grpc
+...
+----
+
+示例中指定的端点假定收集器是按照xref:/setup/otel/collector.adoc[安装指南]中的默认值安装的。它使用`+4317+` 端口，该端口使用`+gRPC+` 版本的 OTLP 协议。有些仪器只支持 HTTP，在这种情况下，请使用`+4318+` 端口。
+
+服务名称也可以从可能已经存在的 Kubernetes 标签中导出。例如
+
+[,yaml]
+----
+spec:
+  containers:
+  - env:
+    - name: OTEL_SERVICE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.labels['app.kubernetes.io/component']
+----
+
+== gRPC vs HTTP
+
+开放遥测协议 OTLP 支持 gRPC 和 HTTP 上的 protobuf。有些 SDK 还支持 HTTP 上的 JSON。在上一节中，输出协议被设置为`+gRPC+` ，这通常能提供最佳性能，也是许多 SDK 的默认设置。但在某些情况下，这可能会产生问题：
+
+* 某些防火墙的设置无法处理 gRPC
+* (如果不进行额外配置，（反向）代理和负载平衡器可能不支持 gRPC
+* gRPC 的长期连接可能会在负载平衡时造成问题。
+
+要切换到 HTTP 而不是 gRPC，请将协议更改为`+http+` _，并_使用端口`+4318+` 。
+
+总之，如果 gRPC 出现问题，请使用 HTTP：
+
+* `+grpc+` 协议使用端口 `+4317+`
+* `+http+` 协议使用端口 `+4318+`
