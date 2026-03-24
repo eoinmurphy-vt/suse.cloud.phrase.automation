@@ -1,0 +1,177 @@
+= Référence de la grappe
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Une définition de `+Cluster+` comprend un `+kubernetesVersion+` et une liste de `+machinePools+` sur lesquels déployer le cluster.
+
+Pour savoir comment sélectionner un site `+kubernetesVersion+`, consultez notre page sur xref:references/kubernetesversions.adoc[les versions de Kubernetes].
+
+Un `+machinePool+` est un paquet de configuration avec un `+ObjectReference+` afin que le cluster soit déployé sur ces `+machinePools+`avec les rôles appropriés (etcd, control-plane, worker) avec une quantité (combien de nœuds à déployer à partir de ce pool) et quelques configurations supplémentaires (rolling update config, max unhealthy nodes, etc...).
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+Exemple
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: ...
+  namespace: ...
+spec:
+  rkeConfig:
+    machinePools:
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+----
+====
+
+
+Il est également possible de désactiver les composants du cluster via l'objet `+Cluster+` dans `+spec.rkeConfig.machineGlobalConfig+`, par exemple :
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+Exemple de désactivation du service
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: ...
+  namespace: ...
+spec:
+  rkeConfig:
+    machinePools:
+      - name: ...
+        controlPlaneRole: ...
+        etcdRole: ...
+        workerRole: ...
+        quantity: ...
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: ...
+    machineGlobalConfig:
+      disable:
+        - servicelb
+        - ...
+----
+====
+
+
+== rkeConfig.machinePools
+
+Une liste de `+machinePools+`. Un minimum de 1 `+machinePools+` est requis pour le déploiement du cluster.
+
+== Référence Spec machinePools
+
+|===
+| Clé | Type | Valeur par défaut | Description
+
+| controlPlaneRole
+| bool
+| faux
+| Définir les machines de ce pool comme plan de contrôle
+
+| etcdRole
+| bool
+| faux
+| Configurer les machines de ce pool en tant que etcd
+
+| rôle du travailleur
+| bool
+| faux
+| Définir les machines de ce pool en tant que travailleurs
+
+| nom
+| chaîne de caractères
+| néant
+| Nom de la piscine
+
+| quantité
+| int
+| néant
+| Nombre de machines à déployer à partir de ce pool
+
+| unhealthyNodeTimeout
+| int
+| néant
+| Délai d'attente pour les contrôles de santé des nœuds malsains
+
+| machineConfigRef
+| int
+| ObjectReference
+| Référence à un objet utilisé pour savoir quels nœuds font partie de ce pool
+|===
+
+Un minimum de `+quantity+` réglé sur un est requis pour que ce pool puisse être utilisé.
+Il s'agit en fait du nombre de nœuds de ce pool qui seront configurés pour ce cluster.
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+Exemple
+[,yaml]
+----
+kind: Cluster
+apiVersion: provisioning.cattle.io/v1
+metadata:
+  name: cluster-example
+  namespace: example-default
+spec:
+  rkeConfig:
+    machinePools:
+      - name: examplePool 
+        controlPlaneRole: true
+        etcdRole: true
+        workerRole: false
+        quantity: 3
+        unhealthyNodeTimeout: 0s
+        machineConfigRef:
+          apiVersion: elemental.cattle.io/v1beta1
+          kind: MachineInventorySelectorTemplate
+          name: exampleSelector
+----
+====
+
+
+== machineConfigRef Référence Spec
+
+Un `+machineConfigRef+` est un k8s `+ObjectReference+` générique qui contient généralement un`+kind+` `+name+` et un `+apiVersion+` pour pointer vers un objet différent.
+
+Sur le site {elemental-product-name}, nous avons défini un xref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate].
+Cela nous permet de pointer vers plus d'un objet en utilisant le sélecteur.
+
+=== Exemple
+
+L'exemple ci-dessous crée un cluster qui utilise 2 ``+machinePool+`` différents pour définir différents nœuds comme nœuds de plan de contrôle et nœuds de travailleurs, sur la base de 2 `+MachineInventorySelectorTemplate+` différents qui sélectionnent leurs nœuds sur la base d'une étiquette `+MachineInventory+` (emplacement) :
+
+[CAUTION]
+.avertissement
+====
+Les étiquettes de l'exemple sont des étiquettes définies manuellement, elles ne sont pas définies automatiquement par {elemental-product-name}\...
+====
+
+.Exemple d'un cluster avec plus d'un machinePool
+[,yaml]
+----
+include::example$clusters/clusters-several-machinepools.yml[]
+----
