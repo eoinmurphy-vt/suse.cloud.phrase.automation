@@ -1,30 +1,30 @@
-= Guía de endurecimiento CIS
+= Guía de endurecimiento del CIS
 :page-languages: [en, ja, ko, zh]
 :revdate: 2025-12-31
 :page-revdate: {revdate}
 
-Este documento proporciona orientación prescriptiva para endurecer una instalación de producción de K3s. Describe las configuraciones y controles necesarios para abordar los controles de referencia de Kubernetes del Centro para la Seguridad de Internet (CIS).
+Este documento proporciona una guía prescriptiva para el endurecimiento de una instalación de producción de K3s. Describe las configuraciones y controles necesarios para abordar los controles de referencia de Kubernetes del Centro de Seguridad de Internet (CIS).
 
-K3s tiene una serie de mitigaciones de seguridad aplicadas y activadas por defecto y pasará un número de los controles CIS de Kubernetes sin modificación. Hay algunas excepciones notables a esto que requieren intervención manual para cumplir completamente con el Benchmark del CIS:
+K3s tiene una serie de mitigaciones de seguridad aplicadas y activadas por defecto y pasará una serie de controles de Kubernetes CIS sin modificación. Hay algunas excepciones notables que requieren una intervención manual para cumplir plenamente el criterio de referencia CIS:
 
-. K3s no modificará el sistema operativo del host. Cualquier modificación a nivel de host deberá hacerse manualmente.
-. Ciertos controles de políticas del CIS para `NetworkPolicies` y `PodSecurityStandards` (`PodSecurityPolicies` en v1.24 y versiones anteriores) restringirán la funcionalidad del clúster. Debes optar por que K3s configure estos añadiendo las opciones apropiadas (activación de plugins de admisión) a tus banderas de línea de comandos o archivo de configuración, así como aplicar manualmente las políticas adecuadas. Se presentan más detalles en las secciones a continuación.
+. Los K3 no modificarán el sistema operativo anfitrión. Cualquier modificación a nivel de host deberá hacerse manualmente.
+. Determinados controles de política de CIS para `NetworkPolicies` y `PodSecurityStandards` (`PodSecurityPolicies` en v1.24 y versiones anteriores) restringirán la funcionalidad del clúster. Debe optar por que K3s configure estos añadiendo las opciones apropiadas (habilitación de plugins de admisión) a sus banderas de línea de comandos o archivo de configuración, así como aplicando manualmente las políticas apropiadas. En las secciones siguientes se ofrecen más detalles.
 
-La primera sección (1.1) del Benchmark del CIS se ocupa principalmente de los permisos y la propiedad de los manifiestos de pod. K3s no utiliza estos para los componentes centrales ya que todo está empaquetado en un único binario.
+La primera sección (1.1) del CIS Benchmark se ocupa principalmente de los permisos y la propiedad del manifiesto de vaina. K3s no los utiliza para los componentes principales, ya que todo está empaquetado en un único binario.
 
 == Requisitos a nivel de host
 
-Hay dos áreas de requisitos a nivel de host: parámetros del kernel y configuración del proceso/directorio etcd. Estos se describen en esta sección.
+Existen dos áreas de requisitos a nivel de host: los parámetros del kernel y la configuración del proceso/directorio etcd. En esta sección se describen estos aspectos.
 
-=== Asegúrate de que `protect-kernel-defaults` esté configurado
+=== Asegúrese de que `protect-kernel-defaults` está configurado
 
-Esta es una bandera de kubelet que hará que el kubelet salga si los parámetros del kernel requeridos no están configurados o están establecidos en valores diferentes de los predeterminados del kubelet.
+Esta es una bandera de kubelet que hará que el kubelet salga si los parámetros requeridos del kernel no están configurados o están configurados con valores diferentes a los predeterminados del kubelet.
 
-NOTE: `protect-kernel-defaults` se expone como una bandera de nivel superior para K3s.
+NOTE: `protect-kernel-defaults` se expone como una bandera de nivel superior para los K3.
 
-==== Establecer parámetros del kernel
+==== Establecer los parámetros del núcleo
 
-Crea un archivo llamado `/etc/sysctl.d/90-kubelet.conf` y añade el fragmento de código a continuación. Luego ejecuta `sysctl -p /etc/sysctl.d/90-kubelet.conf`.
+Crea un archivo llamado `/etc/sysctl.d/90-kubelet.conf` y añade el siguiente fragmento. A continuación, ejecute `sysctl -p /etc/sysctl.d/90-kubelet.conf`.
 
 [,bash]
 ----
@@ -34,13 +34,13 @@ kernel.panic=10
 kernel.panic_on_oops=1
 ----
 
-== Configuración para Componentes de Kubernetes
+== Configuración de los componentes de Kubernetes
 
-La configuración a continuación debe ser colocada en el xref:installation/configuration.adoc#_configuration_file[archivo de configuración], y contiene todas las remediaciones necesarias para proteger los componentes de Kubernetes.
+La siguiente configuración debe colocarse en el xref:installation/configuration.adoc#_configuration_file[archivo de configuración], y contiene todas las correcciones necesarias para reforzar los componentes de Kubernetes.
 
 [tabs,sync-group-id=pod-sec]
 ======
-v1.29 y versiones más recientes::
+v1.29 y posteriores::
 +
 [,yaml]
 ----
@@ -83,7 +83,7 @@ kubelet-arg:
   - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
 ----
 
-v1.24 y versiones anteriores::
+v1.24 y anteriores::
 +
 [,yaml]
 ----
@@ -105,20 +105,20 @@ kubelet-arg:
 ----
 ======
 
-== Requisitos de Ejecución de Kubernetes
+== Requisitos de tiempo de ejecución de Kubernetes
 
-Los requisitos de ejecución para cumplir con el CIS Benchmark se centran en la seguridad de los pods (a través de PSP o PSA), políticas de red y registros de auditoría del servidor API. Estos se describen en esta sección.
+Los requisitos de tiempo de ejecución para cumplir con el CIS Benchmark se centran en la seguridad del pod (a través de PSP o PSA), las políticas de red y los registros de auditoría del servidor API. En esta sección se describen estos aspectos.
 
-Por defecto, K3s no incluye ninguna política de seguridad de pods ni políticas de red. Sin embargo, K3s incluye un controlador que hará cumplir las políticas de red, si se crean. K3s no habilita la auditoría por defecto, por lo que la configuración de registros de auditoría y la política de auditoría deben ser creadas manualmente. Por defecto, K3s se ejecuta con ambos controladores de admisión `PodSecurity` y `NodeRestriction` habilitados, entre otros.
+Por defecto, K3s no incluye ninguna política de seguridad de pods o de red. Sin embargo, el K3s incluye un controlador que aplicará las políticas de red, si se crea alguna. K3s no habilita la auditoría por defecto, por lo que la configuración del registro de auditoría y la política de auditoría deben crearse manualmente. Por defecto, el K3s se ejecuta con los controladores de admisión `PodSecurity` y `NodeRestriction` habilitados, entre otros.
 
-=== Seguridad de Pods
+=== Seguridad
 
 [tabs,sync-group-id=pod-sec]
 ======
-v1.25 y versiones más recientes::
+v1.25 y posteriores::
 +
 --
-K3s v1.25 y versiones más recientes soportan https://kubernetes.io/docs/concepts/security/pod-security-admission/[Admisiones de Seguridad de Pods (PSAs)] para controlar la seguridad de los pods. Las PSAs se habilitan pasando la siguiente bandera al servidor K3s:
+K3s v1.25 y posteriores admiten https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod Security Admissions (PSAs)] para controlar la seguridad de los pods. Los PSAs se habilitan pasando la siguiente bandera al servidor K3s:
 
 ----
 --kube-apiserver-arg="admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml"
@@ -126,7 +126,7 @@ K3s v1.25 y versiones más recientes soportan https://kubernetes.io/docs/concept
 
 La política debe escribirse en un archivo llamado `psa.yaml` en el directorio `/var/lib/rancher/k3s/server`.
 
-Aquí hay un ejemplo de una PSA conforme:
+He aquí un ejemplo de anuncio de servicio público conforme:
 
 [,yaml]
 ----
@@ -151,20 +151,20 @@ plugins:
 ----
 --
 
-v1.24 y versiones anteriores::
+v1.24 y anteriores::
 +
 --
-K3s v1.24 y versiones anteriores soportan https://kubernetes.io/docs/concepts/security/pod-security-policy/[Políticas de Seguridad de Pods (PSPs)] para controlar la seguridad de los pods. Las PSPs se habilitan pasando la siguiente bandera al servidor K3s:
+K3s v1.24 y anteriores admiten https://kubernetes.io/docs/concepts/security/pod-security-policy/[Pod Security Policies (PSPs)] para controlar la seguridad de los pods. Los PSP se activan pasando la siguiente bandera al servidor K3s:
 
 ----
 --kube-apiserver-arg="enable-admission-plugins=NodeRestriction,PodSecurityPolicy"
 ----
 
-Esto tendrá el efecto de mantener el `NodeRestriction` plugin así como habilitar el `PodSecurityPolicy`.
+Esto tendrá el efecto de mantener el plugin `NodeRestriction` así como habilitar el `PodSecurityPolicy`.
 
-Cuando las PSPs están habilitadas, se puede aplicar una política para satisfacer los controles necesarios descritos en la sección 5.2 del CIS Benchmark.
+Cuando las PSP están activadas, puede aplicarse una política para satisfacer los controles necesarios descritos en la sección 5.2 del Criterio de Referencia CIS.
 
-Aquí hay un ejemplo de una PSP conforme:
+He aquí un ejemplo de PSP conforme:
 
 [,yaml]
 ----
@@ -206,9 +206,9 @@ spec:
   readOnlyRootFilesystem: false
 ----
 
-Para que la PSP anterior sea efectiva, necesitamos crear un ClusterRole y un ClusterRoleBinding. También necesitamos incluir una "política de sistema sin restricciones" que es necesaria para los pods a nivel de sistema que requieren privilegios adicionales, y una política adicional que permita los sysctls necesarios para que servicelb funcione correctamente.
+Para que la PSP anterior sea efectiva, necesitamos crear un ClusterRole y un ClusterRoleBinding. También necesitamos incluir una "system unrestricted policy" que es necesaria para los pods a nivel de sistema que requieren privilegios adicionales, y una política adicional que permita las sysctls necesarias para que servicelb funcione correctamente.
 
-Combinando la configuración anterior con la <<_networkpolicies,Política de Red>> descrita en la siguiente sección, se puede colocar un único archivo en el directorio `/var/lib/rancher/k3s/server/manifests`. Aquí hay un ejemplo de un archivo `policy.yaml`:
+Combinando la configuración anterior con la <<_networkpolicies,Política de Red>> descrita en la siguiente sección, se puede colocar un único archivo en el directorio `/var/lib/rancher/k3s/server/manifests`. He aquí un ejemplo de archivo `policy.yaml`:
 
 [,yaml]
 ----
@@ -439,15 +439,15 @@ spec:
 --
 ======
 
-NOTE: Las adiciones críticas de Kubernetes como CNI, DNS e Ingress se ejecutan como pods en el espacio de nombres `kube-system`. Por lo tanto, este espacio de nombres tendrá una directiva que es menos restrictiva para que estos componentes puedan funcionar correctamente.
+NOTE: Las adiciones críticas de Kubernetes como CNI, DNS e Ingress se ejecutan como pods en el espacio de nombres `kube-system`. Por lo tanto, este espacio de nombres tendrá una política menos restrictiva para que estos componentes puedan ejecutarse correctamente.
 
 === NetworkPolicies
 
-CIS requiere que todos los espacios de nombres tengan una política de red aplicada que limite razonablemente el tráfico hacia los espacios de nombres y pods.
+CIS requiere que todos los espacios de nombres tengan una política de red aplicada que limite razonablemente el tráfico en los espacios de nombres y pods.
 
-Las políticas de red deben colocarse en el directorio `/var/lib/rancher/k3s/server/manifests`, donde se desplegarán automáticamente al iniciar.
+Las políticas de red deben colocarse en el directorio `/var/lib/rancher/k3s/server/manifests`, donde se desplegarán automáticamente al iniciarse.
 
-Aquí hay un ejemplo de una política de red conforme.
+He aquí un ejemplo de política de red conforme.
 
 [,yaml]
 ----
@@ -465,7 +465,7 @@ spec:
             kubernetes.io/metadata.name: kube-system
 ----
 
-Con las restricciones aplicadas, DNS será bloqueado a menos que se permita intencionadamente. A continuación se muestra una política de red que permitirá que exista tráfico para DNS.
+Con las restricciones aplicadas, el DNS se bloqueará a menos que se permita a propósito. A continuación se muestra una política de red que permitirá la existencia de tráfico para DNS.
 
 [,yaml]
 ----
@@ -488,7 +488,7 @@ spec:
   - Ingress
 ----
 
-El metrics-server y el controlador de ingreso Traefik serán bloqueados por defecto si no se crean políticas de red para permitir el acceso. Asegúrate de utilizar el yaml de muestra a continuación:
+El servidor de métricas y el controlador de entrada Traefik se bloquearán por defecto si no se crean políticas de red que permitan el acceso. Asegúrese de utilizar el yaml de ejemplo que aparece a continuación:
 
 [,yaml]
 ----
@@ -538,22 +538,22 @@ spec:
 
 [IMPORTANT]
 ====
-Los operadores deben gestionar las políticas de red como es normal para los espacios de nombres adicionales que se creen.
+Los operadores deben gestionar las políticas de red con normalidad para los espacios de nombres adicionales que se creen.
 ====
 
 
-=== Configuración de auditoría del servidor API
+=== Configuración de la auditoría del servidor API
 
-Los requisitos CIS 1.2.22 a 1.2.25 están relacionados con la configuración de los registros de auditoría para el servidor API. K3s no crea por defecto el directorio de registros y la política de auditoría, ya que los requisitos de auditoría son específicos para las políticas y el entorno de cada usuario.
+Los requisitos 1.2.22 a 1.2.25 del CIS están relacionados con la configuración de registros de auditoría para el Servidor API. K3s no crea por defecto el directorio de registro y la política de auditoría, ya que los requisitos de auditoría son específicos de las políticas y el entorno de cada usuario.
 
-El directorio de registros, idealmente, debe ser creado antes de iniciar K3s. Se recomienda un permiso de acceso restrictivo para evitar la filtración de información sensible potencial.
+El directorio de registro, idealmente, debe crearse antes de iniciar K3s. Se recomienda un permiso de acceso restrictivo para evitar la filtración de información potencialmente sensible.
 
 [,bash]
 ----
 sudo mkdir -p -m 700 /var/lib/rancher/k3s/server/logs
 ----
 
-A continuación se proporciona una política de auditoría inicial para registrar los metadatos de las solicitudes. La política debe escribirse en un archivo llamado `audit.yaml` en el directorio `/var/lib/rancher/k3s/server`. Se puede encontrar información detallada sobre la configuración de políticas para el servidor API en la https://kubernetes.io/docs/tasks/debug-application-cluster/audit/[documentación] de Kubernetes.
+A continuación se proporciona una política de auditoría inicial para registrar los metadatos de las solicitudes. La política debe escribirse en un archivo llamado `audit.yaml` en el directorio `/var/lib/rancher/k3s/server`. Encontrará información detallada sobre la configuración de políticas para el servidor API en la Kubernetes https://kubernetes.io/docs/tasks/debug-application-cluster/audit/[documentación de].
 
 [,yaml]
 ----
@@ -563,7 +563,7 @@ rules:
 - level: Metadata
 ----
 
-Ambas configuraciones de directivas deben ser pasadas como argumentos al servidor API de la siguiente manera:
+Ambas configuraciones deben pasarse como argumentos al Servidor API como:
 
 [tabs]
 ======
@@ -589,7 +589,7 @@ cmdline::
 ----
 ======
 
-K3s debe ser reiniciado para cargar la nueva configuración.
+Los K3 deben reiniciarse para cargar la nueva configuración.
 
 [,bash]
 ----
@@ -598,17 +598,17 @@ sudo systemctl restart k3s.service
 ----
 
 == Operaciones manuales
-Los siguientes son controles que K3s actualmente no cumple con la configuración anterior aplicada. Estos controles requieren intervención manual para cumplir completamente con el CIS Benchmark.
+Los siguientes son controles por los que el K3s actualmente no pasa con la configuración anterior aplicada. Estos controles requieren una intervención manual para cumplir plenamente el criterio de referencia CIS.
 
 === Control 1.1.20
 
-Asegúrese de que los permisos del archivo de certificado PKI de Kubernetes estén configurados en 600 o más restrictivos (Manual)
+Asegúrese de que los permisos del archivo del certificado PKI de Kubernetes están configurados en 600 o más restrictivo (Manual).
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Los archivos de certificado PKI de K3s se almacenan en `/var/lib/rancher/k3s/server/tls/` con permiso 644.
-Para remediar, ejecute el siguiente comando:
+Los archivos de certificados PKI de K3 se almacenan en `/var/lib/rancher/k3s/server/tls/` con permiso 644.
+Para remediarlo, ejecute el siguiente comando:
 
 [,bash]
 ----
@@ -618,14 +618,14 @@ chmod -R 600 /var/lib/rancher/k3s/server/tls/*.crt
 
 === Control 1.2.9
 
-Asegúrese de que el plugin de control de admisión EventRateLimit esté configurado
+Asegúrese de que el plugin de control de admisión EventRateLimit está activado.
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Siga la https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#eventratelimit[documentación de Kubernetes] y establezca los límites deseados en un archivo de configuración.
-Para esta y otra configuración de psa, esta documentación utiliza /var/lib/rancher/k3s/server/psa.yaml.
-Luego, edita el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establece los parámetros a continuación.
+Siga la https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#eventratelimit[documentación de] Kubernetes y establezca los límites deseados en un archivo de configuración.
+Para esta y otras configuraciones psa, esta documentación utiliza /var/lib/rancher/k3s/server/psa.yaml.
+A continuación, edite el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establezca los siguientes parámetros.
 
 [,yaml]
 ----
@@ -637,13 +637,13 @@ kube-apiserver-arg:
 
 === Control 1.2.11
 
-Asegúrate de que el plugin de control de admisión AlwaysPullImages esté configurado
+Asegúrese de que el plugin de control de admisión AlwaysPullImages está activado.
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Permisivo, según las directrices de CIS, "Esta configuración podría afectar a clústeres desconectados o aislados, que tienen imágenes pre-cargadas y no tienen acceso a un registro para obtener imágenes en uso." Esta configuración no es apropiada para clústeres que utilizan esta configuración."
-Edita el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establece el parámetro a continuación.
+Permisivo, según las directrices del CIS: "Esta configuración podría afectar a los clústeres aislados o sin conexión, que tienen imágenes precargadas y no tienen acceso a un registro para extraer imágenes en uso". Esta configuración no es apropiada para los clusters que utilizan esta configuración."
+Edite el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establezca el siguiente parámetro.
 
 [,yaml]
 ----
@@ -654,13 +654,13 @@ kube-apiserver-arg:
 
 === Control 1.2.21
 
-Asegúrate de que el argumento --request-timeout esté configurado adecuadamente
+Asegúrese de que el argumento --request-timeout está configurado correctamente.
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Permisivo, según las directrices de CIS, "se recomienda establecer este límite de manera adecuada y cambiar el límite predeterminado de 60 segundos solo si es necesario".
-Edita el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establece el parámetro a continuación si es necesario. Por ejemplo,
+Permisivo, según las directrices del CIS, "se recomienda establecer este límite según convenga y cambiar el límite predeterminado de 60 segundos sólo si es necesario".
+Edite el archivo de configuración de K3s /etc/rancher/k3s/config.yaml y establezca el siguiente parámetro si es necesario. Por ejemplo,
 
 [,yaml]
 ----
@@ -671,12 +671,12 @@ kube-apiserver-arg:
 
 === Control 4.2.13 
 
-Asegúrate de que se establezca un límite en los PIDs de los pods
+Asegúrese de que se establece un límite en los pod PID
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Decide un nivel apropiado para este parámetro y configúralo. Si utilizas un archivo de configuración de K3s /etc/rancher/k3s/config.yaml, edita el archivo para establecer `podPidsLimit` en
+Si utiliza un archivo de configuración K3s /etc/rancher/k3s/config.yaml, edite el archivo para establecer `podPidsLimit` a
 
 [,yaml]
 ----
@@ -687,22 +687,22 @@ kubelet-arg:
 
 === Control 5.X
 
-Todos los controles 5.X están relacionados con la configuración de políticas de Kubernetes. Estos controles no son aplicados por K3s por defecto.
+Todos los Controles 5.X están relacionados con la configuración de políticas de Kubernetes. Los K3 no aplican estos controles por defecto.
 
-Consulta xref:security/self-assessment-1.8.adoc#_5_1_rbac_and_service_accounts[CIS 1.8 Sección 5] para más información sobre cómo crear y aplicar estas políticas.
+Consulte la xref:security/self-assessment-1.8.adoc#_5_1_rbac_and_service_accounts[sección 5 de CIS 1.8] para obtener más información sobre cómo crear y aplicar estas políticas.
 
 ==== Control 5.1.5
 
 [NOTE]
 ====
-La remediación para lograr una puntuación aprobatoria solo es necesaria para cis-1.9.
+La corrección para alcanzar la puntuación de aprobado sólo es necesaria para cis-1,9.
 ====
 
-.Solución
+.Remediación
 [%collapsible]
 ======
-Crea cuentas de servicio explícitas siempre que una carga de trabajo de Kubernetes requiera acceso específico al servidor API de Kubernetes.
-Como mínimo, aplica el siguiente parche:
+Cree cuentas de servicio explícitas siempre que una carga de trabajo de Kubernetes requiera acceso específico al servidor API de Kubernetes.
+Como mínimo, parchea lo siguiente:
 
 [,bash]
 ----
@@ -714,4 +714,4 @@ kubectl patch serviceaccount --namespace kube-public default --patch '{"automoun
 
 == Conclusión
 
-Si has seguido esta guía, tu clúster K3s estará configurado para cumplir con el CIS Kubernetes Benchmark. Puedes revisar la xref:security/self-assessment-1.11.adoc[Guía de Autoevaluación CIS 1.11] para entender las expectativas de cada uno de los controles del benchmark y cómo puedes hacer lo mismo en tu clúster.
+Si ha seguido esta guía, su clúster K3s estará configurado para cumplir con el CIS Kubernetes Benchmark. Puede consultar la xref:security/self-assessment-1.11.adoc[Guía de autoevaluación de CIS 1.11] para comprender las expectativas de cada una de las comprobaciones del punto de referencia y cómo puede hacer lo mismo en su clúster.
