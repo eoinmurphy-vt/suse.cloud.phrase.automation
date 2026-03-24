@@ -1,0 +1,199 @@
+= Actualizaciones automatizadas
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-09-16
+:page-revdate: {revdate}
+
+== Visión general
+
+Puede gestionar las actualizaciones del cluster K3s utilizando el system-upgrade-controller de Rancher. Se trata de un enfoque nativo de Kubernetes para las actualizaciones de clústeres. Utiliza un https://github.com/rancher/system-upgrade-controller/blob/master/doc/plan.md#planspec[`+Plan+`] Custom Resource para describir de forma declarativa qué nodos actualizar y a qué versión.
+
+El plan define las políticas y requisitos de actualización. También define qué nodos deben actualizarse mediante un https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/[selector de etiquetas]. Consulte a continuación los planes con valores predeterminados adecuados para actualizar un clúster K3s. Para más opciones avanzadas de configuración del plan, consulte la documentación del Plan enlazada más arriba.
+
+El controlador de actualización del sistema programa las actualizaciones supervisando los planes y seleccionando los nodos en los que ejecutar la actualización https://kubernetes.io/docs/concepts/workloads/controllers/jobs-run-to-completion/[Jobs]. Cuando un trabajo se haya ejecutado correctamente, el controlador etiquetará el nodo en el que se haya ejecutado.
+
+[WARNING]
+====
+Si el clúster K3s está gestionado por Rancher, deberá utilizar la interfaz de usuario de Rancher para gestionar las actualizaciones.
+
+* Si el cluster K3s es importado (registrado) en Rancher, Rancher gestiona el despliegue y los planes del system-upgrade-controller por defecto. No siga los pasos de esta página a menos que haya desactivado la gestión de versiones en Rancher.
+  Consulte https://rancher.github.io/product-docs-playbook/rancher-manager/latest/en/cluster-deployment/register-existing-clusters.html#_configuring_version_management_for_suse_rancher_prime_rke2_and_suse_rancher_prime_k3s_clusters[Configuring Version Management for RKE2 and K3s Clusters] para obtener más información.
+* Si el clúster K3s es aprovisionado por Rancher, Rancher utiliza el agente del sistema para gestionar las actualizaciones de versión. No siga los pasos de esta página.
+* Si el clúster K3s *no* está gestionado por Rancher, puede seguir los pasos que se indican a continuación.
+====
+
+== Uso del controlador de actualización del sistema
+
+Para automatizar las actualizaciones, debe hacer lo siguiente:
+
+. Instale el system-upgrade-controller en su cluster
+. Cree planes que describan qué grupos de nodos actualizar y cómo.
+
+Para más detalles sobre el diseño y la arquitectura del system-upgrade-controller o su integración con K3s, consulte los siguientes repositorios Git:
+
+* https://github.com/rancher/system-upgrade-controller[system-upgrade-controller]
+* https://github.com/k3s-io/k3s-upgrade[k3s-actualización]
+
+[TIP]
+====
+Al intentar actualizar a una nueva versión de K3s, se aplica la Kubernetes https://kubernetes.io/docs/setup/release/version-skew-policy/[política de desviación de versión de]. Asegúrese de que su plan no se salta versiones menores intermedias al actualizar. El propio system-upgrade-controller no protegerá contra cambios no soportados en la versión de Kubernetes.
+====
+
+
+=== Instalación
+
+El manifiesto system-upgrade-controller instala una definición de recurso personalizada, un despliegue, una cuenta de servicio, una vinculación de rol de clúster y un configmap. Para instalar estos componentes, ejecute el siguiente comando:
+
+[,bash]
+----
+kubectl apply -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/crd.yaml -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/system-upgrade-controller.yaml
+----
+
+El controlador puede configurarse y personalizarse mediante el configmap mencionado anteriormente, pero el pod del controlador debe eliminarse para que se apliquen los cambios.
+
+=== Configuración
+
+Los nodos servidores deben actualizarse siempre antes que los nodos agentes. Por este motivo, se recomienda crear al menos dos planes: uno para actualizar los nodos servidores (plano de control) y otro para actualizar los nodos agentes. Puede crear planes adicionales según sea necesario para controlar el despliegue de la actualización a través de los nodos. Una vez creados los planes, el controlador los recoge y comienza a actualizar su clúster. 
+
+Los siguientes dos planes de ejemplo mantienen continuamente su clúster actualizado a la versión estable actual, apuntando al xref:upgrades/manual.adoc#_release_channels[canal de versiones] estables:
+
+[,yaml]
+----
+# Server plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: In
+      values:
+      - "true"
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+---
+# Agent plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: agent-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: DoesNotExist
+  prepare:
+    args:
+    - prepare
+    - server-plan
+    image: rancher/k3s-upgrade
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+----
+
+Hay algunas cosas importantes que destacar en relación con estos planes:
+
+. Los planes deben crearse en el mismo espacio de nombres en el que se despliega el controlador.
+. El campo `+concurrency+` indica cuántos nodos pueden actualizarse al mismo tiempo. 
+. El plan del servidor se dirige a los nodos del servidor especificando un selector de etiquetas que selecciona los nodos con la etiqueta `+node-role.kubernetes.io/control-plane+`. El plan-agente se dirige a los nodos del agente especificando un selector de etiquetas que selecciona los nodos sin esa etiqueta.
+. El paso `+prepare+` en el plan-agente hace que los trabajos de actualización para ese plan esperen a que el plan-servidor finalice antes de ejecutarse. Esta lógica está integrada en la imagen utilizada para el paso de preparación y no forma parte del controlador de actualización del sistema.
+. Ambos planes tienen el campo `+channel+` configurado con la URL del canal de versiones estables. Esto hace que el controlador supervise esa URL y actualice el clúster cada vez que se resuelva a una nueva versión. Esto funciona bien con los xref:upgrades/manual.adoc#_release_channels[canales de liberación]. Por lo tanto, puede configurar sus planes con el siguiente canal para asegurarse de que su clúster siempre se actualiza automáticamente a la versión estable más reciente de K3s. También puede omitir el campo `+channel+` y establecer el campo `+version+` en una versión específica de K3s:
++
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  version: v1.33.4+k3s1
+----
+
+La actualización comienza tan pronto como el controlador detecta que la versión objetivo para un plan ha sido resuelta, ya sea desde el campo de versión, o sondeando el servidor de canales. La modificación de un plan hace que el controlador vuelva a evaluarlo y determine si es necesaria otra actualización. Si se ha configurado un canal, la URL también se sondea periódicamente para comprobar si hay nuevas versiones.
+
+Puede supervisar el progreso de una actualización viendo el plan y los trabajos a través de kubectl:
+
+[,bash]
+----
+kubectl -n system-upgrade get plans -o wide
+kubectl -n system-upgrade get jobs
+----
+
+=== Programación de actualizaciones
+
+Los planes pueden restringirse a una ventana de tiempo específica estableciendo el campo `+window+` dentro de la especificación del plan. Los campos de ventana de tiempo son compatibles y tienen el mismo formato que https://kured.dev/docs/configuration/#setting-a-schedule[las opciones de horario de] kured. Por ejemplo:
+
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  window:
+    days:
+      - monday
+      - tuesday
+      - wednesday
+      - thursday
+      - friday
+    startTime: 19:00
+    endTime: 21:00
+    timeZone: UTC
+----
+
+Los trabajos para ejecutar actualizaciones para un plan no se crean fuera de la ventana de tiempo. Una vez creados los trabajos, los planes pueden seguir ejecutándose después de que se haya cerrado la ventana.
+
+== Prevención de descensos
+
+[IMPORTANT]
+.Versión Puerta
+====
+A partir de las versiones 2023-07 (https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.27.4%2Bk3s1[v1.27.4+k3s1], https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.26.7%2Bk3s1[.26.7+k3s1] v1, https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.25.12%2Bk3s1[.25.12+k3s1] v1, https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.24.16%2Bk3s1[.24.16+k3s1] v1)
+====
+
+
+Kubernetes no soporta downgrades de componentes del plano de control. La imagen k3s-upgrade utilizada por los planes de actualización se negará a degradar K3s, fallando el plan. Los nodos con `+cordon: true+` configurado en su plan permanecerán acordonados tras el fallo.
+
+A continuación se muestra un clúster de ejemplo, mostrando pods de actualización fallidos y nodos acordonados:
+
+[,console]
+----
+$ kubectl get pods -n system-upgrade
+NAME                                                              READY   STATUS    RESTARTS   AGE
+apply-k3s-server-on-ip-172-31-0-16-with-7af95590a5af8e8c3-2cdc6   0/1     Error     0          9m25s
+apply-k3s-server-on-ip-172-31-10-23-with-7af95590a5af8e8c-9xvwg   0/1     Error     0          14m
+apply-k3s-server-on-ip-172-31-13-213-with-7af95590a5af8e8-8j72v   0/1     Error     0          18m
+system-upgrade-controller-7c4b84d5d9-kkzr6                        1/1     Running   0          20m
+$ kubectl get nodes
+NAME               STATUS                     ROLES                       AGE   VERSION
+ip-172-31-0-16     Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-10-23    Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-13-213   Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-2-13     Ready                      <none>                      19h   v1.27.4+k3s1
+----
+
+Puede devolver sus nodos acordonados al servicio mediante cualquiera de los siguientes métodos:
+
+* Cambie la versión o el canal de su plan para que se dirija a una versión que sea igual o más reciente que la que se está ejecutando actualmente en el clúster, para que el plan tenga éxito.
+* Elimine el plan y desencordone manualmente los nodos.
+Utilice `+kubectl get plan -n system-upgrade+` para buscar el nombre del plan y, a continuación, `+kubectl delete plan -n system-upgrade PLAN_NAME+` para eliminarlo. Una vez eliminado el plan, utilice `+kubectl uncordon NODE_NAME+` para desencordonar cada uno de los nodos.
+
+== Seguridad
+
+El trabajo de actualización que se lanza debe tener privilegios elevados para poder efectuar cambios en los nodos subyacentes. Por defecto, está configurado con lo siguiente:
+
+* Alojamientos `+IPC+`, `+NET+`, y `+PID+` namespaces
+* La capacidad `+CAP_SYS_BOOT+` 
+* Raíz del host montada en `+/host+` con permisos de lectura y escritura
