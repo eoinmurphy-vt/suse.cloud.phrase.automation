@@ -1,0 +1,57 @@
+= Como incluir arquivos cloud-config de dispositivos removíveis
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} Os nós suportam o carregamento de arquivos de xref:references/cloud-config-reference.adoc[configuração] de xref:references/cloud-config-reference.adoc[nuvem] de dispositivos de bloco específicos.
+Em particular, suporta o carregamento de arquivos de configuração de nuvem de um ISO que tenha `+CIDATA+` como ID de volume ou qualquer dispositivo formatado em vFAT rotulado com `+CIDATA+`. Se um dispositivo que corresponda a esse critério for encontrado na inicialização inicial, o cliente {elemental-product-name} o lerá e procurará um arquivo `+user-data+` em sua raiz.
+
+Como exemplo, um ISO incluindo um arquivo cloud-config pode ser criado em um host Linux com o procedimento abaixo.
+
+Crie um arquivo `+user-data+` com os dados de configuração da nuvem. No exemplo abaixo, apenas definimos um proxy:
+
+.user-data
+[,yaml]
+----
+#cloud-config
+write_files:
+
+* path: /etc/sysconfig/proxy
+append: true
+content: |
+  PROXY_ENABLED="yes"
+  HTTP_PROXY=http://some.domain.org:8080
+  HTTPS_PROXY=https://some.domain.org:8080
+  NO_PROXY="localhost, 127.0.0.1"
+----
+
+Quando o arquivo `+user-data+` existir, crie um ISO incluindo apenas esse arquivo usando o utilitário `+mkisofs+` Linux:
+
+[,bash]
+----
+mkisof -o cidata.iso -V CIDATA -J -r user-data
+----
+
+O resultado é um ISO rotulado com `+CIDATA+`, incluindo o arquivo `+user-data+`.
+
+Na inicialização, o arquivo `+user-data+` será copiado como está para `+/oem/user-data+` e, caso contenha dados de configuração de nuvem, uma cópia extra será adicionada como `+/oem/user-data.yaml+`. O arquivo `+/oem/user-data.yaml+` será analisado em qualquer estágio posterior de inicialização na nuvem.
+
+Como os dados são copiados para `+/oem+`, eles serão persistentes, portanto, nas reinicializações seguintes, não é necessário que o dispositivo removível esteja mais presente. Se ainda estiver presente nas reinicializações seguintes, ele apenas sobrescreverá os dados pré-existentes.
+
+== Incluir dados de configuração não relacionados à nuvem
+
+Se o `+user-data+` não contiver dados de configuração de nuvem, o cliente {elemental-product-name} simplesmente os copiará como estão para o `+/oem/user-data+`. Somente os arquivos `+*.yaml+` são analisados durante a execução dos estágios de inicialização da nuvem, portanto, nesse caso, o arquivo será ignorado pelos serviços de inicialização da nuvem.
+
+Se o `+user-data+` contiver um script, o cliente {elemental-product-name} também tentará executá-lo. A forma como o cliente{elemental-product-name} determina se `+user-data+` é um script ou não é pela presença de um _Shebang_ na primeira linha. Por exemplo, o arquivo `+user-data+` anterior poderia ser reescrito como:
+
+.user-data
+[,bash]
+----
+#!/bin/bash
+
+cat <<EOF >> /etc/sysconfig/proxy
+PROXY_ENABLED="yes"
+HTTP_PROXY=http://some.domain.org:8080
+HTTPS_PROXY=https://some.domain.org:8080
+NO_PROXY="localhost, 127.0.0.1"
+EOF
+----
