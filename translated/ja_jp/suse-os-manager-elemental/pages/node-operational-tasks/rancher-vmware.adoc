@@ -1,20 +1,20 @@
-= {elemental-product-name}をRancherとVMwareで使用するハウツー
+= RancherとVMwareで{elemental-product-name} 。
 :revdate: 2025-09-08
 :page-revdate: {revdate}
 
-== 引用
+== 抜粋
 
-この文書では、VMwareワークステーションでElementalノードを起動するための仮想マシンの設定方法を見ていきます。
+このドキュメントでは、VMware workstationの仮想マシンをElementalノードのブートに設定する方法を説明します。
 
 == 前提条件
 
-Rancher 2.8以上がインストールされ、実行中であること。クイックスタートガイドをご覧ください。
+Rancher 2.8以上がインストールされ、動作していること。クイックスタートガイドをご覧ください。
 
-== 手順1:登録エンドポイントを作成する
+== ステップ1：登録エンドポイントの作成
 
-ノードを起動し、Rancherインスタンスに登録するためにISOイメージを作成する必要があります。そのためには、登録エンドポイント（xref:references/machineregistration-reference.adoc[MachineRegistration]リソース）が必要です。
+ノードをブートストラップするためのISOイメージを作成し、Rancherインスタンスに対して登録する必要がある。そのためには、登録エンドポイントxref:references/machineregistration-reference.adoc[（MachineRegistration]リソース）が必要である。
 
-次の`+MachineRegistration+`の例をご覧ください：
+`+MachineRegistration+` の例をご覧いただきたい：
 
 [,yaml]
 .registration.yaml
@@ -43,9 +43,9 @@ spec:
     machineUUID: "${Product/UUID}"
 ----
 
-上記のMachineRegistrationは、ノードがTPM 2.0を含むことを前提としています。仮想化されたターゲットマシンに仮想TPMデバイスが含まれていない場合、`+config.elemental.registration+`セクションでソフトウェアエミュレーションを構成できます。
+上記のMachineRegistrationは、ノードにTPM 2.0が含まれていることを前提としている。仮想化対象マシンに仮想TPMデバイスが含まれていない場合は、`+config.elemental.registration+` 。
 
-次に例を示します。
+次の例を考えてみよう：
 
 [,yaml]
 ----
@@ -67,13 +67,13 @@ spec:
     ...
 ----
 
-`+emulated-tpm-seed: -1+`は、クライアントがTPMハッシュを計算するためにランダムシードを使用するように設定します。これは、複数のマシンに対して同じ登録エンドポイント定義を再利用できるようにするために便利です。さらにxref:operator-operational-tasks/tpm.adoc[TPMドキュメント]をご覧ください。
+`+emulated-tpm-seed: -1+` これは、複数のマシンで同じ登録エンドポイント定義を再利用するのに便利である。詳しくはxref:operator-operational-tasks/tpm.adoc[TPMのドキュメントを]参照。
 
-== ステップ2:インストールISOを作成する
+== ステップ2：インストールISOの作成
 
-インストールメディアは、特定の登録エンドポイントに結び付ける必要があります。これはxref:references/seedimage-reference.adoc[SeedImage]リソースで作成および管理されます。
+インストールメディアは、特定の登録エンドポイントに紐付けられる必要がある。これはxref:references/seedimage-reference.adoc[SeedImage]リソースで作成され、処理される。
 
-次に例を示します。
+次の例を考えてみよう：
 
 [,yaml]
 .seedimage.yaml
@@ -92,57 +92,57 @@ spec:
     namespace: fleet-default
 ----
 
-SeedImageリソースが作成されると、提供されたOSイメージを使用してISOを構築し、指定された登録エンドポイントにリンクし始めます。完了すると、SeedImageリソースのステータスにダウンロードURLが表示されます。
+SeedImageリソースが作成されると、提供されたOSイメージでISOの構築を開始し、指定された登録エンドポイントにリンクします。ダウンロードが完了すると、SeedImageリソースのステータスにダウンロードURLが表示されます。
 
-次の方法でダウンロードできます：
+でダウンロードできる：
 
 [,shell]
 ----
 wget --no-check-certificate --content-disposition $(kubectl get seedimages.elemental.cattle.io -n fleet-default fire-img -o jsonpath="{.status.downloadURL}")
 ----
 
-== ステップ3:ターゲットデバイスを起動する
+== ステップ3：ターゲット・デバイスを起動する
 
-理想的には、ISOをUSBドライブに書き込み、USBデバイスを使用してエッジデバイスを起動し、起動してRancherのマシンインベントリにアクティブになると、そこからクラスターを選択して作成できますが、ここではテストのためにVMを使用してエッジデバイスを模倣します。
+理想的には、isoをUSBドライブに書き込み、USBデバイスを使ってエッジデバイスをブートし、ブートしてRancherのマシンインベントリでアクティブになれば、そこからクラスタを選択して作成することができるが、ここではvmを使ってエッジデバイスを模倣してテストする。
 
-=== 3.1 TPMをエミュレートするためにVMを準備する
+=== 3.1 TPMをエミュレートするVMの準備
 
-VMware Workstationで通常通りにVMを作成し、HDDのサイズを少なくとも40GBに設定してください。
+VMwareワークステーションで通常と同じようにVMを作成し、HDDのサイズを少なくとも40GBにする。
 
-次に、マシン設定を編集し、「オプション」タブに移動します。最後のオプションは「詳細」です。
+マシンの設定を編集し、"Options"（オプション）タブを開く。最後のオプションは "Advanced "だ。
 
-「詳細」をクリックし、右側のウィンドウペインでファームウェアタイプを「BIOS」から「UEFI」に変更し、「セキュアブートを有効にする」オプションを次のようにチェックします：
+advanced "をクリックし、右側のウィンドウでファームウェアタイプを "BIOS "から "UEFI "に変更し、以下のように "Enable secure boot "オプションをチェックする：
 
-* BIOSが選択されたデフォルト設定
+* BIOS選択時のデフォルト設定
 
-image::rancher-vmware-vm-boot-bios.png[BIOSのVMブートオプション]
+image::rancher-vmware-vm-boot-bios.png[BIOSによるVMブートオプション]
 
-* UEFIが選択され、セキュアブートが有効になった更新設定
+* UEFIを選択し、セキュアブートを有効にして設定を更新
 
-image::rancher-vmware-vm-boot-uefi.png[UEFIのVMブートオプション]
+image::rancher-vmware-vm-boot-uefi.png[UEFIによるVMブートオプション]
 
-同じ「オプション」タブで「アクセス制御」オプションをクリックし、右側で「暗号化」をクリックします。
+同じ "Options "タブで "Access Control "オプションをクリックし、右側の "Encrypt "をクリックする。
 
-image::rancher-vmware-access-control-menu.png[アクセス制御メニュー]
+image::rancher-vmware-access-control-menu.png[アクセス・コントロール・メニュー]
 
-これにより、マシンを暗号化するためのパスワードを入力するよう求められます。パスワードを入力し、「暗号化」をクリックします。
+マシンを暗号化するためのパスワードの入力を求められます。パスワードを入力し、"Encrypt "をクリックする。
 
-image::rancher-vmware-access-control-encrypt.png[アクセス制御暗号化資格情報]
+image::rancher-vmware-access-control-encrypt.png[アクセス制御の暗号化認証情報]
 
-TPMハードウェアを追加することが重要です。次に、ハードウェアオプションに戻り、「追加」をクリックします。
+これはTPMハードウェアを追加するために重要である。次にハードウェアのオプションに戻り、"Add "をクリックします。
 
-TPM（トラステッドプラットフォームモジュール）ハードウェアを追加し、「完了」をクリックします。
+そして、TPM（Trusted Platform Module）ハードウェアを追加し、"Finish "をクリックします。
 
-このステップが完了すると、私たちのVMは準備完了です。
+このステップの完了で、VMの準備は整った。
 
-=== 3.2 Elemental ISOでVMを起動する
+=== 3.2 エレメンタルISOでVMをブートする
 
-次に、以前に作成した.isoをVMに追加し、起動します。
+次に、先ほど作成したISOをVMに追加し、起動する。
 
-ISOで起動し、Elementalのインストールを開始するはずです：
+ISOが起動し、Elementalのインストールが始まるはずだ：
 
-image::rancher-vmware-elemental-install-grub.png[{elemental-product-name} OSインストールgrubメニュー]
+image::rancher-vmware-elemental-install-grub.png[{elemental-product-name} OSインストールのグラブメニュー]
 
 image::rancher-vmware-elemental-install-logs.png[{elemental-product-name} OSインストールログ]
 
-完了すると、VMが再起動し、Rancherのマシンインベントリにアクティブとして表示されます。
+完了するとVMが再起動し、Rancherのマシンインベントリにアクティブとして表示される。
