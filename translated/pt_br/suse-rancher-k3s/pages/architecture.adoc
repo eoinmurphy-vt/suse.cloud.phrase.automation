@@ -1,0 +1,65 @@
+= Arquitetura
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-01-06
+:page-revdate: {revdate}
+
+== Servidores e agentes
+
+* Um nó de servidor é definido como um host que executa o comando `+k3s server+`, com componentes do plano de controle e do armazenamento de dados gerenciados pelo K3s.
+* Um nó de agente é definido como um host que executa o comando `+k3s agent+`, sem nenhum datastore ou componente do plano de controle.
+* Tanto os servidores quanto os agentes executam o kubelet, o tempo de execução do contêiner e a CNI. Consulte a documentação xref:advanced.adoc#_running_agentless_servers_experimental[das Opções avançadas] para obter mais informações sobre a execução de servidores sem agente.
+
+image:how-it-works-k3s-revised.svg[]
+
+== Configuração de servidor único com um banco de dados incorporado
+
+O diagrama a seguir mostra um exemplo de um cluster que tem um servidor K3s de nó único com um banco de dados SQLite incorporado.
+
+Nessa configuração, cada nó de agente é registrado no mesmo nó de servidor. Um usuário do K3s pode manipular os recursos do Kubernetes chamando a API do K3s no nó do servidor.
+
+image:k3s-architecture-single-server.svg[Arquitetura do K3s com um único servidor]
+
+[#_high_availability_k3s]
+== K3s de alta disponibilidade
+
+Os clusters de servidor único podem atender a uma variedade de casos de uso, mas para ambientes em que o tempo de atividade do plano de controle do Kubernetes é fundamental, é possível executar o K3s em uma configuração de HA. Um cluster HA K3s é composto por:
+
+[tabs]
+======
+BD incorporado::
++
+--
+* Três ou mais *nós de servidor* que atenderão à API do Kubernetes e executarão outros serviços de plano de controle
+* Um *repositório de dados etcd incorpor* ado (em oposição ao repositório de dados SQLite incorporado usado em configurações de servidor único)
+
+image:k3s-architecture-ha-embedded.svg[Arquitetura K3s com servidores de alta disponibilidade]
+--
+
+Banco de dados externo::
++
+--
+* Dois ou mais *nós de servidor* que atenderão à API do Kubernetes e executarão outros serviços de plano de controle
+* Um *repositório de dados externo* (como MySQL, PostgreSQL ou etcd)
+
+image:k3s-architecture-ha-external.svg[Arquitetura K3s com servidores de alta disponibilidade e um banco de dados externo]
+--
+======
+
+== Endereço de registro fixo para nós de agente
+
+Na configuração do servidor de alta disponibilidade, cada nó também pode se registrar na API do Kubernetes usando um endereço de registro fixo, conforme mostrado no diagrama abaixo.
+
+Após o registro, os nós do agente estabelecem uma conexão diretamente com um dos nós do servidor.
+
+image:k3s-production-setup.svg[Registro de agente HA]
+
+[#_how_agent_node_registration_works]
+== Como funciona o registro do nó de agente
+
+Os nós de agente são registrados com uma conexão de websocket iniciada pelo processo `+k3s agent+`, e a conexão é mantida por um balanceador de carga do lado do cliente executado como parte do processo do agente. Inicialmente, o agente se conecta ao supervisor (e ao kube-apiserver) por meio do balanceador de carga local na porta 6443. O balanceador de carga mantém uma lista de pontos de extremidade disponíveis para conexão. O ponto de extremidade padrão (e inicialmente apenas) é propagado pelo nome do host do endereço `+--server+`. Depois de se conectar ao cluster, o agente recupera uma lista de endereços do kube-apiserver da lista de endpoints de serviço do Kubernetes no namespace padrão. Esses pontos de extremidade são adicionados ao balanceador de carga, que mantém conexões estáveis com todos os servidores do cluster, fornecendo uma conexão com o kube-apiserver que tolera interrupções de servidores individuais.
+
+Os agentes se registrarão no servidor usando o segredo do cluster do nó junto com uma senha gerada aleatoriamente para o nó, armazenada em `+/etc/rancher/node/password+`. O servidor armazenará as senhas de nós individuais como segredos do Kubernetes, e todas as tentativas subsequentes deverão usar a mesma senha. Os segredos de senha do nó são armazenados no espaço de nomes `+kube-system+` com nomes que usam o modelo `+<host>.node-password.k3s+`. Isso é feito para proteger a integridade dos IDs de nós.
+
+Se o diretório `+/etc/rancher/node+` de um agente for removido, ou se você desejar se juntar novamente a um nó usando um nome existente, o nó deverá ser excluído do cluster. Isso limpará a entrada do nó antigo e a senha secreta do nó e permitirá que o nó (re)entre no cluster.
+
+Se você reutiliza nomes de host com frequência, mas não consegue remover os segredos da senha do nó, um ID de nó exclusivo pode ser anexado automaticamente ao nome do host ao iniciar servidores ou agentes do K3s usando o sinalizador `+--with-node-id+`. Quando ativado, o ID do nó também é armazenado em `+/etc/rancher/node/+`.
