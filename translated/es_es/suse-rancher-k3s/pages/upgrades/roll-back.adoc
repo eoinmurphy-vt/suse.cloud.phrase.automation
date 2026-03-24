@@ -1,0 +1,185 @@
+= Retroceso de los K3
+:page-languages: [en, ja, ko, zh]
+:revdate: 2026-03-03
+:page-revdate: {revdate}
+
+Puede revertir la versión de K3s Kubernetes después de una actualización, utilizando una combinación de K3s downgrade binario y restauración de datastore. La reversión se puede realizar en clústeres de todo tipo, incluido un nodo SQLite, un almacén de datos externo o un etcd integrado. Cuando se retrocede a una versión menor de Kubernetes anterior, debe tener una instantánea del almacén de datos tomada en la versión menor de Kubernetes a la que desea retroceder.
+
+[WARNING]
+====
+Si no puede restaurar la base de datos, no podrá volver a una versión menor anterior.
+====
+
+== Consideraciones importantes
+
+* *Copias de seguridad:* Antes de actualizar, asegúrese de que tiene una base de datos válida o una instantánea etcd de su clúster que ejecuta la versión anterior de K3s. Sin una copia de seguridad, una reversión es imposible.
+* *Posible pérdida de datos:* El script `+k3s-killall.sh+` termina forzosamente los procesos de K3s y puede provocar la pérdida de datos si las aplicaciones no se cierran correctamente.
+* *Específicos de la versión:* Verifique siempre los K3 y las versiones de los componentes antes y después de la reversión.
+
+== Deshacer un clúster K3s
+
+[tabs]
+======
+
+SQLite::
++
+--
+Para hacer retroceder un clúster K3s cuando se utiliza una base de datos SQLite, sustituya el archivo `+.db+` por la copia del archivo `+.db+` que realizó al hacer la copia de seguridad de la base de datos.
+--
+
+etcd integrado::
++
+--
+Para revertir un clúster K3s cuando se utiliza un etcd incrustado, siga estos pasos: 
+
+. Si el clúster se está ejecutando y la API de Kubernetes está disponible, detenga las cargas de trabajo con elegancia vaciando todos los nodos: 
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
+
+. En cada nodo, detenga el servicio K3s y todos los procesos pod en ejecución:
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. En cada nodo, retroceda el binario de K3s a la versión anterior, pero *no* inicie K3s.
+
+* Clusters con acceso a Internet:
+
+** Nodos de servidor: 
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+** Nodos de agentes:
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" INSTALL_K3S_SKIP_START="true" sh -
+----
+
+* Clusters con boquilla de aire:
+
+** Descargue los artefactos y ejecute el xref:installation/airgap.adoc#_install_k3s[script de instalación] localmente. Añada la variable de entorno `+INSTALL_K3S_SKIP_START="true"+` cuando ejecute el script de instalación para evitar que se inicie K3s.
+
+. En el primer nodo servidor o el nodo sin una entrada `+server:+` en su xref:installation/configuration.adoc[archivo de configuración K3s], inicie la restauración del clúster. Consulte los xref:cli/etcd-snapshot.adoc#_snapshot_restore_steps[Pasos de restauración de instantáneas] para obtener más información: 
++
+[,bash]
+----
+k3s server --cluster-reset --cluster-reset-restore-path=<PATH-TO-SNAPSHOT>
+----
++
+[WARNING]
+====
+Esto sobrescribe todos los datos del almacén de datos etcd. Verifique la integridad de la instantánea antes de restaurarla. Ten en cuenta que las instantáneas grandes pueden tardar mucho en restaurarse.
+====
+
+. Inicie el servicio K3s en el primer nodo servidor: 
++
+[,bash]
+----
+systemctl start k3s
+----
+ 
+. En los otros nodos del servidor, elimine el directorio de la base de datos K3s:
++
+[,bash]
+----
+rm -rf /var/lib/rancher/k3s/server/db
+----
+ 
+. Inicie el servicio K3s en los otros nodos del servidor: 
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Inicie el servicio K3s en todos los nodos agentes:
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Verifique el estado de servicio del K3s con `+systemctl status k3s+`. 
+--
+
+Base de datos externa:: 
++
+--
+Para revertir un clúster K3s cuando se utiliza una base de datos externa (por ejemplo, PostgreSQL, MySQL), siga estos pasos: 
+
+. Si el clúster se está ejecutando y la API de Kubernetes está disponible, detenga las cargas de trabajo con elegancia vaciando todos los nodos: 
++
+[,bash]
+----
+kubectl drain --ignore-daemonsets --delete-emptydir-data <NODE-ONE-NAME> <NODE-TWO-NAME> <NODE-THREE-NAME> ...
+----
++
+[NOTE]
+====
+Este proceso puede interrumpir la ejecución de las aplicaciones.
+====
+
+. En cada nodo, detenga el servicio K3s y todos los procesos pod en ejecución:
++
+[,bash]
+----
+k3s-killall.sh
+----
+
+. Restaure una instantánea de la base de datos tomada antes de actualizar K3s y verifique la integridad de la base de datos. Por ejemplo, si utiliza PostgreSQL, ejecute el siguiente comando:
++
+[,bash]
+----
+pg_restore -U <DB-USER> -d <DB-NAME> <BACKUP-FILE>
+----
+
+. En cada nodo, retroceda el binario K3s a la versión anterior. 
+
+* Clusters con acceso a Internet:
+
+** Nodos de servidor:
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="server" sh -
+----
+
+** Nodos de agentes:
++
+[,bash]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Zk3s1 INSTALL_K3S_EXEC="agent" sh -
+----
+
+* Clusters con boquilla de aire:
+
+** Descargue los artefactos y ejecute el xref:installation/airgap.adoc#_install_k3s[script de instalación] localmente. Verifique la versión del K3s después de la instalación con `+k3s --version+` y vuelva a aplicar las configuraciones personalizadas que se utilizaron antes de la actualización. 
+
+. Inicie el servicio K3s en cada nodo:
++
+[,bash]
+----
+systemctl start k3s
+----
+
+. Verifique el estado de servicio del K3s con `+systemctl status k3s+`.
+--
+======
+
+== Verificación 
+
+Tras la reversión, compruebe lo siguiente: 
+
+* Versión K3s: `+k3s --version+` 
+* Salud del clúster Kubernetes: `+kubectl get nodes+` 
+* Funcionalidad de la aplicación. 
+* Comprueba si hay errores en los registros del K3s.
