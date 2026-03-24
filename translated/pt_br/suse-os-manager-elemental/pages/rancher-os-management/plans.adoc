@@ -1,0 +1,160 @@
+= {elemental-product-name} Planos
+:revdate: 2025-10-27
+:page-revdate: {revdate}
+
+{elemental-product-name} usa o https://github.com/rancher/system-agent[System Agent] Rancher, renomeado para {elemental-product-name} System Agent, para inicializar o nó com um plano simples.
+
+O plano aplicará as seguintes configurações:
+
+* Definir alguns rótulos para o nó
+* Defina o nome de host adequado de acordo com o valor `+MachineInventory+` 
+* Instale o Rancher System Agent padrão do Rancher Server e instale os componentes adequados do Kubernetes
+
+O serviço bootstrap também aceita planos locais armazenados em `+/var/lib/elemental/agent/plans+`. Qualquer plano escrito ali também será aplicado durante a inicialização do nó após a conclusão da instalação.
+
+[TIP]
+====
+Os planos locais são executados somente durante o bootstrap inicial do {elemental-product-name} *antes de* o Kubernetes ser instalado no nó.
+====
+
+== Tipos de planos
+
+Os tipos de planos que o {elemental-product-name} pode usar são:
+
+* Instruções únicas: Executar apenas uma vez
+* Instruções periódicas: Eles são executados periodicamente
+* Arquivos: Cria arquivos
+* Sondas: sondas http
+
+[TIP]
+====
+Tanto as instruções únicas quanto as periódicas podem executar um comando direto ou uma imagem de janela de encaixe.
+====
+
+== Adição de planos locais em {elemental-product-name}
+
+É possível adicionar planos locais ao site {elemental-product-name} como parte do CRD `+MachineRegistration+`, na seção `+cloud-config+`, da seguinte forma:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      users:
+        - name: root
+          passwd: root
+      write_files:
+        - path: /var/lib/elemental/agent/plans/mycustomplan.plan
+          permissions: "0600"
+          content: |
+            {"instructions":
+                [
+                  {
+                    "name":"set hostname",
+                    "command":"hostnamectl",
+                    "args": ["set-hostname", "myHostname"]
+                  },
+                  {
+                    "name":"stop sshd service",
+                    "command":"systemctl",
+                    "args": ["stop", "sshd"]
+                  }
+                ]
+            }
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineName: my-machine
+  machineInventoryLabels:
+    element: fire
+----
+
+== Exemplos de planos
+
+Os planos a seguir são fornecidos como uma referência rápida e não é garantido que funcionem em seu ambiente. Para saber mais sobre os planos, consulte https://github.com/rancher/system-agent[System Agent] Rancher.
+
+[tabs]
+======
+Exemplo 1: instruções únicas::
++
+====
+[,json]
+----
+{"instructions":
+    [
+        {
+            "name":"set hostname",
+            "command":"hostnamectl",
+            "args": ["set-hostname", "myHostname"]
+        },
+        {
+            "name":"stop sshd service",
+            "command":"systemctl",
+            "args": ["stop", "sshd"]
+        }
+    ]
+}
+----
+====
+
+Exemplo 2: instruções periódicas::
++
+====
+[,json]
+----
+{"periodicInstructions":
+    [
+        {
+            "name":"set hostname",
+            "image":"ghcr.io/rancher-sandbox/elemental-example-plan:main"
+            "command": "run.sh"
+        }
+    ]
+}
+----
+====
+
+Exemplo 3: arquivos::
++
+====
+[,json]
+----
+{"files":
+    [
+        {
+            "content":"Welcome to the system",
+            "path":"/etc/motd",
+            "permissions": "0644"
+        }
+    ]
+}
+----
+====
+
+Exemplo 4: sondas::
++
+====
+[,json]
+----
+{"probes":
+    "probe1": {
+        "name": "Service Up",
+        "httpGet": {
+            "url": "http://10.0.0.1/healthz",
+            "insecure": "false",
+            "clientCert": "....",
+            "clientKey": "....",
+            "caCert": "....."
+        }
+    }
+}
+----
+====
+======
