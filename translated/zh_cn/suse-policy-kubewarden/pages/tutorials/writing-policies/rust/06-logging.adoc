@@ -1,0 +1,61 @@
+include::partial$variables.adoc[]
+= 记录
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用{project-name} 与 SLOG 库的集成并初始化，配置策略的日志记录功能。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "rust", "logging"]
+:doc-type: ["tutorial"]
+:keywords: ["{project-name}", kubewarden, "kubernetes", "logging"]
+:sidebar_label: 记录
+:current-version: {page-origin-branch}
+
+您可以让保单执行日志记录。
+`+policy-server+` 或`+kwctl+` 会转发这些日志条目，并提供相应的信息。
+
+为 Rust SDK 选择的日志库是https://github.com/slog-rs/slog[`+slog+`].
+这是一款广受欢迎的知名板条箱，可与{project-name} 干净地集成。
+
+== 初始化日志记录器
+
+该项目建议您创建一个全局水槽，您可以从策略中需要的地方登录到该水槽。
+为此，请使用`+lazy_static+` 板条箱：
+
+[subs="+attributes",rust]
+----
+use slog::{o, Logger};
+
+lazy_static! {
+    static ref LOG_DRAIN: Logger = Logger::root(
+        logging::KubewardenDrain::new(),
+        o!("policy" => "sample-policy")
+    );
+}
+----
+
+== 使用记录仪
+
+现在，在`+validate+` 或`+validate_settings+` 函数中，可以使用`+slog+` 导出的宏来记录日志，这些宏与每个支持的日志级别相匹配：
+
+[subs="+attributes",rust]
+----
+use slog::{info, o, warn, Logger};
+
+fn validate(payload: &[u8]) -> CallResult {
+    // ...
+    info!(LOG_DRAIN, "starting validation");
+    // ...
+    warn!(
+        LOG_DRAIN, "structured log";
+        "some_resource_name" => &some_resource_name
+    );
+    // ...
+}
+----
+
+`+slog+` 库会将所有日志发送到全局变量中初始化的漏极。
+这与执行政策的政策评估器同步。
+这要么是`+kwctl+` ，要么是`+policy-server+` 。
+然后，策略评估器记录这些信息，并进一步添加已知的上下文信息，如 Kubernetes 请求`+uid+` 。
+
+有关 slog 提供的https://docs.rs/slog/2.7.0/slog/macro.log.html[日志宏]的更多信息，请参阅其https://docs.rs/slog/2.7.0/slog/index.html[文档]。
