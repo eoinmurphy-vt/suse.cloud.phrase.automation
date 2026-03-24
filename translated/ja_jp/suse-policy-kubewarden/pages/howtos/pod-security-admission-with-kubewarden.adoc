@@ -1,0 +1,396 @@
+include::partial$variables.adoc[]
+= ポッドセキュリティアドミッションの使用 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Kubernetesクラスターで、{project-name}'sを使用してPod Security Admissionを設定し、Podを保護する。
+:doc-persona: ["kubewarden-user"、"kubewarden-operator"、"kubewarden-distributor"、"kubewarden-integrator"]]。
+:doc-topic: ["pod-security-admission-with-kubewarden"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "pod security admission", "pod security policy", "kubernetes"]] 。
+:sidebar_label: ポッドセキュリティ入場
+:sidebar_position: 30
+:current-version: {page-origin-branch}
+
+Pod Security Policies（PSP）はKubernetes 1.25リリースから削除された。
+https://kubernetes.io/docs/concepts/security/pod-security-admission/[ポッドセキュリティアドミッション]（PSA）に置き換わっている。
+
+PSAはKubernetesクラスタのPodのセキュリティを簡素化する。
+
+PSAには、ネームスペースに関する3つのプロファイル（ https://kubernetes.io/docs/concepts/security/pod-security-standards/[『Pod Security Standards』] ）がある：
+
+* *特権があり*、最も幅広い権限を提供する
+* 新たな特権の*昇格を*防ぐために
+* ポッドの硬化を*制限*、制限される
+
+PSAコントローラは、違反検出時にアクションを実行する。
+アクションは以下の通り：`+enforce+` `+audit+` および`+warn+` 。
+設定することができる。
+
+本稿執筆時点のKubernetes 1.28では、PSAコントローラーには以下の制限がある：
+
+* 突然変異能力はない
+* より上位のオブジェクト（`+Deployment+` や`+Job+` など）は、`+audit+` または`+warn+` モードが有効な場合にのみ評価される。
+
+{short-project-name} を使用してPSAプロファイルを*統合し*、これらの制限を回避することができる。
+
+[NOTE]
+====
+
+xref:howtos/psp-migration.adoc[PSPマイグレーションに]あるように、{short-project-name} 、古いPSPコンフィギュレーションを置き換えることができる。
+しかし、この記事の目的は、{short-project-name} 、新しいPSAをどのように補完できるかを示すことである。
+====
+
+
+== 例
+
+この例では、ネームスペースを作成し、制限的なPSAポリシーを適用している：
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-namespace
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.25
+EOF
+----
+
+このPSAプロファイルでは、`+root+` ユーザーとしてアプリケーションを実行するコンテナを作成することはできません。
+このコンテナを定義するとき
+
+* `+runAsNonRoot+` 属性は `+true+`
+* `+runAsUser+` の方は`+0+` に設定できない。
+
+そのため、以下のリソースは望ましい状態には達しない：
+
+.`+kubectl+` `+runAsUser: 0+` （➀でマークされた）リソースを設定するコマンド。
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 0 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 0+`
+=====
+
+デプロイメントを確認すると、PSAがポッドの作成を妨げていることがわかる：
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:09:56Z",
+  "lastUpdateTime": "2022-10-28T19:09:56Z",
+  "message": "pods \"nginx-deployment-5f98b4db8c-2m96l\" is forbidden: violates PodSecurity \"restricted:v1.25\": runAsUser=0 (container \"nginx\" must not set runAsUser=0)",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+コンテナ定義から`+runAsUser: 0+` を削除することで修正できる：
+
+.`+kubectl+` コマンドを使わずにリソースを設定する `+runAsUser: 0+`
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+=====
+
+現在、PSAはポッド作成の試みを許可しているが、まだ失敗している。
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace
+NAME                                READY   STATUS                       RESTARTS   AGE
+nginx-deployment-57d8568bbb-h4bx7   0/1     CreateContainerConfigError   0          47s
+----
+
+コンテナ定義が、コンテナ内でプログラムを起動するときに使用するユーザーを指定していなかったからだ。
+この場合、デフォルトはrootユーザーとして実行される。
+`+runAsNonRoot+` 、それは許されない：
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-h4bx7 -o json | jq ".status.containerStatuses"
+[
+  {
+    "image": "nginx:1.14.2",
+    "imageID": "",
+    "lastState": {},
+    "name": "nginx",
+    "ready": false,
+    "restartCount": 0,
+    "started": false,
+    "state": {
+      "waiting": {
+        "message": "container has runAsNonRoot and image will run as root (pod: \"nginx-deployment-57d8568bbb-8mvkc_my-namespace(add7bcc5-3d23-43d0-94e9-6e78f887a53f)\", container: nginx)",
+        "reason": "CreateContainerConfigError"
+      }
+    }
+  }
+]
+----
+
+そこで{short-project-name} 。
+このhttps://artifacthub.io/packages/kubewarden/user-group-psp/user-group-psp[`+user-group-policy+`]ポリシーを使って配置定義を変更することができます。
+これは、その情報を省略したコンテナ用のデフォルト・ユーザーを設定する。
+
+[NOTE]
+====
+
+この例では、Kubernetesクラスタに{short-project-name} スタックが必要だ。
+詳しくはxref:quick-start.adoc[クイック]スタートをご覧ください。
+====
+
+
+例えば、1000--2000と4000--5000のように、ユーザーIDの範囲を強制することが可能です：
+
+.ユーザーIDの範囲を強制するkubectlコマンド
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: user-group-psp
+spec:
+  policyServer: default
+  module: registry://ghcr.io/kubewarden/policies/user-group-psp:latest
+  rules:
+  - apiGroups: ["", "apps"]
+    apiVersions: ["v1"]
+    resources: ["pods", "deployments"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      overwrite: false
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 4000
+          max: 5000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+----
+
+======
+
+続行する前に、ポリシーが有効であることを確認する：
+
+[subs="+attributes",shell]
+----
+kubectl get clusteradmissionpolicy.policies.kubewarden.io/user-group-psp
+----
+
+ポリシーがアクティブになったら、配置を再作成します：
+
+.デプロイメントを再作成するkubectlコマンド
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl delete deployment -n my-namespace nginx-deployment && \
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+
+======
+
+これでデプロイは、{short-project-name} のポリシーによって変異され、Podの開始が許可される。
+Pod内部で定義されたコンテナは、デフォルトで`+runAsUser+` ：
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-nv8fj -o json | jq ".spec.containers[].securityContext"
+{
+  "allowPrivilegeEscalation": false,
+  "capabilities": {
+    "drop": [
+      "ALL"
+    ]
+  },
+  "runAsNonRoot": true,
+  "runAsUser": 1000,
+  "seccompProfile": {
+    "type": "RuntimeDefault"
+  }
+}
+----
+
+このシナリオでは、{short-project-name} 。
+提供された`+runAsUser+` の値をチェックすることができる。
+
+このリソースは、先ほどの{short-project-name} 、拒否される：
+
+.リソース拒否を表示するkubectlコマンド
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment2
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 7000 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 7000+`
+======
+
+これは、`+runAsUser+` の値が`+7000+` に設定されており、ポリシーで許可されている範囲外であるため拒否されます：
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:22:04Z",
+  "lastUpdateTime": "2022-10-28T19:22:04Z",
+  "message": "admission webhook \"clusterwide-user-group-psp.kubewarden.admission\" denied the request: User ID outside defined ranges",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+== 概要
+
+PSAはKubernetesクラスタをセキュアにする簡単な方法を提供する。
+PSAの主な目的はシンプルさであり、初期のPSPのようなパワーや柔軟性はない。
+
+{short-project-name} 、PSAと併用することで、このギャップを埋めることができる。
