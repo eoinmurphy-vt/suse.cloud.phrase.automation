@@ -1,0 +1,192 @@
+= Plugins Multus e IPAM
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-09-16
+:page-revdate: {revdate}
+
+https://github.com/k8snetworkplumbingwg/multus-cni[Multus CNI] es un plugin CNI que permite conectar múltiples interfaces de red a los pods. Multus no sustituye a los plugins CNI, sino que actúa como multiplexor de plugins CNI. Multus es útil en determinados casos de uso, especialmente cuando los pods hacen un uso intensivo de la red y requieren interfaces de red adicionales que admitan técnicas de aceleración de plano de datos como SR-IOV.
+
+Para más información sobre Multus, consulte la documentación https://github.com/k8snetworkplumbingwg/multus-cni/tree/master/docs[multus-cni].
+
+Multus no puede implantarse de forma autónoma. Siempre requiere al menos un plugin CNI convencional que cumpla los requisitos de red del clúster Kubernetes. Ese plugin CNI se convierte en el predeterminado para Multus, y se utilizará para proporcionar la interfaz primaria para todos los pods. Al desplegar K3s con las opciones por defecto, ese plugin CNI es Flannel.
+
+[NOTE]
+.Versión Puerta
+====
+K3s utiliza una ruta binaria CNI fija a partir de las versiones de octubre de 2024: v1.28.15+k3s1, v1.29.10+k3s1, v1.30.6+k3s1, v1.31.2+k3s1.
+====
+
+K3s busca en `+$DATA_DIR/data/cni+` los binarios de los plugins CNI. Por defecto es `+/var/lib/rancher/k3s/data/cni+`. Los plugins CNI adicionales deben instalarse en esta ubicación.
+
+Antes de las versiones de octubre de 2024, los binarios CNI formaban parte del paquete de espacio de usuario de K3s en `+$DATA_DIR/data/$HASH/bin+`, donde el hash es único para cada versión de K3s.
+Esto dificultaba el despliegue de plugins CNI adicionales, ya que la ruta cambiaba cada vez que se actualizaba K3s.
+
+Si va a desplegar Multus en una versión anterior de K3s, debería utilizar `+/var/lib/rancher/k3s/data/current/bin/+` como directorio bin CNI, pero tenga en cuenta que los plugins tendrán que volver a desplegarse cada vez que se actualice K3s.
+
+== Despliegue con un plugin IPAM
+
+Se requiere un plugin IP Address Manager (IPAM) para asignar direcciones IP en las interfaces extra creadas por Multus. Se pueden instalar uno o más IPAM; los ejemplos siguientes muestran el uso de un único plugin IPAM, pero se pueden combinar según sea necesario.
+
+Los siguientes ejemplos de despliegue de helm desplegarán un DaemonSet para crear pods de Multus para instalar los binarios CNI necesarios en `+/var/lib/rancher/k3s/data/cni/+` y la configuración CNI de Multus en `+/var/lib/rancher/k3s/agent/etc/cni/net.d+`.
+
+[tabs,sync-group-id=MultusIPAMplugins]
+======
+host-local::
++
+--
+El plugin IPAM host-local asigna direcciones ip a partir de un conjunto de rangos de direcciones. Almacena el estado localmente en el sistema de archivos del host, garantizando así la unicidad de las direcciones IP en un único host. Por lo tanto, no lo recomendamos para clusters multinodo. Este plugin IPAM no requiere ningún despliegue adicional. Para más información: https://www.cni.dev/plugins/current/ipam/host-local/.
+
+Para utilizar el plugin host-local, despliegue Multus con la siguiente configuración:
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: multus
+  namespace: kube-system
+spec:
+  repo: https://rke2-charts.rancher.io
+  chart: rke2-multus
+  targetNamespace: kube-system
+  valuesContent: |-
+    config:
+      fullnameOverride: multus
+      cni_conf:
+        confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        binDir: /var/lib/rancher/k3s/data/cni/
+        kubeconfig: /var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig
+          # Comment the following line when using rke2-multus < v4.2.202
+          multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+----
+--
+
+Paradero::
++
+--
+https://github.com/k8snetworkplumbingwg/whereabouts[Whereabouts] es un plugin CNI de Gestión de Direcciones IP (IPAM) que asigna direcciones IP a todo el cluster.
+
+Para utilizar el plugin Whereabouts IPAM, despliegue Multus con la siguiente configuración:
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: multus
+  namespace: kube-system
+spec:
+  repo: https://rke2-charts.rancher.io
+  chart: rke2-multus
+  targetNamespace: kube-system
+  valuesContent: |-
+    config:
+      fullnameOverride: multus
+      cni_conf:
+        confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        binDir: /var/lib/rancher/k3s/data/cni/
+        kubeconfig: /var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig
+          # Comment the following line when using rke2-multus < v4.2.202
+          multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+    rke2-whereabouts:
+      fullnameOverride: whereabouts
+      enabled: true
+      cniConf:
+        confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        binDir: /var/lib/rancher/k3s/data/cni/
+----
+
+Cuando se utiliza whereabouts en K3s, `+configuration_path+` debe establecerse en `+/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf+` en la configuración `+ipam+` de NetworkAttachmentDefinition.
+
+Por ejemplo, cuando se utiliza whereabouts como IPAM con el plugin macvlan:
+
+[,yaml]
+----
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-whereabouts
+spec:
+  config: |-
+    {
+      "cniVersion": "1.0.0",
+      "type": "macvlan",
+      "master": "eth0",
+      "mode": "bridge",
+      "ipam": {
+        "type": "whereabouts",
+        "range": "172.17.0.0/24",
+        "gateway": "172.17.0.1",
+        "configuration_path": "/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf"
+      }
+    }
+----
+--
+
+Demonio DHCP de Multus::
++
+--
+El plugin dhcp IPAM puede ser desplegado cuando ya hay un servidor DHCP funcionando en la red. Este daemonset se encarga de renovar periódicamente el contrato de arrendamiento DHCP. Para más información, consulte la documentación oficial del https://www.cni.dev/plugins/current/ipam/dhcp/[plugin].
+
+Para utilizar el plugin DHCP, despliegue Multus con la siguiente configuración:
+
+[,yaml]
+----
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: multus
+  namespace: kube-system
+spec:
+  repo: https://rke2-charts.rancher.io
+  chart: rke2-multus
+  targetNamespace: kube-system
+  valuesContent: |-
+    config:
+      fullnameOverride: multus
+      cni_conf:
+        confDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        binDir: /var/lib/rancher/k3s/data/cni/
+        kubeconfig: /var/lib/rancher/k3s/agent/etc/cni/net.d/multus.d/multus.kubeconfig
+          # Comment the following line when using rke2-multus < v4.2.202
+          multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+    manifests:
+      dhcpDaemonSet: true
+----
+--
+======
+
+=== Uso de Multus
+
+Una vez desplegado Multus, puede crear recursos NetworkAttachmentDefinition y hacer referencia a ellos en las especificaciones Pod para adjuntar interfaces adicionales.
+Por ejemplo, utilizando el ejemplo de localización anterior, puede crear una interfaz `+eth1+` en un Pod utilizando la anotación `+k8s.v1.cni.cncf.io/networks+`:
+
+[,yaml]
+----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multus-demo
+  labels:
+    app: multus-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multus-demo
+  template:
+    metadata:
+      annotations:
+        k8s.v1.cni.cncf.io/networks: macvlan-whereabouts@eth1
+      labels:
+        app: multus-demo
+    spec:
+      containers:
+      - name: shell
+        image: docker.io/rancher/mirrored-library-busybox:1.36.1
+        imagePullPolicy: IfNotPresent
+        command:
+          - sleep
+          - "3600"
+----
+
+Para más información y ejemplos, consulte la documentación de las versiones anteriores.
