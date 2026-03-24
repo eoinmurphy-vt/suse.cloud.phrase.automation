@@ -1,0 +1,210 @@
+ifdef::ss-ff-stackpacks2_enabled[]
+= 为组件添加自定义图表
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+== 概述
+
+{stackstate-product-name} 在表示 Kubernetes 资源的大多数组件类型上，默认情况下已经提供了许多指标图表。如有需要，可在任何组件集中添加额外的度量图表。为组件添加度量指标时，有两个选项：
+
+. {stackstate-product-name} 已经收集了这些指标，但默认情况下不会在组件上可视化这些指标
+. {stackstate-product-name} 还没有收集这些指标，因此还无法提供
+
+对于选项 1，以下步骤将指导您如何创建度量绑定，该绑定将配置{stackstate-product-name} ，以便将特定度量添加到特定组件集。
+
+对于方案 2，使用xref:/use/metrics/k8s-prometheus-remote-write.adoc[Prometheus 远程写入协议]将指标发送到{stackstate-product-name} ，以确保{stackstate-product-name} 中的指标可用。在确保指标可用后，才继续为组件添加指标图表。
+
+== 创建度量绑定
+
+. <<_create_an_outline_of_the_metric_binding,创建公制约束大纲>>
+. <<_select_the_components_to_bind_to,选择要绑定的组件>>
+. <<_write_the_promql_query,为所需指标编写 PromQL 查询>>
+. <<_bind_the_correct_time_series_to_each_component,将正确的时间序列绑定到每个组件>>
+
+例如，该步骤将为 Kubernetes 部署的`+Replica counts+` 添加一个度量绑定。默认情况下，该度量绑定已存在于{stackstate-product-name} 中。
+
+=== 创建公制约束大纲
+
+在您喜欢的代码编辑器中打开`+metricbindings.yaml+` YAML 文件，在本指南中对其进行更改。 您可以使用 CLIxref:/setup/custom-integrations/develop.adoc#_test_your_stackpack[测试您的 StackPack]。
+
+----
+- _type: MetricBinding
+  chartType: line
+  enabled: true
+  identifier: urn:stackpack:my-stackpack:shared:metric-binding:node-memory-bytes-available-scheduling
+  layout:
+    metricPerspective:
+      section: Resources
+      tab: Kubernetes Node
+  name: Memory available for scheduling (Custom)
+  priority: medium
+  queries:
+  - alias: ${cluster_name} - ${node}
+    expression: max_over_time(kubernetes_state_node_memory_allocatable{cluster_name="${tags.cluster-name}", node="${name}"}[${__interval}])
+  scope: (label = "stackpack:kubernetes" and type = "node")
+  unit: bytes(IEC)
+----
+
+查询和范围部分将在接下来的步骤中填写。请注意，使用的单位是`+short+` ，它只会显示一个数值。如果您还不确定度量单位，可以先不确定，在编写 PromQL 查询时再决定正确的单位。
+
+=== 选择要绑定的组件
+
+保存xref:/use/views/k8s-topology-perspective.adoc[拓扑视角]的视图，并使用过滤器（过滤器-> 拓扑-> 切换到 STQL）查询需要显示新指标的组件。为度量绑定选择拓扑的最常用字段是`+type+` （组件类型）和`+label+` （选择所有标签）。例如，在部署方面：
+
+----
+type = "deployment" and label = "stackpack:kubernetes"
+----
+
+类型过滤器选择所有部署，而标签过滤器只选择 Kubernetes 堆栈包创建的组件（标签名称为`+stackpack+` ，标签值为`+kubernetes+` ）。后者也可以省略，得到同样的结果。 所有xref:/develop/reference/k8sTs-stql_reference.adoc#_component_filters[STQL 查询组件过滤器]都可用于过滤。
+
+切换到高级模式，复制生成的拓扑查询，并将其放入度量绑定的`+scope+` 字段。
+
+[NOTE]
+====
+度量绑定只支持查询筛选器。不支持也无法使用`+withNeighborsOf+` 等查询功能。
+====
+
+
+=== 编写 PromQL 查询
+
+访问{stackstate-product-name} 实例的xref:/use/metrics/k8sTs-explore-metrics.adoc[度量资源管理器] http://your-instance/#/metrics, ，使用它查询感兴趣的度量。资源管理器不仅能自动完成度量、标签、标签值，还能自动完成 PromQL 函数和运算符。从较短的时间范围开始，例如一小时，以获得最佳效果。
+
+关于副本总数，请使用`+kubernetes_state_deployment_replicas+` 指标。要显示时间序列数据的度量图表，可扩展查询，使用`+${__interval}+` 参数进行聚合：
+
+----
+max_over_time(kubernetes_state_deployment_replicas[${__interval}])
+----
+
+在这种特定情况下，使用`+max_over_time+` 可确保图表在任何给定时间内始终显示最高的副本数量。对于较长的时间范围，则不显示副本的短暂下降。要强调最少的副本数量，请使用`+min_over_time+` 。
+
+将查询复制到度量绑定`+queries+` 字段第一个条目的`+expression+` 属性中。使用`+Total replicas+` 作为别名，以便在图表图例中显示。
+
+[NOTE]
+====
+在{stackstate-product-name} 中，度量图表的大小自动决定图表中显示的度量的粒度。可以对 PromQL 查询进行调整，以充分利用这种行为，从而获得具有代表性的指标图表。xref:/setup/custom-integrations/metric-bindings/writing-promql.adoc[为图表编写 PromQL]将对此进行详细说明。
+====
+
+
+=== 将正确的时间序列绑定到每个组件
+
+已填写所有字段的度量绑定：
+
+----
+_type: MetricBinding
+chartType: line
+enabled: true
+tags: {}
+unit: short
+name: Replica counts
+priority: MEDIUM
+identifier: urn:stackpack:my-stackpack:metric-binding:my-deployment-replica-counts
+queries:
+  - expression: max_over_time(kubernetes_state_deployment_replicas[${__interval}])
+    alias: Total replicas
+scope: type = "deployment" and label = "stackpack:kubernetes"
+----
+
+在{stackstate-product-name} 中创建并查看部署组件上的 "复制数量 "图表，结果出乎意料。图表显示了所有部署的副本数量。从逻辑上讲，我们只能期待一个时间序列：这一特定部署的副本数量。
+
+image::k8s/k8s-replica-counts-without-binding.png[单一部署的不正确图表, it shows the replica count for all deployments]
+
+要解决这个问题，就必须使用来自组件的信息，针对组件进行特定的 PromQL 查询。对足够多的度量标签进行筛选，以便只选择组件的特定时间序列。这就是将正确的时间序列与组件 "绑定"。对于有制作 Grafana 仪表盘经验的人来说，这类似于在仪表盘上查询参数的仪表盘。让我们把度量绑定中的查询改成这样：
+
+----
+max_over_time(kubernetes_state_deployment_replicas{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", deployment="${name}"}[${__interval}])
+----
+
+image::k8s/k8s-replica-counts-with-binding.png[添加参数化筛选器后，图表效果与预期相符, only one time series for this component]
+
+现在，PromQL 查询可对`+cluster_name+` 、`+namespace+` 和`+deployment+` 三个标签进行筛选。使用组件字段的变量引用来代替为这些标签指定实际值。在这种情况下，使用`+cluster-name+` 和`+namespace+` 标签，并使用`+${tags.cluster-name}+` 和`+${tags.namespace}+` 引用。此外，组件名称还可以用`+${name}+` 引用。
+
+支持的变量引用有
+
+* 任何组件标签，使用 `+${tags.<label-name>}+`
+* 组件名称，使用 `+${name}+`
+
+image::k8s/k8s-carts-highlights.png[显示标签和组件名称（均以红色突出显示）的组件亮点页面]
+
+[NOTE]
+====
+通常，集群名称、命名空间以及组件类型和名称的组合就足以从 Kubernetes 中为特定组件选择指标。这些标签或类似标签通常可以在大多数度量衡和组件上找到。
+====
+
+
+== 高级
+
+=== 在图表中显示多个时间序列
+
+[NOTE]
+====
+公制绑定只有一个单位（绘制在图表的 y 轴上）。因此，您只能在一个度量绑定中合并产生相同单位时间序列的查询。有时可以转换单位。例如，CPU 使用情况可能以毫核或内核为单位报告，毫核可通过乘以 1000 转换为内核，如`+(<original-query>) * 1000+` 。
+====
+
+
+有两种方法可以在单个度量绑定中获得多个时间序列，从而在单个图表中获得多个时间序列：
+
+. 编写 PromQL 查询，返回单个组件的多个时间序列
+. 为度量绑定添加更多 PromQL 查询
+
+xref:/setup/custom-integrations/metric-bindings/index.adoc#_using_metric_labels_in_aliases[下一节]将举例说明第一种方案。第二个选项可用于比较相关指标。一些典型的使用案例
+
+* 总复制数与期望复制数和可用复制数的比较
+* 资源使用情况：单一图表中的限制、请求和使用情况
+
+要在度量绑定中添加更多查询，只需重复xref:/setup/custom-integrations/metric-bindings/index.adoc#_steps[步骤]3 和 4，并将查询作为额外条目添加到查询列表中。对于部署副本计数，有几个相关指标可以包含在同一个图表中：
+
+----
+- _type: MetricBinding
+  chartType: line
+  enabled: true
+  tags: {}
+  unit: short
+  name: Replica counts
+  priority: MEDIUM
+  identifier: urn:stackpack:my-stackpack:metric-binding:my-deployment-replica-counts
+  queries:
+    - expression: max_over_time(kubernetes_state_deployment_replicas{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", deployment="${name}"}[${__interval}])
+      alias: Total replicas
+    - expression: max_over_time(kubernetes_state_deployment_replicas_available{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}",  deployment="${name}"}[${__interval}])
+      alias: Available - ${cluster_name} - ${namespace} - ${deployment}
+    - expression: max_over_time(kubernetes_state_deployment_replicas_unavailable{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}",  deployment="${name}"}[${__interval}])
+      alias: Unavailable - ${cluster_name} - ${namespace} - ${deployment}
+    - expression: min_over_time(kubernetes_state_deployment_replicas_desired{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}",  deployment="${name}"}[${__interval}])
+      alias: Desired - ${cluster_name} - ${namespace} - ${deployment}
+  scope: type = "deployment" and label = "stackpack:kubernetes"
+----
+
+image::k8s/k8s-replica-counts-multiple-timeseries.png[多指标绑定]
+
+=== 在别名中使用度量标签
+
+当单个查询返回每个组件的多个时间序列时，图表中将显示为多条线。但在图例中，它们都将使用相同的别名。为了能够看到不同时间序列之间的差异，别名中可以使用`+${label}+` 语法引用度量标签。例如，下面是一个 pod 上的 "容器重新启动 "指标绑定，请注意，一个 pod 可以有多个容器：
+
+----
+type: MetricBinding
+chartType: line
+enabled: true
+id: -1
+identifier: urn:stackpack:my-stackpack:metric-binding:my-pod-restart-count
+name: Container restarts
+priority: MEDIUM
+queries:
+- alias: Restarts - ${container}
+  expression: max by (cluster_name, namespace, pod_name, container) (kubernetes_state_container_restarts{cluster_name="${tags.cluster-name}", namespace="${tags.namespace}", pod_name="${name}"})
+scope: (label = "stackpack:kubernetes" and type = "pod")
+unit: short
+----
+
+请注意，`+alias+` 引用的是`+container+` 公制标签。确保标签出现在查询结果中，如果缺少标签，`+${container}+` 将显示为字面文本，以帮助排除故障。
+
+=== 布局
+
+每个组件都可以与各种技术或协议相关联，如 k8s、网络、运行时环境（如 JVM）、协议（HTTP、AMQP）等。
+因此，每个组件都可以显示多种不同的指标。为了便于阅读，{stackstate-product-name} 可以将这些图表整理成标签和部分。
+要在特定选项卡或部分中显示图表 (`+MetricBinding+`)，需要配置布局属性。
+任何未指定布局的 MetricsBinding 都将显示在名为`+Other+` 的选项卡和部分中。
+
+下面是一个配置示例：
+
+endif::ss-ff-stackpacks2_enabled[]
