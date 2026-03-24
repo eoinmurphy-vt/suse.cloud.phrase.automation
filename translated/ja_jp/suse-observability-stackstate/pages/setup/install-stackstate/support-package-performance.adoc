@@ -1,0 +1,98 @@
+= SUSE Observability Clusterのパフォーマンステスト
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+== 概要
+
+このページでは、実行中のクラスタをプロファイリングして、期待どおりのパフォーマンスであることを確認する方法を提供します。これは、パフォーマンスが低下している場合に、複数のパーツのパフォーマンスを積極的に調査するために使用できる。これは、一般的なログを収集するためのxref:/setup/install-stackstate/support-package-logs.adoc[サポートパッケージ (Logs)]コレクタの追加である。
+
+== 備考
+
+このスクリプトは、{stackstate-product-name} クラスタにアクセスできる kubectl が設定されているホスト、または必要なパーミッションとクラスタへの接続性を持つその他のホストから実行する必要があります。
+これは、ホスト上でrootユーザーを使って直接行うか、sudo経由で行うことができる。kubeconfig が設定されていない場合は、コマンド`+export KUBECONFIG=$PATH-TO-YOUR/kubeconfig+` を使用する。
+
+== 使用方法
+
+このスクリプトは、`+root+` ユーザーまたは`+sudo+` を使用して、ホスト上で直接ダウンロードして実行する必要があります。
+
+=== スクリプトをダウンロードして実行する
+
+xref::attachment$suse-observability_performance_collector.sh[suse-observability_performance_collector.sh]スクリプトをダウンロードする。
+
+* スクリプトを別名で保存する： `+suse-observability_performance_collector.sh+`
+* 以下のコマンドを使ってスクリプトを実行する：
++
+[,bash]
+----
+bash suse-observability_performance_collector.sh
+----
++
+これにより、カレント・ディレクトリに`+suse-observability_performance_<date>.tar.gz+` というファイルが生成される。このファイルをケースにアップロードしてください。
+
+追加の引数を指定することもできる。例えば、別の名前空間を選択する：
+[,bash]
+----
+> bash suse-observability_performance_collector.sh -h
+SUSE Observability performance measurement tool.
+Runs some rudimentary performance tests on a deployed instance to validate performance.
+
+Usage: $0 [options] [<namespace>]
+
+options:
+  -h  Print this help
+
+<namespace>:
+  The namespace that is running SUSE Observability, or
+  "suse-observability" when not specified
+----
+
+== 参考パフォーマンス
+
+以下は、私たちがシステムのパフォーマンスの参考として使っている出力で、私たち自身のプロファイルを調整するためにも使っている。顧客のディスクとスピードはこの数字に近づくはずだ。
+
+----
+=== SUSE Observability Performance Summary ===
+Date: 2026-03-09T09:46:18Z
+
+--- Hdfs Disk Buffered ---
+  suse-observability-hbase-hdfs-dn-0                           151 MB/s
+  suse-observability-hbase-hdfs-dn-1                           150 MB/s
+  suse-observability-hbase-hdfs-dn-2                           150 MB/s
+
+--- Hdfs Disk Direct ---
+  suse-observability-hbase-hdfs-dn-0                           58.3 MB/s
+  suse-observability-hbase-hdfs-dn-1                           56.6 MB/s
+  suse-observability-hbase-hdfs-dn-2                           56.7 MB/s
+
+--- Kafka Disk Buffered ---
+  suse-observability-kafka-0                                   173 MB/s
+  suse-observability-kafka-1                                   142 MB/s
+  suse-observability-kafka-2                                   143 MB/s
+
+--- Kafka Disk Direct ---
+  suse-observability-kafka-0                                   59.2 MB/s
+  suse-observability-kafka-1                                   59.2 MB/s
+  suse-observability-kafka-2                                   59.4 MB/s
+
+--- Kafka Producer Local ---
+  suse-observability-kafka-0                                   50241.157556 records/sec (49.06 MB/sec), 557.44 ms avg latency
+  suse-observability-kafka-1                                   31422.825540 records/sec (30.69 MB/sec), 903.49 ms avg latency
+  suse-observability-kafka-2                                   31703.760066 records/sec (30.96 MB/sec), 893.00 ms avg latency
+
+--- Kafka Producer Remote ---
+  suse-observability-kafka-0                                   59765.718384 records/sec (58.36 MB/sec), 453.19 ms avg latency
+  suse-observability-kafka-1                                   54656.755575 records/sec (53.38 MB/sec), 500.53 ms avg latency
+  suse-observability-kafka-2                                   39503.831872 records/sec (38.58 MB/sec), 703.39 ms avg latency
+
+--- Hdfs Network ---
+  suse-observability-hbase-hdfs-dn-0 -> suse-observability-hbase-hdfs-dn-1 571 MB/s
+  suse-observability-hbase-hdfs-dn-1 -> suse-observability-hbase-hdfs-dn-2 524 MB/s
+  suse-observability-hbase-hdfs-dn-2 -> suse-observability-hbase-hdfs-dn-0 597 MB/s
+----
+
+明確になった：
+
+- バッファードIOは生のディスク・スループットに関係し、カーネル内でデータをバッファリングできるようにする。
+- ダイレクト・ディスクは、O_DIRECTを使用してディスク・スループットを測定し、バッファリングを禁止する。
+- Kafka Producer localはlocalhost経由でkafkaにデータを入れ、remoteはネットワーク経由で入れる。CPUがネットワークよりもボトルネックになっている場合、リモートの方がローカルよりも速くなることがある（今回の場合はリモートの方が効率的だった）。
