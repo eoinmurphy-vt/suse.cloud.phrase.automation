@@ -1,0 +1,103 @@
+= マニュアルのアップグレード
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+インストールスクリプトを使用するか、手動で希望のバージョンのバイナリをインストールすることで、K3sをアップグレードできます。
+
+[NOTE]
+====
+アップグレードの際は、まずサーバーノードを1台ずつアップグレードし、次にエージェントノードをアップグレードします。
+====
+
+[#_release_channels]
+== リリース・チャンネル
+
+インストールスクリプトまたはxref:upgrades/automated.adoc[自動アップグレード]機能を使用して実行されたアップグレードは、異なるリリースチャンネルに関連付けることができます。以下のチャンネルが利用できる：
+
+|===
+| チャンネル | 説明
+
+| 厩舎
+| (デフォルト) 本番環境ではStableを推奨。これらのリリースは、コミュニティによるテスト期間を経ている。
+
+| 最新
+| 最新バージョンは常に、センバーオーダリングルールによって決定される、利用可能な最も高い非プレリリースバージョンを指す。これらのリリースは、まだコミュニティでのテスト期間を経ていない。
+
+| v1.33（例）
+| Kubernetesの各マイナーバージョンにはリリースチャネルが関連付けられており、サポート終了バージョンも含まれる。これらのチャンネルは、そのマイナーバージョンで利用可能な最新のリリースを選択します。
+|===
+
+網羅的で最新のチャンネルリストについては、https://update.k3s.io/v1-release/channels[] k3sご覧ください。チャンネルがどのように機能するかについての技術的な詳細については、https://github.com/rancher/channelserver[channelserver]プロジェクトを参照してください。
+
+[TIP]
+====
+K3sの新しいバージョンにアップグレードしようとすると、https://kubernetes.io/docs/setup/release/version-skew-policy/[]Kubernetes適用されます。アップグレードの際、プランが中間のマイナーバージョンをスキップしないようにしてください。system-upgrade-controller自体は、Kubernetesのバージョンに対するサポートされていない変更から保護しない。
+====
+
+
+== インストールスクリプトを使用したK3sのアップグレード
+
+K3sを古いバージョンからアップグレードするには、インストールスクリプトを実行したときに使用したのと同じ設定オプションを使用して、インストールスクリプトを再実行することができます。
+
+[IMPORTANT]
+.注
+====
+`+INSTALL_K3S_EXEC+` 変数、`+K3S_+` 変数、および末尾のシェル引数はすべて、インストールスクリプトが systemd ユニットと環境ファイルを生成するために使用します。
+最初にインストールスクリプトを実行するときに設定を行い、再実行するときに再度設定を行わなかった場合、元の値は失われます。
+
+xref:installation/configuration.adoc#_configuration_file[設定ファイルの]内容は、インストー ルスクリプトでは管理されません。
+設定をインストールスクリプトから独立させたい場合、環境変数や引数をインストー ルスクリプトに渡すのではなく、設定ファイルを使用する必要があります。
+====
+
+
+インストール・スクリプトを実行すると
+
+. 新しいk3sバイナリをダウンロードする
+. systemd ユニットまたは openrc init スクリプトを更新し、インストールスクリプトに渡された引数を反映させる。
+. k3sサービスを再起動する
+
+[NOTE]
+====
+Pod用のコンテナは、K3sが停止しても実行され続ける。インストールスクリプトは、K3sを再起動する前にノードのドレインやコード化を行いません。ワークロードが短時間のAPIサーバー停止に敏感な場合は、https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[ドレインを]手動で `+kubectl+` を使用してノードを、インストールスクリプトを再実行してK3sをアップグレードするか、設定を変更し、その後でコード化を解除する必要があります。
+====
+
+例えば、現在の安定版リリースにアップグレードする場合：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+特定のチャンネル（最新など）で新しいバージョンにアップグレードしたい場合は、チャンネルを指定できます：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_CHANNEL=latest <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+特定のバージョンにアップグレードしたい場合は、以下のコマンドを実行します：
+
+[,sh]
+----
+curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s INSTALL_K3S_VERSION=vX.Y.Z+k3s1 <EXISTING_K3S_ENV> sh -s - <EXISTING_K3S_ARGS>
+----
+
+[TIP]
+====
+k3sの新バージョンをダウンロードしたいが、起動したくない場合は、環境変数`+INSTALL_K3S_SKIP_START=true+` 。
+====
+
+
+== バイナリを使用したK3のアップグレード
+
+K3sを手動でアップグレードするには、希望のバージョンのK3sバイナリをダウンロードし、既存のバイナリを新しいバイナリに置き換えることができます。
+
+. https://github.com/k3s-io/k3s/releases[リリースから]K3sバイナリの希望のバージョンをダウンロードする。
+. ダウンロードしたバイナリを`+/usr/local/bin/k3s+` （または任意の場所）にコピーします。
+. k3sまたはk3s-agentサービスを再起動するか、k3sプロセス（バイナリ）を再起動します。
+
+[NOTE]
+====
+Pod用のコンテナは、K3sが停止しても実行され続ける。K3を再スタートさせる場合、ポッドを排出したり、ノードをコード化したりする必要はない。ワークロードがAPIサーバーの短時間の停止に敏感な場合は、K3sを再起動する前に手動でhttps://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[、] `+kubectl+` 。
+====
