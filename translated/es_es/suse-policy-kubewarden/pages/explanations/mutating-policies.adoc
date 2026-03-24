@@ -1,0 +1,184 @@
+include::partial$variables.adoc[]
+= Políticas mutantes
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Reconstruye las peticiones configurando y gestionando las políticas de mutación dentro de ClusterAdmissionPolicy de acuerdo con ajustes predefinidos.
+:doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["mutating-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "policy mutating", "kubernetes", "clusteradmissionpolicy", "admissionpolicy"]
+:sidebar_label: Políticas mutantes
+:sidebar_position: 10
+:current-version: {page-origin-branch}
+
+Las políticas de mutación reciben una solicitud de objeto y la reconstruyen (la mutan) en una nueva solicitud. Esto es según los valores definidos en la configuración de la política. La solicitud procede a través de la API de Kubernetes, pudiendo ser evaluada por otras políticas.
+
+Para permitir el comportamiento mutante de la solicitud, establezca el campo `+ClusterAdmissionPolicy.mutating+`en `+true+`.
+
+Sin embargo, si establece el campo `+ClusterAdmissionPolicy.mutating+` en `+false+`, las solicitudes mutadas serán rechazadas.
+
+== Por qué mutar las políticas puede ser peligroso
+
+=== Las políticas mutantes no revisadas pueden introducir vulnerabilidades
+
+[WARNING]
+====
+
+Para evitar abusos del sistema, los administradores de {project-name} deben revisar las políticas de mutación. La mutación de políticas podría, por ejemplo, modificar una carga de trabajo, de forma que permita la creación de contenedores privilegiados.
+
+====
+
+
+==== Solución
+
+En caso de duda, divida las políticas en políticas mutantes y validadoras, en lugar de escribir o desplegar políticas que validen y muten a la vez. Esto es especialmente importante cuando se utiliza un DSL (como Rego) para crear políticas complejas.
+
+=== Las políticas de mutación mal configuradas junto con los controladores de Kubernetes de terceros pueden quedar atascadas en un bucle infinito
+
+[WARNING]
+====
+
+Las políticas mutantes devuelven solicitudes que proceden a través de la API de Kubernetes. Si hay otros controladores de Kubernetes que escuchan esos mismos recursos, pueden volver a mutarlos en una solicitud de seguimiento. Esto podría conducir a un bucle de retroalimentación infinito de mutaciones.
+
+====
+
+
+==== Solución
+
+Realiza la mutación contra:
+
+. El tipo de recurso inferior (por ejemplo Pod).
+. El tipo de recurso más elevado (p. ej: Despliegue). Nota: esto podría dar lugar a bucles si un controlador gestiona esos recursos. Por ejemplo, controladores de soluciones GitOps (como fleet, flux, argo, ...) u otros controladores de terceros que traducen sus propios CRD en objetos de despliegue.
+
+== Ejemplos
+
+Se puede ver una política mutante en funcionamiento. Cree el siguiente`+ClusterAdmissionPolicy+` con el campo `+mutating+` establecido en `+true+`:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group created
+----
+
+Se utiliza lahttps://github.com/kubewarden/user-group-psp-policy[`+psp-user-group+`] política para controlar usuarios y grupos en contenedores y puede mutar las peticiones. En el ejemplo anterior, se establece el campo `+runAsUser+` y se añade a la sección `+securityContext+` del contenedor.
+
+Como el campo `+mutating+` es `+true+`, la siguiente solicitud tiene éxito:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+pod/pause-user-group created
+----
+
+Puede ver los resultados del contenedor en `+securityContext+`:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl get pods pause-user-group -o jsonpath='{ .spec.containers[].securityContext }'
+
+# Output
+{"runAsUser":1000}
+----
+
+Ahora, modifique `+ClusterAdmissionPolicy+` estableciendo el campo `+mutating+` en `+false+`:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: psp-user-group
+spec:
+  module: "registry://ghcr.io/kubewarden/policies/user-group-psp:v0.1.5"
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 3000
+          max: 4000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+
+# Output
+clusteradmissionpolicy.policies.kubewarden.io/psp-user-group configured
+----
+
+Como el campo `+mutating+` es `+false+`, la siguiente petición falla:
+
+[subs="+attributes",bash]
+----
+# Command
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pause-user-group
+spec:
+  containers:
+    - name: pause
+      image: registry.k8s.io/pause
+EOF
+
+# Output
+Error from server: error when creating ".\\pause-user-group.yaml": admission webhook "psp-user-group.kubewarden.admission" denied the request: Request rejected by policy psp-user-group. The policy attempted to mutate the request, but it is currently configured to not allow mutations.
+----
+
+En conclusión, puede ver que {short-project-name} replica el mismo comportamiento que las obsoletas Políticas de Seguridad de Kubernetes Pod (PSP).
