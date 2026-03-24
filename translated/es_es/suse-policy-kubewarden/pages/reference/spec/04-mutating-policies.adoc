@@ -1,0 +1,165 @@
+include::partial$variables.adoc[]
+= Políticas mutantes
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurar políticas de mutación implementando funciones de validación (validate y validate_settings) en un waPC (configurador de políticas de lo que sea) para proponer mutaciones de objetos en clústeres Kubernetes.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "mutating-policies"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden", "kubernetes", "policy specification", "mutating policies"]
+:sidebar_label: Políticas mutantes
+:current-version: {page-origin-branch}
+
+La estructura de las políticas de mutación es la misma que la de las de validación:
+
+* Tienen que registrar las funciones `+validate+` y `+validate_settings+` waPC.
+* La API de comunicación utilizada entre el host y la política es la misma que la utilizada por las políticas de validación.
+
+Las políticas de mutación aceptan una solicitud y pueden proponer una mutación del objeto entrante devolviendo un objeto `+ValidationResponse+` con el siguiente aspecto:
+
+[subs="+attributes",json]
+----
+{
+  "accepted": true,
+  "mutated_object": <object to be created>
+}
+----
+
+El campo `+mutated_object+` contiene el objeto que la política quiere crear en el cluster Kubernetes, serializado a JSON.
+
+== Un ejemplo concreto
+
+Supongamos que la póliza ha recibido este `+ValidationRequest+`:
+
+[subs="+attributes",json]
+----
+{
+  "settings": {},
+  "request": {
+    "operation": "CREATE",
+    "object": {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "security-context-demo-4"
+      },
+      "spec": {
+        "containers": [
+        {
+          "name": "sec-ctx-4",
+          "image": "gcr.io/google-samples/node-hello:1.0",
+          "securityContext": {
+            "capabilities": {
+              "add": ["NET_ADMIN", "SYS_TIME"]
+            }
+          }
+        }
+        ]
+      }
+    }
+  }
+}
+----
+
+[NOTE]
+====
+
+En este ejemplo, sólo los campos importantes se encuentran en el objeto `+request+`.
+
+====
+
+
+Esta generación de peticiones se produce porque alguien intentó crear un Pod con este aspecto:
+
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: security-context-demo-4
+spec:
+  containers:
+  - name: sec-ctx-4
+    image: gcr.io/google-samples/node-hello:1.0
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
+        - SYS_TIME
+----
+
+Supongamos que la política responde con la siguiente `+ValidationResponse+`:
+
+[subs="+attributes",json]
+----
+{
+  "accepted": true,
+  "mutated_object": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+      "name": "security-context-demo-4"
+    },
+    "spec": {
+      "containers": [
+        {
+          "name": "sec-ctx-4",
+          "image": "gcr.io/google-samples/node-hello:1.0",
+          "securityContext": {
+            "capabilities": {
+              "add": [
+                "NET_ADMIN",
+                "SYS_TIME"
+              ],
+              "drop": [
+                "BPF"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+----
+
+Eso llevaría a la aceptación de la solicitud, pero el Pod final quedaría así:
+
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: security-context-demo-4
+spec:
+  containers:
+  - name: sec-ctx-4
+    image: gcr.io/google-samples/node-hello:1.0
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
+        - SYS_TIME
+        drop:
+        - BPF
+----
+
+Como puedes ver, la política alteró la sección `+securityContext.capabilities.drop+`del único contenedor declarado en el Pod.
+
+El contenedor está abandonando la capacidad `+BPF+` debido a la política.
+
+== Recapitulemos
+
+Estas son las funciones que debe implementar una política de mutación:
+
+|===
+| *Nombre de la función waPC* | *Carga útil de entrada* | *Carga útil de salida*
+
+| `+validate+`
+| `+\{  "request": \{    // AdmissionReview.request data  \},  "settings": \{    // your policy configuration  \}\}+`
+| `+\{  **// mandatory**  "accepted": boolean,  // optional, ignored if accepted  // recommended for rejections  "message": string,  // optional, ignored if accepted  "code": integer,   // JSON Object to be created  // Can be used only when the  // request is accepted  "mutated_object": object\}+`
+
+| `+validate_settings+`
+| `+\{  // your policy configuration\}+`
+| `+\{  **// mandatory**  "validate": boolean,  // optional, ignored if accepted  // recommended for rejections  "message": string,\}+`
+|===
