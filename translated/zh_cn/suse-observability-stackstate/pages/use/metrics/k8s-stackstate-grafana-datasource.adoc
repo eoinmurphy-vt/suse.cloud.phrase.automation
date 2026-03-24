@@ -1,0 +1,85 @@
+= 将 SUSE Observability 作为 Grafana 数据源
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: 将 SUSE Observability 用作 Grafana 数据源
+
+SUSE Observability 可用作 Grafana 的数据源。这样就可以将 Grafana 用作 SUSE Observability 数据的可视化工具。如果您已经有了一些仪表盘，并希望继续使用，这将非常有用。由于 SUSE Observability 公开了与 Prometheus 兼容的 API，因此您可以在 Grafana 中使用https://grafana.com/docs/grafana/latest/datasources/prometheus[Prometheus 数据源]连接到 SUSE Observability。这也使得 SUSE Observability 可以与其他兼容 Prometheus 的解决方案一起使用。
+
+== 先决条件
+
+在 Grafana 中将 SUSE Observability 添加为数据源之前，您需要设置一个 ServiceToken 以验证 SUSE Observability。SUSE Observability 建议为此创建一个具有权限的专用角色。
+
+您可以通过 SUSE Observability CLI 执行此操作：
+
+[,sh]
+----
+> sts rbac create-subject --subject grafana
+✅ Created subject 'grafana'
+> sts rbac grant --subject grafana --permission get-metrics
+✅ Granted permission 'get-metrics' on 'system' to subject 'grafana'
+PERMISSION  | RESOURCE
+get-metrics | system
+----
+
+这将在 SUSE Observability 中创建一个名为`+grafana+` 的新角色，并授予其`+get-metrics+` 权限。然后，您就可以为该角色创建一个 ServiceToken：
+
+[,sh]
+----
+> sts service-token create --name grafana --roles grafana
+✅ Service token created: svctok-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+----
+
+了解有关xref:/setup/security/authentication/service_tokens.adoc[管理 ServiceTokens] 的更多信息。
+
+返回的 ServiceToken 可用于与 SUSE Observability 进行身份验证。现在您可以在 Grafana 中将 SUSE Observability 添加为数据源。
+
+== 在 Grafana 中创建新的 SUSE Observability 数据源
+
+有了创建的 ServiceToken，现在就可以在 Grafana 中将 SUSE Observability 添加为数据源。为此，请转到 Grafana UI 并导航到数据源配置页面。单击`+Add data source+` 按钮，从数据源列表中选择`+Prometheus+` 。
+
+image::k8s/k8s-grafana-new-datasource.png[Grafana 新数据源]
+
+在数据源配置页面，输入以下配置详细信息：
+
+* *名称*：SUSE 可观察性
+* *URL*： `+https://<tenant-name>.app.stackstate.io/prometheus+`
+* *自定义 HTTP 标头*
+ ** *标题* `+X-API-Key+`
+ ** *价值* `+<service-token>+`
+
+image::k8s/k8s-grafana-datasource.png[Grafana 数据源配置]
+
+单击`+Save & Test+` 按钮保存数据源。如果配置正确，您应该看到绿色的`+Data source is working+` 消息。
+
+== 限制对衡量标准的访问
+
+使用xref:/setup/security/rbac/rbac_rancher.adoc[Rancher RBAC] 时，可以在群集或命名空间级别授予对度量的访问权限。
+
+授权访问群集的所有指标：
+[,sh]
+----
+> sts rbac grant --subject grafana --permission get-metrics --resource k8s:YOUR_CLUSTER:__any__
+✅ Granted permission 'get-metrics' on 'k8s:YOUR_CLUSTER:__any__' to subject 'grafana'
+PERMISSION  | RESOURCE
+get-metrics | k8s:YOUR_CLUSTER:__any__
+----
+
+授权访问命名空间的所有度量：
+[,sh]
+----
+> sts rbac grant --subject grafana --permission get-metrics --resource k8s:OTHER_CLUSTER:SINGLE_NAMESPACE
+✅ Granted permission 'get-metrics' on 'k8s:OTHER_CLUSTER:SINGLE_NAMESPACE' to subject 'grafana'
+PERMISSION  | RESOURCE
+get-metrics | k8s:OTHER_CLUSTER:SINGLE_NAMESPACE
+----
+
+检查主体已获得的所有权限：
+[,sh]
+----
+> sts rbac describe-permissions --subject grafana
+Got subject from the following subject sources: Observability
+
+PERMISSION  | RESOURCE
+get-metrics | k8s:OTHER_CLUSTER:YOUR_NAMESPACE
+get-metrics | k8s:YOUR_CLUSTER:__any__
+----
