@@ -1,0 +1,72 @@
+= Alibaba Cloud Container Service for Kubernetes（ACK）インストールノート
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+== 最小容量
+
+Alibaba CloudのContainer Service for Kubernetes（ACK）は、ディスクベースのPersistentVolumeClaims（PVC）の最小ボリュームサイズを*20GiBとして*います。ACKにデプロイする場合、Persistent Volume Claims（pvc）は*少なくとも20Giの*ストレージを要求しなければならない。最低20Giを満たさないと、Helm導入時にボリュームのプロビジョニングや障害が発生する可能性があります。
+
+私たちは、この要件を満たすために、すべてのボリュームサイズを調整する専用のHelm値のセットを提供します。ACKにインストールする場合は、インストール時にこのファイルを使用する：
+
+[,yaml]
+----
+# ack-values.yaml
+zookeeper:
+  persistence:
+    size: 20Gi
+hbase:
+  tephra:
+    persistence:
+      size: 20Gi
+stackstate:
+  components:
+    checks:
+      tmpToPVC:
+        volumeSize: 20Gi
+    healthSync:
+      tmpToPVC:
+        volumeSize: 20Gi
+      localpvc:
+        size: 20Gi
+    state:
+      tmpToPVC:
+        volumeSize: 20Gi
+    sync:
+      tmpToPVC:
+        volumeSize: 20Gi
+    vmagent:
+      persistence:
+        size: 20Gi
+    workloadObserver:
+      persistence:
+        size: 20Gi
+  features:
+    storeTransactionLogsToPVC:
+      volumeSize: 20Gi
+  stackpacks:
+    localpvc:
+      size: 20Gi
+    pvc:
+      size: 20Gi
+backup:
+  configuration:
+    scheduled:
+      pvc:
+        size: 20Gi
+----
+
+ACK固有の値については別のファイルを作成し、インストール時に使用してください。例えば、xref:/setup/install-stackstate/kubernetes_openshift/kubernetes_install.adoc#_deploy_suse_observability_with_helm[Kubernetesのインストールドキュメントに従い]、上記の値を`+ack-values.yaml+` というファイルに保存すれば、Suse Observabilityを以下のようにインストールできます：
+
+[,bash]
+----
+helm upgrade \
+  --install \
+  --namespace suse-observability \
+  --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+  --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+  --values ack-values.yaml \
+suse-observability \
+suse-observability/suse-observability
+----
