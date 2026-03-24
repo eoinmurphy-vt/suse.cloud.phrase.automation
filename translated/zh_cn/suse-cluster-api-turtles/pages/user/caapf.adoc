@@ -1,0 +1,78 @@
+= 集群应用程序接口插件提供程序舰队
+:revdate: 2025-11-20
+:page-revdate: {revdate}
+
+== 概述
+
+ifeval::["{build-type}" == "product"]
+Cluster API Add-on Provider for`+Fleet+` (CAAPF) 是一个集群 API (CAPI) 提供商，可提供与https://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/index.html[`+Fleet+`]集成，以便将应用程序轻松部署到 CAPI 配置的集群中。
+endif::[]
+ifeval::["{build-type}" == "community"]
+Cluster API Add-on Provider for`+Fleet+` (CAAPF) 是一个集群 API (CAPI) 提供商，可提供与https://fleet.rancher.io/[`+Fleet+`]集成，以便将应用程序轻松部署到 CAPI 配置的集群中。
+endif::[]
+
+[TIP]
+====
+有关供应商的更多信息，请参阅https://rancher.github.io/cluster-api-addon-provider-fleet/[CAAPF 一书]。
+====
+
+[WARNING]
+====
+CAAPF 依赖于`+WatchList+` Kubernetes 功能门。该功能需要在 Kubernetes`+1.33+` 版本上显式启用。更多信息，请参阅https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/[Kubernetes 上游文档]。
+====
+
+== 功能性
+
+* 提供程序将通过创建具有相同`+name+` 和`+namespace+` 的`+Fleet+` `+Cluster+` 实例，在`+Fleet+` 上注册新配置的 CAPI 群集。可使用`+GitOps+` 将应用程序自动部署到创建的群集。
+* 提供程序将自动为`+ClusterClass+` 名称空间中的每个 CAPI`+ClusterClass+` 创建一个舰队`+ClusterGroup+` 。这样，您就可以将相同的应用程序部署到从同一个`+ClusterClass+` 创建的所有群集上。
+* 提供程序将自动为每个引用的 CAPI`+ClusterClass+` 创建一个舰队`+ClusterGroup+` ，`+Cluster+` 位于与`+ClusterClass+` 不同的名称空间中。这样，您就可以将相同的应用程序部署到在特定命名空间中引用相同`+ClusterClass+` 的所有群集。
+
+ifeval::["{build-type}" == "product"]
+这样，用户就可以指定https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/reference/ref-bundle.html[`+Bundle+`]资源，或https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/reference/ref-gitrepo.html[`+GitRepo+`]从 git 安装应用程序。每种资源可提供https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/how-tos-for-users/gitrepo-targets.html#_defining_targets[`+targets+`]的任何组合：
+endif::[]
+ifeval::["{build-type}" == "community"]
+这样，用户就可以指定https://fleet.rancher.io/ref-bundle[`+Bundle+`]资源，或https://fleet.rancher.io/ref-gitrepo[`+GitRepo+`]从 git 安装应用程序。每种资源可提供https://fleet.rancher.io/gitrepo-targets#defining-targets[`+targets+`]的任何组合：
+endif::[]
+
+[source,yaml]
+----
+  targets:
+  - clusterGroup: <cluster-class-name> # If the cluster is created from cluster-class
+  - clusterName: <a specific CAPI cluster name>
+----
+
+此外，`+CAAPF+` 会自动将`+CAPI+` 群集标签传播到`+Fleet+` 群集资源，因此用户可以指定一个与共同的群集标签相匹配的目标：
+
+[source,yaml]
+----
+  targets:
+  - clusterSelector: <label selector for the cluster instances, inherited from CAPI clusters>
+  - clusterGroupSelector: <label selector for the cluster group instances, labels inherited from ClusterClass>
+----
+
+== 舵手图表模板基于 CAPI`+Cluster+` 和 `+ControlPlane+`
+
+ifeval::["{build-type}" == "product"]
+*Cluster API Addon Provider Fleet*可根据匹配的集群状态为导入的 CAPI 集群自动生成应用程序https://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/ref-fleet-yaml.html#_templating[模板]。该功能可确保 CAPI 群集和资源的状态始终是 Fleet 群集资源`+spec.templateValues.ClusterValues+` 字段中的最新状态。用户可以
+endif::[]
+ifeval::["{build-type}" == "community"]
+*Cluster API Addon Provider Fleet*可根据匹配的集群状态为导入的 CAPI 集群自动生成应用程序https://fleet.rancher.io/ref-fleet-yaml#templating[模板]。该功能可确保 CAPI 群集和资源的状态始终是 Fleet 群集资源`+spec.templateValues.ClusterValues+` 字段中的最新状态。用户可以
+endif::[]
+
+- 直接引用 CAPI 集群的特定部分，或通过 Helm 替换模式引用`+.ClusterValues.Cluster+` 数据。
+- 通过`+.ClusterValues.ControlPlane+` 字段根据控制平面资源的状态进行替换。
+- 通过`+.ClusterValues.InfrastructureCluster+` 字段，根据基础设施群集资源的状态进行替换。
+- 在不同集群中保持一致的应用状态。
+- 对多个匹配的群集使用相同的模板，以简化部署和管理。
+
+有关该功能的更多信息，请参阅本书中的https://rancher.github.io/cluster-api-addon-provider-fleet/04_reference/02_templating-strategy.html[模板化文档]。
+
+== 示例\--部署 kindnet CNI
+
+*演示*：image:https://asciinema.org/a/seEFHKz5DVpUe5CQvWcddSJBp.svg[asciicast,link=https://asciinema.org/a/seEFHKz5DVpUe5CQvWcddSJBp]
+
+== 示例\--使用 GitRepo 部署 Calico CNI
+
+*演示*：image:https://asciinema.org/a/706570.svg[asciicast,link=https://asciinema.org/a/706570]
+
+有关教程和前提条件，请参阅本书https://rancher.github.io/cluster-api-addon-provider-fleet/03_tutorials/04_installing_calico_via_gitrepo.html[] gitrepo 教程部分。
