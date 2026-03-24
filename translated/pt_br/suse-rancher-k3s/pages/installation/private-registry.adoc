@@ -1,0 +1,303 @@
+= Configuração do registro privado
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+O Containerd pode ser configurado para se conectar a registros privados e usá-los para extrair imagens conforme a necessidade do kubelet.
+
+Na inicialização, o K3s verificará se o site `+/etc/rancher/k3s/registries.yaml+` existe. Em caso afirmativo, a configuração do registro contida nesse arquivo é usada ao gerar a configuração do containerd.
+
+* Se quiser usar um registro privado como espelho de um registro público, como o docker.io, será necessário configurar `+registries.yaml+` em cada nó que deseja usar o espelho.
+* Se o seu registro privado exigir autenticação, usar certificados TLS personalizados ou não usar TLS, será necessário configurar `+registries.yaml+` em cada nó que extrairá imagens do seu registro.
+
+Observe que os nós do servidor podem ser agendados por padrão. Se você não tiver contaminado os nós do servidor e for executar cargas de trabalho neles, certifique-se de criar também o arquivo `+registries.yaml+` em cada servidor.
+
+[#_default_endpoint_fallback]
+== Fallback de ponto de extremidade padrão
+
+O Containerd tem um "endpoint padrão" implícito para todos os registros.
+O endpoint padrão é sempre tentado como último recurso, mesmo que haja outros endpoints listados para esse registro em `+registries.yaml+`.
+As reescritas não são aplicadas a pulls contra o endpoint padrão.
+Por exemplo, ao acessar `+registry.example.com:5000/rancher/mirrored-pause:3.6+`, o containerd usará um endpoint padrão de `+https://registry.example.com:5000/v2+`.
+
+* O ponto de extremidade padrão para `+docker.io+` é `+\https://index.docker.io/v2+`.
+* O ponto de extremidade padrão para todos os outros registros é `+\https://<REGISTRY>/v2+`, em que `+<REGISTRY>+` é o nome do host do registro e a porta opcional.
+
+Para ser reconhecido como um registro, o primeiro componente do nome da imagem deve conter pelo menos um ponto ou dois pontos.
+Por motivos históricos, as imagens sem um registro especificado em seu nome são implicitamente identificadas como sendo de `+docker.io+`.
+
+[IMPORTANT]
+.Versão Gate
+====
+A opção `+--disable-default-registry-endpoint+` está disponível a partir das versões de janeiro de 2024: v1.26.13+k3s1, v1.27.10+k3s1, v1.28.6+k3s1, v1.29.1+k3s1
+====
+
+
+Os nós podem ser iniciados com a opção `+--disable-default-registry-endpoint+`.
+Quando isso for definido, o containerd não voltará para o endpoint de registro padrão e só extrairá dos endpoints de espelho configurados, juntamente com o registro distribuído, se estiver ativado.
+
+Isso pode ser desejado se o seu cluster estiver em um verdadeiro ambiente air-gapped, no qual o registro upstream não está disponível, ou se você desejar que apenas alguns nós extraiam do registro upstream.
+
+A desativação do endpoint de registro padrão aplica-se somente aos registros configurados por meio do site `+registries.yaml+`.
+Se o registro não for configurado explicitamente por meio de uma entrada de espelho em `+registries.yaml+`, o comportamento de fallback padrão ainda será usado.
+
+== Arquivo de configuração de registros
+
+O arquivo consiste em duas chaves de nível superior, com subchaves para cada registro:
+
+[,yaml]
+----
+mirrors:
+  <REGISTRY>:
+    endpoint:
+      - https://<REGISTRY>/v2
+configs:
+  <REGISTRY>:
+    auth:
+      username: <BASIC AUTH USERNAME>
+      password: <BASIC AUTH PASSWORD>
+      token: <BEARER TOKEN>
+    tls:
+      ca_file: <PATH TO SERVER CA>
+      cert_file: <PATH TO CLIENT CERT>
+      key_file: <PATH TO CLIENT KEY>
+      insecure_skip_verify: <SKIP TLS CERT VERIFICATION BOOLEAN>
+----
+
+=== Espelhos
+
+A seção de espelhos define os nomes e os pontos de extremidade dos registros, por exemplo:
+
+----
+mirrors:
+  registry.example.com:
+    endpoint:
+      - "https://registry.example.com:5000"
+----
+
+Cada espelho deve ter um nome e um conjunto de pontos de extremidade. Ao extrair uma imagem de um registro, o containerd tentará esses URLs de endpoint, além do endpoint padrão, e usará o primeiro que estiver funcionando.
+
+==== Redirecionamentos
+
+Se o registro privado for usado como um espelho para outro registro, como ao configurar um https://docs.docker.com/registry/recipes/mirror/[cache pull through], os pulls de imagens serão redirecionados de forma transparente para os pontos de extremidade listados. O nome do registro original é passado para o ponto de extremidade do espelho por meio do parâmetro de consulta `+ns+`.
+
+Por exemplo, se você tiver um espelho configurado para `+docker.io+`:
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+----
+
+Em seguida, puxar `+docker.io/rancher/mirrored-pause:3.6+` puxará a imagem de forma transparente como `+registry.example.com:5000/rancher/mirrored-pause:3.6+`.
+
+==== Reescritas
+
+Cada espelho pode ter um conjunto de reescritas, que usam expressões regulares para corresponder e transformar o nome de uma imagem quando ela é extraída de um espelho.
+Isso é útil se a estrutura da organização/projeto no registro privado for diferente do registro que está sendo espelhado.
+As reescritas correspondem e transformam apenas o nome da imagem, NÃO a tag.
+
+Por exemplo, a configuração a seguir extrairia de forma transparente a imagem `+docker.io/rancher/mirrored-pause:3.6+` como `+registry.example.com:5000/mirrorproject/rancher-images/mirrored-pause:3.6+`:
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+    rewrite:
+      "^rancher/(.*)": "mirrorproject/rancher-images/$1"
+----
+
+[NOTE]
+.Versão Gate
+====
+As reescritas não são mais aplicadas ao xref:#_default_endpoint_fallback[Ponto de extremidade padrão] a partir das versões de janeiro de 2024: v1.26.13+k3s1, v1.27.10+k3s1, v1.28.6+k3s1, v1.29.1+k3s1.
+Antes dessas versões, as reescritas também eram aplicadas ao endpoint padrão, o que impedia que os K3s extraíssem do registro upstream se a imagem não pudesse ser extraída de um endpoint espelho e a imagem não estivesse disponível com o nome modificado no upstream.
+====
+
+Se quiser aplicar reescritas ao extrair diretamente de um registro, quando ele não estiver sendo usado como espelho de um registro upstream diferente, você deverá fornecer um ponto de extremidade de espelho que não corresponda ao ponto de extremidade padrão.
+Os pontos de extremidade espelhados em `+registries.yaml+` que correspondem ao ponto de extremidade padrão são ignorados; o ponto de extremidade padrão é sempre tentado por último, sem reescrita, se o fallback não tiver sido desativado.
+
+Por exemplo, se você tiver um registro em `+https://registry.example.com/+` e quiser aplicar reescritas quando puxar explicitamente `+registry.example.com/rancher/mirrored-pause:3.6+`, poderá adicionar um ponto de extremidade de espelho com a porta listada.
+Como o ponto de extremidade espelhado não corresponde ao ponto de extremidade padrão - **`+"https://registry.example.com:443/v2" != "https://registry.example.com/v2"+`** - o endpoint é aceito como um espelho e as reescritas são aplicadas, apesar de ser efetivamente o mesmo que o padrão.
+
+[,yaml]
+----
+mirrors:
+ registry.example.com
+   endpoint:
+     - "https://registry.example.com:443"
+   rewrite:
+     "^rancher/(.*)": "mirrorproject/rancher-images/$1"
+----
+
+Observe que, ao usar espelhos e reescritas, as imagens ainda serão armazenadas com o nome original.
+Por exemplo, o site `+crictl image ls+` mostrará `+docker.io/rancher/mirrored-pause:3.6+` como disponível no nó, mesmo que a imagem tenha sido extraída de um espelho com um nome diferente.
+
+=== Configurações
+
+A seção `+configs+` define a configuração de TLS e credenciais para cada espelho. Para cada espelho, você pode definir `+auth+` e/ou `+tls+`.
+
+A parte `+tls+` consiste em:
+
+|===
+| Diretriz | Descrição
+
+| `+cert_file+`
+| O caminho do certificado do cliente que será usado para autenticação no registro
+
+| `+key_file+`
+| O caminho da chave do cliente que será usado para autenticação no registro
+
+| `+ca_file+`
+| Define o caminho do certificado da CA a ser usado para verificar o arquivo de certificado do servidor do registro
+
+| `+insecure_skip_verify+`
+| Booleano que define se a verificação de TLS deve ser ignorada para o registro
+|===
+
+A parte `+auth+` consiste em nome de usuário/senha ou token de autenticação:
+
+|===
+| Diretriz | Descrição
+
+| `+username+`
+| nome de usuário da autenticação básica do registro privado
+
+| `+password+`
+| senha de usuário da autenticação básica do registro privado
+
+| `+auth+`
+| token de autenticação do registro privado basic auth
+|===
+
+Abaixo estão exemplos básicos de uso de registros privados em diferentes modos:
+
+=== Suporte a curingas
+
+[IMPORTANT]
+.Versão Gate
+====
+O suporte a curingas está disponível a partir das versões de março de 2024: v1.26.15+k3s1, v1.27.12+k3s1, v1.28.8+k3s1, v1.29.3+k3s1
+====
+
+
+A entrada curinga `+"*"+` pode ser usada nas seções `+mirrors+` e `+configs+` para fornecer a configuração padrão para todos os registros.
+A configuração padrão só será usada se não houver uma entrada específica para esse registro. Observe que o asterisco DEVE estar entre aspas.
+
+No exemplo a seguir, um espelho de registro local será usado para todos os registros. A verificação TLS será desativada para todos os registros, exceto `+docker.io+`.
+
+[,yaml]
+----
+mirrors:
+  "*":
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "docker.io":
+  "*":
+    tls:
+      insecure_skip_verify: true
+----
+
+=== Com TLS
+
+Abaixo estão exemplos que mostram como você pode configurar `+/etc/rancher/k3s/registries.yaml+` em cada nó ao usar TLS.
+
+[tabs]
+======
+Com autenticação::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+    tls:
+      cert_file: # path to the cert file used in the registry
+      key_file:  # path to the key file used in the registry
+      ca_file:   # path to the ca file used in the registry
+----
+
+Sem autenticação::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    tls:
+      cert_file: # path to the cert file used in the registry
+      key_file:  # path to the key file used in the registry
+      ca_file:   # path to the ca file used in the registry
+----
+======
+
+=== Sem TLS
+
+Abaixo estão exemplos que mostram como você pode configurar `+/etc/rancher/k3s/registries.yaml+` em cada nó quando _não estiver_ usando TLS.
+
+[tabs]
+======
+Com autenticação::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+----
+
+Sem autenticação::
++
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+----
+======
+
+____
+No caso de não haver comunicação TLS, você precisa especificar `+http://+` para os pontos de extremidade, caso contrário, o padrão será https.
+____
+
+Para que as alterações no registro tenham efeito, é necessário reiniciar o K3s em cada nó.
+
+== Solução de problemas de Image Pulls
+
+Quando o Kubernetes tem problemas para extrair uma imagem, o erro exibido pelo kubelet pode refletir apenas o erro do terminal retornado pela tentativa de extração feita contra o endpoint padrão, fazendo parecer que os endpoints configurados não estão sendo usados.
+
+Verifique o registro do containerd no nó em `+/var/lib/rancher/k3s/agent/containerd/containerd.log+` para obter informações detalhadas sobre a causa raiz da falha. Observe que você deve examinar os logs no nó em que o pod está programado. Você pode verificar em qual nó seu pod está programado emitindo `+kubectl get pod -o wide -n NAMESPACE POD+` e verificando a coluna NODE.
+
+== Adição de imagens ao registro privado
+
+O espelhamento de imagens em um registro privado requer um host com o Docker ou outras ferramentas de terceiros que sejam capazes de extrair e enviar imagens. +
+As etapas abaixo pressupõem que você tenha um host com o dockerd e as ferramentas da CLI do docker, além de acesso ao docker.io e ao seu registro privado.
+
+. Obtenha o arquivo `+k3s-images.txt+` do GitHub para a versão com a qual você está trabalhando.
+. Extraia cada uma das imagens do K3s listadas no arquivo k3s-images.txt do docker.io. +
+Exemplo: `+docker pull docker.io/rancher/mirrored-pause:3.6+`
+. Reetiquete as imagens para o registro privado. +
+Exemplo: `+docker tag docker.io/rancher/mirrored-pause:3.6 registry.example.com:5000/rancher/mirrored-pause:3.6+`
+. Envie as imagens para o registro privado. +
+Exemplo: `+docker push registry.example.com:5000/rancher/mirrored-pause:3.6+`
