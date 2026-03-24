@@ -1,0 +1,78 @@
+= Cluster API Addon Provider Flota
+:revdate: 2025-11-20
+:page-revdate: {revdate}
+
+== Visión general
+
+ifeval::["{build-type}" == "product"]
+Cluster API Add-on Provider para `+Fleet+` (CAAPF) es un proveedor de API de clúster (CAPI) que proporciona integración con https://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/index.html[`+Fleet+`] para facilitar la implantación de aplicaciones en un clúster provisto de CAPI.
+endif::[]
+ifeval::["{build-type}" == "community"]
+Cluster API Add-on Provider para `+Fleet+` (CAAPF) es un proveedor de API de clúster (CAPI) que proporciona integración con https://fleet.rancher.io/[`+Fleet+`] para facilitar la implantación de aplicaciones en un clúster provisto de CAPI.
+endif::[]
+
+[TIP]
+====
+Para más información sobre el proveedor, consulte el https://rancher.github.io/cluster-api-addon-provider-fleet/[libro].
+====
+
+[WARNING]
+====
+CAAPF depende de la puerta de función `+WatchList+` Kubernetes. Esta función debe habilitarse explícitamente en las versiones de Kubernetes `+1.33+`. Consulte la https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/[documentación de] Kubernetes para obtener más información.
+====
+
+== Funcionalidad
+
+* El proveedor registrará un clúster CAPI recién aprovisionado con `+Fleet+` creando una instancia `+Fleet+` `+Cluster+` con los mismos `+name+` y `+namespace+`. Las aplicaciones pueden desplegarse automáticamente en el clúster creado mediante `+GitOps+`.
+* El proveedor creará automáticamente una Flota `+ClusterGroup+` para cada CAPI `+ClusterClass+` en el espacio de nombres `+ClusterClass+`. Esto le permite desplegar las mismas aplicaciones en todos los clusters creados a partir del mismo `+ClusterClass+`.
+* El proveedor creará automáticamente una Flota `+ClusterGroup+` para cada CAPI referenciado `+ClusterClass+` por `+Cluster+` ubicado en un espacio de nombres diferente de `+ClusterClass+`. Esto le permite desplegar las mismas aplicaciones en todos los clusters que hagan referencia a la misma `+ClusterClass+` en un espacio de nombres concreto.
+
+ifeval::["{build-type}" == "product"]
+Esto permite al usuario especificar un https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/reference/ref-bundle.html[`+Bundle+`] recurso con cargas de trabajo de aplicaciones sin procesar, o bien https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/reference/ref-gitrepo.html[`+GitRepo+`] instalar aplicaciones desde git. Cada uno de los recursos puede proporcionar https://documentation.suse.com/cloudnative/continuous-delivery/latest/en/how-tos-for-users/gitrepo-targets.html#_defining_targets[`+targets+`] cualquier combinación de:
+endif::[]
+ifeval::["{build-type}" == "community"]
+Esto permite al usuario especificar un https://fleet.rancher.io/ref-bundle[`+Bundle+`] recurso con cargas de trabajo de aplicaciones sin procesar o https://fleet.rancher.io/ref-gitrepo[`+GitRepo+`] instalar aplicaciones desde git. Cada uno de los recursos puede proporcionar https://fleet.rancher.io/gitrepo-targets#defining-targets[`+targets+`] cualquier combinación de:
+endif::[]
+
+[source,yaml]
+----
+  targets:
+  - clusterGroup: <cluster-class-name> # If the cluster is created from cluster-class
+  - clusterName: <a specific CAPI cluster name>
+----
+
+Además, `+CAAPF+` propaga automáticamente las etiquetas de clúster de `+CAPI+` al recurso de clúster `+Fleet+`, por lo que los usuarios pueden especificar un objetivo que coincida con una etiqueta de clúster común con:
+
+[source,yaml]
+----
+  targets:
+  - clusterSelector: <label selector for the cluster instances, inherited from CAPI clusters>
+  - clusterGroupSelector: <label selector for the cluster group instances, labels inherited from ClusterClass>
+----
+
+== Plantillas de gráficos Helm basadas en CAPI `+Cluster+` y `+ControlPlane+`
+
+ifeval::["{build-type}" == "product"]
+El *Cluster API Addon Provider Fleet* automatiza aplicaciones https://documentation.suse.com/cloudnative/continuous-delivery/v0.12/en/ref-fleet-yaml.html#_templating[la creación de plantillas de] para clusters CAPI importados basándose en el estado del cluster coincidente. Esta función garantiza que el estado de un clúster y de los recursos CAPI esté siempre actualizado en el campo `+spec.templateValues.ClusterValues+` del recurso de clúster Fleet. Esto permite a los usuarios:
+endif::[]
+ifeval::["{build-type}" == "community"]
+El *Cluster API Addon Provider Fleet* automatiza aplicaciones https://fleet.rancher.io/ref-fleet-yaml#templating[la creación de plantillas de] para clusters CAPI importados basándose en el estado del cluster coincidente. Esta función garantiza que el estado de un clúster y de los recursos CAPI esté siempre actualizado en el campo `+spec.templateValues.ClusterValues+` del recurso de clúster Fleet. Esto permite a los usuarios:
+endif::[]
+
+- Haga referencia a partes específicas del clúster CAPI directamente o mediante patrones de sustitución Helm que hagan referencia a los datos de `+.ClusterValues.Cluster+`.
+- Sustituir en función del estado del recurso del plano de control a través del campo `+.ClusterValues.ControlPlane+`.
+- Sustituir en función del estado del recurso de clúster de infraestructura a través del campo `+.ClusterValues.InfrastructureCluster+`.
+- Mantenga un estado coherente de la aplicación en distintos clústeres.
+- Utilice la misma plantilla para varios clústeres coincidentes a fin de simplificar la implantación y la gestión.
+
+Para obtener más información sobre esta función, consulte https://rancher.github.io/cluster-api-addon-provider-fleet/04_reference/02_templating-strategy.html[la documentación sobre plantillas de] en el libro.
+
+== Ejemplo: despliegue de kindnet CNI
+
+*Demostración*: image:https://asciinema.org/a/seEFHKz5DVpUe5CQvWcddSJBp.svg[asciicast,link=https://asciinema.org/a/seEFHKz5DVpUe5CQvWcddSJBp]
+
+== Ejemplo - despliegue de Calico CNI utilizando GitRepo
+
+*Demostración*: image:https://asciinema.org/a/706570.svg[asciicast,link=https://asciinema.org/a/706570]
+
+Para un tutorial y prerrequisitos, por favor refiérase a https://rancher.github.io/cluster-api-addon-provider-fleet/03_tutorials/04_installing_calico_via_gitrepo.html[tutorial] gitrepo section in the book.
