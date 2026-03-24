@@ -1,0 +1,178 @@
+= ヘルス同期のデバッグ
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+== 概要
+
+xref:/setup/cli/cli-sts.adoc[SUSE Observability CLIを]使用して、ヘルス同期のトラブルシューティングを行い、ヘルスデータがSUSE Observabilityに正しく取り込まれて表示されない問題を修正できます。このページでは、ヘルス同期のデバッグ時に取るべき一般的なトラブルシューティング手順、使用するCLIコマンド、および返されるエラーメッセージの説明について説明します。
+
+== 一般的なトラブルシューティングの手順
+
+ヘルスシンクロナイゼーションをデバッグする際には、具体的な問題が何であれ、共通の検証ステップがいくつかある：
+
+. xref:/configure/health/debug-health-sync.adoc#_list_streams[ストリームが存在することを確認する]。
+. サブストリームを使用している場合は、xref:/configure/health/debug-health-sync.adoc#_list_sub_streams[サブストリームが存在することを確認する]。レスポンスには、サブストリームのチェック状態の数も表示される。これにより、データが取り込まれ処理されているかどうかを知ることができる。
+. さらに調査する：
+ ** *Stream present*-xref:/configure/health/debug-health-sync.adoc#_show_stream_status[ストリームのステータスをチェック]し、ストリームのメトリクス・レイテンシーとxref:/configure/health/debug-health-sync.adoc#_error_messages[エラーを]表示します。
+ ** *ストリーム/サブストリームは存在するが、チェック状態がない*- Receiver APIに送信されるペイロードがxref:/configure/health/send-health-data/send-health-data.adoc[ヘルスペイロード仕様に]準拠していることを確認する。
+ ** *ストリーム/サブストリームが存在しない*- 以下のCLIコマンドを使用して、Receiver APIに送信されたヘルスデータがSUSE Observabilityに到着していることを確認します：
+
+[,sh]
+----
+$ sts topic describe --name sts_health_sync
+----
+
+== よくある問題
+
+=== コンポーネントに表示されないチェック状態
+
+SUSE Observabilityでコンポーネントにチェック状態が表示されない理由は2つあります：
+
+* ヘルスチェックの状態が作成されていない。xref:/configure/health/debug-health-sync.adoc#_general_troubleshooting_steps[一般的なトラブルシューティング]手順に従って、ストリーム/サブストリームが作成され、SUSE Observabilityにデータが到着していることを確認します。
+* ヘルスチェックの状態は作成されましたが、その`+topologyElementIdentifier+` 、SUSE Observabilityトポロジーの`+identifiers+` 。CLIコマンドxref:/configure/health/debug-health-sync.adoc#_show_substream_status[show substream statusを]使用して、`+Check states with identifier which has no matching topology element+` 。
+
+=== SUSE Observabilityでチェック状態の更新に時間がかかる
+
+その主な理由は、ヘルス同期の待ち時間が予想以上に長いことだ。CLIコマンドxref:/configure/health/debug-health-sync.adoc#_show_stream_status[show stream statusを]使用して、ストリームのレイテンシー、メッセージのスループット、および特定のチェック操作を確認する。健康同期に送信するデータや、データを送信する頻度を微調整する必要があるかもしれない。
+
+== 便利なCLIコマンド
+
+=== ストリーム一覧
+
+現在同期しているすべてのヘルスストリームのリストと、それぞれに含まれるサブストリームの数を返す。
+
+[,sh]
+----
+$ sts health list
+STREAM URN                                              | STREAM CONSISTENCY MODEL | SUB STREAM COUNT
+urn:health:sourceId:streamId                            | REPEAT_SNAPSHOTS         | 1
+----
+
+=== サブストリームのリスト
+
+与えられたストリーム URN のすべてのサブストリームのリストを、それぞれのチェック状態の数とともに返す。
+
+[,sh]
+----
+$ sts health list -u urn:health:sourceId:streamId
+SUB STREAM ID  | CHECK STATE COUNT
+subStreamId1   | 1
+subStreamId2   | 1
+----
+
+=== ストリームの状態を表示する
+
+stream statusコマンドは、集約されたストリームの待ち時間とスループットのメトリクスを返します。これは、ヘルスチェックが期待されるトポロジーエレメントに着地するまでに長い時間がかかる理由をデバッグするときに役立つ。SUSE Observabilityに送信するデータの頻度を調整する必要があるかどうかを診断するのに役立ちます。`+StreamMissingSubStream+`出力にはセクション`+Errors for non-existing sub streams:+` が含まれる。サブストリームを作成できなかった場合にのみ関連するエラーもあるからだ。サブストリームエラーには、文書化されたxref:/configure/health/debug-health-sync.adoc#_error_messages[エラーメッセージの]いずれかを使用できます。
+
+[,sh]
+----
+$ sts health status -u urn:health:sourceId:streamId
+----
+
+=== サブストリームの状態を表示
+
+サブストリームステータスは、SUSE Observabilityが外部システムから送信されたチェック状態を既存のトポロジー要素にバインドできたかどうかを確認するのに役立つ情報を提供します。この情報は、特定のチェックが期待されるトポロジーエレメントに表示されない理由をデバッグするのに役立つ。
+
+[,sh]
+----
+$ sts health status -u urn:health:sourceId:streamId -sub-stream-urn subStreamId3
+----
+
+[NOTE]
+====
+サブストリームのステータスは、一貫性モデルに関連するメタデータを表示する：
+
+* *リピートスナップショット*- リピート間隔と有効期限を表示します。
+* *トランザクションインクリメント*- チェックポイントオフセットとチェックポイントバッチインデックスを表示します。
+====
+
+
+サブストリームのステータスは、`+-t+` コマンドライン引数を使うことで、マッチしたチェック状態とマッチしていないチェック状態の詳細を含むように拡張することができる。これは、トポロジーエレメントにアタッチされていないヘルスステートを識別するのに役立つ。
+以下の例では、`+checkStateId2+` が`+Check states with identifier which has no matching topology element+` の下にリストされている。これは、チェック状態を識別子`+server-2+` を持つトポロジーエレメントにマッチさせることができなかったことを意味する。
+
+[,sh]
+----
+$ sts health status -u urn:health:sourceId:streamId -sub-stream-urn subStreamId3 -t
+----
+
+=== ヘルスストリームを削除する
+
+`+delete+` ストリーム機能は、SUSE Observabilityでヘルス同期を設定する際に役立ちます。それを使って実験し、データを削除して、またきれいにやり直すことができる。また、そのストリームを使い続けたくないと確信したら、ストリームを削除してデータを落とすこともできる。
+
+[,sh]
+----
+$ sts health delete -u urn:health:sourceId:streamId
+----
+
+=== ヘルスストリームエラーの解消
+
+`+clear-errors+` オプションは、ヘルスストリームからすべてのエラーを削除する。これは、SUSE Observabilityでヘルス同期を設定するときや、`+TRANSACTIONAL_INCREMENTS+` 整合性モデルの場合、一部のエラーを有機的に削除できないときに役立ちます。たとえば、チェック状態がSUSE Observabilityに知られていない場合、チェック状態の削除要求でエラーが発生することがあります。このようなエラーを抑制する唯一の方法は、`+clear-errors+` 。
+
+[,sh]
+----
+$ sts health clear-error -u urn:health:sourceId:streamId
+----
+
+== エラーメッセージ
+
+[NOTE]
+====
+記載された問題が改善された時点で、エラーはクローズされます。
+
+例えば、`+SubStreamStopWithoutStart+` 、健全性同期がスナップショット開始メッセージとスナップショット停止メッセージを観測すると、クローズされる。
+====
+
+
+|===
+| エラー | 説明
+
+| *StreamMissingSubStream*
+| ヘルス同期が、`+start_snapshot+` または`+expiry+` として、以前のストリーム設定メッセージのないメッセージを受信したときに発生。
+
+| *StreamConsistencyModelMismatch*
+| ストリームが作成されたときに指定された一貫性モデルとは異なる一貫性モデルに属するメッセージを受信したときに発生します。
+
+| *StreamMissingSubStream*
+| 健全性同期が以前の開始スナップショットが配置されたメッセージを受信したときに発生します。
+
+| *SubStreamRepeatIntervalTooHigh*
+| ヘルス同期が、設定された最大30分を超える`+repeat_interval_s+` 。
+
+| *SubStreamStartWithoutStop*
+| 以前のスナップショットがまだ開いているときに、健全性同期がスナップショットを開くための2番目のメッセージを受信したときに発生します。
+
+| *SubStreamCheckStateOutsideSnapshot*
+| 健全性同期が、以前にスナップショットを開いていない状態で外部チェック状態を受信した場合に発生します。
+
+| *SubStreamStopWithoutStart*
+| 健全性同期がスナップショットをまったく開始していない状態でスナップショット停止メッセージを受信した場合に発生します。
+
+| *SubStreamMissingStop*
+| 健全性同期が、開始スナップショットメッセージで確立された`+repeat_interval_s+` の2倍のタイムアウト時間を経過しても停止スナップショットを受信しない場合に発生します。この場合、自動停止スナップショットが適用される。
+
+| *SubStreamExpired*
+| ヘルス同期が、設定された`+expiry_interval_s+` を超える時間、特定のサブストリームのデータ受信を停止した場合に発生。この場合、サブストリームは削除される。
+
+| *SubStreamLateData*
+| 健康状態の同期が、確立された`+repeat_interval_s+` に基づいて、完全なスナップショットをタイムリーに受信しなかった場合に発生します。
+
+| *SubStreamTransformerError*
+| ヘルスシンクロナイゼーションが、レシーバーに送られたペイロードを解釈できない場合に発生する。例えば、ペイロード`+{"checkStateId":"checkStateId3","health":"deviating","message":"Unable to provision the device. ","topologyElementIdentifier":"server-3"}+` 、変換`+Default Transformation+` 。
+
+| *SubStreamMissingCheckpoint*
+| トランザクションがサブストリームをインクリメントする際にチェックポイントが行われたが、受信したメッセージに `+previous_checkpoint+`
+
+| *SubStreamInvalidCheckpoint*
+| Transactionalインクリメントサブストリームが以前にチェックポイントを観測したが、受信したメッセージが最後に観測したものと等しくない`+previous_checkpoint+` 。
+
+| *SubStreamOutdatedCheckpoint*
+| トランザクション・インクリメント・サブストリームが以前にチェックポイントを観察したが、受信したメッセージが最後に観察したものより前の`+checkpoint+` 、SUSE Observabilityがすでに受信したデータであることを意味する場合に発生します。
+
+| *SubStreamUnknownCheckState*
+| Transactionalを削除するとcheck_stateがインクリメントされ、`+check_state_id+` がサブストリームに存在しない場合に発生。
+|===
+
+== 参照
+
+* xref:/setup/cli/cli-sts.adoc[SUSE Observability CLIのインストール]
