@@ -1,0 +1,396 @@
+include::partial$variables.adoc[]
+= 使用 Pod 安全接入 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 在 Kubernetes 集群中使用{project-name} 配置 Pod 安全接入，以确保 Pod 的安全。
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-distributor", "kubewarden-integrator"]
+:doc-topic: ["pod-security-admission-with-kubewarden"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}"、"kubewarden"、"pod 安全许可"、"pod 安全策略"、"kubernetes"]
+:sidebar_label: 舱位安全接纳
+:sidebar_position: 30
+:current-version: {page-origin-branch}
+
+自 Kubernetes 1.25 版本发布后，已移除 Pod 安全策略 (PSP)。
+取而代之的是https://kubernetes.io/docs/concepts/security/pod-security-admission/[Pod Security Admission](PSA)。
+
+PSA 简化了 Kubernetes 集群中 Pod 的安全保护。
+
+PSA 有三个命名空间配置文件（描述为https://kubernetes.io/docs/concepts/security/pod-security-standards/[在 Pod 安全标准中] ）：
+
+* *特权*，提供最广泛的权限
+* *基线*，以防止新的权限升级
+* *限制*，限制硬化花苞
+
+PSA 控制器会在检测到违规行为时采取行动。
+这些行动是`+enforce+`,`+audit+`, 和`+warn+` 。
+可以对它们进行配置。
+
+在撰写本文时，对于 Kubernetes 1.28，PSA 控制器有以下限制：
+
+* 无突变能力
+* 只有启用`+audit+` 或`+warn+` 模式时，才会对更高级别的对象（如`+Deployment+`,`+Job+` ）进行评估
+
+{short-project-name} 可用于*整合*PSA 配置文件，以避免这些限制。
+
+[NOTE]
+====
+
+如xref:howtos/psp-migration.adoc[PSP 迁移]所示，您可以使用{short-project-name} 替换旧的 PSP 配置。
+不过，本文的目的是介绍{short-project-name} 如何与新的 PSA 相辅相成。
+====
+
+
+== 示例
+
+在本例中，我们创建了一个命名空间，并应用了限制性 PSA 策略：
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-namespace
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.25
+EOF
+----
+
+该 PSA 配置文件不允许创建以`+root+` 用户身份运行应用程序的容器。
+定义此容器时：
+
+* `+runAsNonRoot+` 属性必须设置为 `+true+`
+* `+runAsUser+` 不能设置为`+0+` 。
+
+因此，下面的资源将无法达到预期状态：
+
+.`+kubectl+` 命令配置资源，`+runAsUser: 0+` （标记为 ➀）
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 0 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 0+`
+=====
+
+如果我们检查一下部署，就会发现 PSA 阻止了 pod 的创建：
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:09:56Z",
+  "lastUpdateTime": "2022-10-28T19:09:56Z",
+  "message": "pods \"nginx-deployment-5f98b4db8c-2m96l\" is forbidden: violates PodSecurity \"restricted:v1.25\": runAsUser=0 (container \"nginx\" must not set runAsUser=0)",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+您可以从容器定义中删除`+runAsUser: 0+` 来解决这个问题：
+
+.`+kubectl+` 命令配置资源，而不使用 `+runAsUser: 0+`
+[%collapsible]
+=====
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+=====
+
+现在 PSA 允许尝试创建 pod，但仍然失败。
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace
+NAME                                READY   STATUS                       RESTARTS   AGE
+nginx-deployment-57d8568bbb-h4bx7   0/1     CreateContainerConfigError   0          47s
+----
+
+这是因为容器定义没有指定在容器内启动程序时使用的用户。
+如果是这种情况，默认以根用户身份运行。
+`+runAsNonRoot+` 指令不允许这样做：
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-h4bx7 -o json | jq ".status.containerStatuses"
+[
+  {
+    "image": "nginx:1.14.2",
+    "imageID": "",
+    "lastState": {},
+    "name": "nginx",
+    "ready": false,
+    "restartCount": 0,
+    "started": false,
+    "state": {
+      "waiting": {
+        "message": "container has runAsNonRoot and image will run as root (pod: \"nginx-deployment-57d8568bbb-8mvkc_my-namespace(add7bcc5-3d23-43d0-94e9-6e78f887a53f)\", container: nginx)",
+        "reason": "CreateContainerConfigError"
+      }
+    }
+  }
+]
+----
+
+这正是{short-project-name} 可以提供帮助的地方。
+您可以使用https://artifacthub.io/packages/kubewarden/user-group-psp/user-group-psp[`+user-group-policy+`]策略来更改部署定义。
+这将为省略该信息的容器配置默认用户。
+
+[NOTE]
+====
+
+本例中，您需要在 Kubernetes 集群中使用{short-project-name} 堆栈。
+更多详情，请参阅xref:quick-start.adoc[快速入门]。
+====
+
+
+可以执行用户 ID 范围，例如 1000--2000 和 4000--5000：
+
+.强制用户 ID 范围的 kubectl 命令
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: user-group-psp
+spec:
+  policyServer: default
+  module: registry://ghcr.io/kubewarden/policies/user-group-psp:latest
+  rules:
+  - apiGroups: ["", "apps"]
+    apiVersions: ["v1"]
+    resources: ["pods", "deployments"]
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: true
+  settings:
+    run_as_user:
+      rule: "MustRunAs"
+      overwrite: false
+      ranges:
+        - min: 1000
+          max: 2000
+        - min: 4000
+          max: 5000
+    run_as_group:
+      rule: "RunAsAny"
+    supplemental_groups:
+      rule: "RunAsAny"
+EOF
+----
+
+======
+
+继续之前，请检查该策略是否有效：
+
+[subs="+attributes",shell]
+----
+kubectl get clusteradmissionpolicy.policies.kubewarden.io/user-group-psp
+----
+
+策略激活后，重新创建部署：
+
+.重新创建部署的 kubectl 命令
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl delete deployment -n my-namespace nginx-deployment && \
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+
+        ports:
+        - containerPort: 80
+EOF
+----
+
+======
+
+现在，{short-project-name} 的策略允许启动 Pod，从而使部署发生变化。
+Pod 内部定义的容器有一个默认的`+runAsUser+` 值：
+
+[subs="+attributes",shell]
+----
+kubectl get pods -n my-namespace nginx-deployment-57d8568bbb-nv8fj -o json | jq ".spec.containers[].securityContext"
+{
+  "allowPrivilegeEscalation": false,
+  "capabilities": {
+    "drop": [
+      "ALL"
+    ]
+  },
+  "runAsNonRoot": true,
+  "runAsUser": 1000,
+  "seccompProfile": {
+    "type": "RuntimeDefault"
+  }
+}
+----
+
+在这种情况下，{short-project-name} 集成可以做得更多。
+它可以检查所提供的`+runAsUser+` 的值。
+
+{short-project-name} 政策拒绝接受该资源：
+
+.显示资源拒绝的 kubectl 命令
+[%collapsible]
+======
+
+[subs="+attributes",shell]
+----
+kubectl apply -n my-namespace -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment2
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: template-nginx
+  template:
+    metadata:
+      labels:
+        app: template-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 7000 <1>
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+          seccompProfile:
+            type: "RuntimeDefault"
+        ports:
+        - containerPort: 80
+EOF
+----
+<1> `+runAsUser: 7000+`
+======
+
+拒绝的原因是`+runAsUser+` 值设置为`+7000+` ，超出了策略允许的范围：
+
+[subs="+attributes",shell]
+----
+kubectl get deploy -n my-namespace nginx-deployment -o json | jq ".status.conditions[] | select(.reason == \"FailedCreate\")"
+{
+  "lastTransitionTime": "2022-10-28T19:22:04Z",
+  "lastUpdateTime": "2022-10-28T19:22:04Z",
+  "message": "admission webhook \"clusterwide-user-group-psp.kubewarden.admission\" denied the request: User ID outside defined ranges",
+  "reason": "FailedCreate",
+  "status": "True",
+  "type": "ReplicaFailure"
+}
+----
+
+== 摘要
+
+PSA 提供了一种保护 Kubernetes 集群安全的简单方法。
+PSA 的主要目标是简单，它不具备早期 PSP 的强大功能和灵活性。
+
+将{short-project-name} 与 PSA 结合使用有助于填补这一空白。
