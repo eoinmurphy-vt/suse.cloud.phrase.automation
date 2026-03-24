@@ -1,0 +1,91 @@
+= トポロジー・スコープ
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability セルフホスト
+
+WARNING: クエリーによるトポロジースコーピングは非推奨の機能です。これは、特定のラベルを持つすべてのコン ポーネントへのアクセスを許可する`+get-topology+` パーミッションに取って代わられる。
+
+== トポロジー・スコープはどのように機能するのか？
+
+トポロジースコープは、SUSE Observabilityで実行されるすべてのトポロジークエリのプレフィックスとして、`+get-topology+` パーミッションと組み合わされるxref:/develop/reference/k8sTs-stql_reference.adoc[STQLクエリ]です。ユーザがSUSE Observabilityでビューを選択したりクエリを渡したりする場合、このプレフィックスクエリがユーザのクエリの一部として実行されます。これにより、ユーザーの役割に一致する結果が制限されます。
+
+NOTE: `+withCauseOf+` 、`+withNeighborsOf+` のような関数呼び出しは、この文脈では実行できないのでサポートされていない。
+
+ユーザーが複数のグループに属している場合、複数のトポロジースコープを持つことができ、複数のプレフィックスに変換される。ここで、接頭辞は、ユーザーが持つすべてのトポロジースコープの OR として実行される。
+
+ユーザは、ロールや権限が変更されるたびに、SUSE Observabilityからログアウトして再度認証する必要があります。
+
+== なぜトポロジー・スコープなのか？
+
+トポロジー・スコープは、SUSE Observability内のサブジェクトのセキュリティ機能です。定義済みのSUSE Observabilityロールの管理者、パワーユーザー、およびゲストには、トポロジースコープが定義されていません。
+
+トポロジー・スコープをクエリーのワイルドカードとして指定することは可能だが、この場合、あらゆるものにアクセスすることになり、推奨されない。トポロジースコープなしでアクセスする必要がある場合は、代わりにxref:/setup/security/rbac/rbac_permissions.adoc#_predefined_roles[定義済みのロールの]いずれかを使用することをお勧めします。
+
+== 例
+
+以下の例では、異なる権限レベルを持つ4人のユーザーの「All Infrastructure」という同じトポロジービューを示しています。
+
+=== このユーザはSUSE Observability Adminグループの一員であるため、トポロジのスコープはありません：
+
+image::v51_allperm.png[全文表示許可]
+
+このビューのクエリは他のビューと同じですが、接頭辞はありません：
+
+[,text]
+----
+'layer = "Infrastructure" AND domain IN ("Customer1", "Customer2")'
+----
+
+=== 以下のユーザーは、以下のトポロジースコープを持つ、設定されたサブジェクトXを持つグループに属している：
+
+[,text]
+----
+'domain = "Customer1"'
+----
+
+image::v51_esx1perm.png[限定的な見解]
+
+このビューの接頭辞を持つクエリは次のとおり：
+
+[,text]
+----
+'(domain = "Customer1") AND (layer = "Infrastructure" AND domain IN ("Customer1", "Customer2"))'
+----
+
+=== 以下のトポロジースコープを持つ、設定されたサブジェクトYを持つグループの一部である別のユーザー：
+
+[,text]
+----
+'domain = "Customer2"'
+----
+
+このトポロジーを取得する：
+
+image::v51_esx2perm.png[限定的な見解]
+
+このビューの接頭辞を持つクエリは次のとおり：
+
+[,text]
+----
+'(domain = "Customer2") AND (layer = "Infrastructure" AND domain IN ("Customer1", "Customer2"))'
+----
+
+=== 複数の接頭辞を持つユーザー
+
+被験者を複数のグループに割り当てることも可能だ。この例では、インフラストラクチャー・マネジャーが、上に示したビュー全体を見ることができる。この場合、ユーザークエリの接頭辞は以下のようになります：
+
+[,text]
+----
+'(domain = "Customer1" OR domain = "Customer2")'
+----
+
+このユーザーに対する接頭辞付きのクエリーは次のようになる：
+
+[,text]
+----
+'(domain = "Customer1" OR domain = "Customer2") AND (layer = "Infrastructure" AND domain IN ("Customer1", "Customer2"))'
+----
+
+その結果、次のようになる：
+
+image::v51_allperm.png[全文表示許可]
