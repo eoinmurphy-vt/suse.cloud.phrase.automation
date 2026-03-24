@@ -1,17 +1,17 @@
 = PromQL-Abfragen für repräsentative Diagramme schreiben
 :revdate: 2025-07-10
 :page-revdate: {revdate}
-:description: SUSE Observability
+:description: SUSE Observabilität
 
-== Richtlinien
+== Leitlinien
 
-Wenn SUSE Observability Daten in einem Diagramm anzeigt, muss es fast immer die Auflösung der gespeicherten Daten ändern, um sie in den verfügbaren Platz für das Diagramm einzupassen. Um die repräsentativsten Diagramme zu erhalten, befolgen Sie diese Richtlinien:
+Wenn SUSE Observability Daten in einem Diagramm anzeigt, muss es fast immer die Auflösung der gespeicherten Daten ändern, damit sie in den verfügbaren Platz für das Diagramm passen. Um möglichst repräsentative Diagramme zu erhalten, befolgen Sie diese Richtlinien:
 
-* Fragen Sie nicht nach der Rohmetrik, sondern aggregieren Sie immer über die Zeit (unter Verwendung der `*_over_time` oder `rate` Funktionen).
-* Verwenden Sie den `${__interval}` Parameter als Bereich für Aggregationen über die Zeit, er wird sich automatisch mit der Auflösung des Diagramms anpassen.
-* Verwenden Sie den `${__rate_interval}` Parameter als Bereich für `rate` Aggregationen, er wird sich ebenfalls automatisch mit der Auflösung des Diagramms anpassen, berücksichtigt jedoch spezifische Verhaltensweisen von `rate`.
+* Fragen Sie nicht die Rohdaten ab, sondern aggregieren Sie immer über die Zeit (mit den Funktionen `*_over_time` oder `rate` ).
+* Verwenden Sie den Parameter `${__interval}` als Bereich für Aggregationen über die Zeit, er wird automatisch an die Auflösung des Diagramms angepasst.
+* Verwenden Sie den Parameter `${__rate_interval}` als Bereich für `rate` Aggregationen, er passt sich auch automatisch an die Auflösung des Diagramms an, berücksichtigt aber das spezifische Verhalten von `rate`.
 
-Die Anwendung einer Aggregation bedeutet oft, dass ein Kompromiss eingegangen wird, um bestimmte Muster in den Metriken mehr als andere zu betonen. Zum Beispiel zeigt `max_over_time` bei großen Zeitfenstern alle Spitzen, aber nicht alle Täler. Während `min_over_time` das genaue Gegenteil tut und `avg_over_time` sowohl Spitzen als auch Täler glätten wird. Um dieses Verhalten zu zeigen, hier ist ein Beispiel für eine Metrikbindung unter Verwendung der CPU-Nutzung von Pods. Um es selbst auszuprobieren, kopieren Sie es in eine YAML-Datei und verwenden Sie die xref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[Kommandozeilenschnittstelle, um es anzuwenden] in Ihrer eigenen SUSE Observability (Sie können es später entfernen).
+Die Anwendung einer Aggregation bedeutet oft, dass ein Kompromiss eingegangen wird, um bestimmte Muster in den Metriken stärker zu betonen als andere. Bei großen Zeitfenstern zeigt `max_over_time` beispielsweise alle Spitzenwerte, aber nicht alle Tiefstwerte an. `min_over_time` bewirkt genau das Gegenteil, und `avg_over_time` glättet sowohl Spitzen als auch Tiefpunkte. Um dieses Verhalten zu verdeutlichen, hier ein Beispiel für eine metrische Bindung anhand der CPU-Auslastung von Pods. Um es selbst auszuprobieren, kopieren Sie es in eine YAML-Datei und verwenden Sie die xref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[CLI, um es] in Ihrem eigenen SUSE Observability xref:/use/metrics/k8s-add-charts.adoc#_create_or_update_the_metric_binding_in_stackstate[anzuwenden] (Sie können es später wieder entfernen).
 
 ----
 nodes:
@@ -43,56 +43,52 @@ nodes:
   scope: (label = "stackpack:kubernetes" and type = "pod")
 ----
 
-Nach der Anwendung öffnen Sie die Metrikperspektive für einen Pod in SUSE Observability (vorzugsweise einen Pod mit einigen Spitzen und Tälern in der CPU-Nutzung). Vergrößern Sie das Diagramm mit dem Symbol in der oberen rechten Ecke, um eine bessere Ansicht zu erhalten. Jetzt können Sie auch das Zeitfenster ändern, um zu sehen, welche Auswirkungen die verschiedenen Aggregationen haben (30 Minuten vs. 24 Stunden zum Beispiel).
+Öffnen Sie nach der Anwendung die Metrikperspektive für einen Pod in SUSE Observability (vorzugsweise einen Pod mit einigen Spitzen und Tälern in der CPU-Auslastung). Vergrößern Sie das Diagramm über das Symbol in der rechten oberen Ecke, um eine bessere Ansicht zu erhalten. Jetzt können Sie auch das Zeitfenster ändern, um zu sehen, wie sich die verschiedenen Aggregationen auswirken (z. B. 30 Minuten gegenüber 24 Stunden).
 
 [CAUTION]
 ====
-Wenn die Metrikbindung keine Aggregation angibt, wird SUSE Observability automatisch die `last_over_time` Aggregation verwenden, um die Anzahl der Datenpunkte für ein Diagramm zu reduzieren. Siehe auch xref:/use/metrics/k8s-writing-promql-for-charts.adoc#_why[Warum ist das notwendig?] für eine Erklärung.
+Wenn in der Metrikbindung keine Aggregation angegeben ist, verwendet SUSE Observability automatisch die Aggregation `last_over_time`, um die Anzahl der Datenpunkte für ein Diagramm zu reduzieren. Siehe auch xref:/use/metrics/k8s-writing-promql-for-charts.adoc#_why[Warum ist das notwendig?] für eine Erklärung.
 ====
 
 
-image::k8s/metric-aggregation-differences-30m.png[Das Diagramm für diese Metrikbindung für die letzten 30 Minuten, there are only a few lines in the chart visible because most time series are on top of each other]
-image::k8s/metric-aggregation-differences-24h.png[Das gleiche Diagramm, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
+image::k8s/metric-aggregation-differences-30m.png[Das Diagramm für diese Metrik ist für die letzten 30m verbindlich, there are only a few lines in the chart visible because most time series are on top of each other]image::k8s/metric-aggregation-differences-24h.png[. Das gleiche Diagramm, same component and same end time, but now for the last 24h. It shows, sometimes completely, different results for the different aggregations]
 
-== Warum ist das notwendig?
+== Warum ist dies notwendig?
 
-Zunächst einmal, warum sollten Sie eine Aggregation verwenden? Es macht keinen Sinn, mehr Datenpunkte aus dem Metrik-Speicher abzurufen, als im Diagramm Platz finden. Daher bestimmt SUSE Observability automatisch den benötigten Schritt zwischen 2 Datenpunkten, um ein gutes Ergebnis zu erzielen. Für kurze Zeitfenster (zum Beispiel ein Diagramm, das nur 1 Stunde Daten anzeigt) ergibt sich ein kleiner Schritt (etwa 10 Sekunden). Metriken werden oft nur alle 30 Sekunden erfasst, sodass bei 10-Sekunden-Schritten der gleiche Wert für 3 Schritte wiederholt wird, bevor er zum nächsten Wert wechselt. Wenn man auf ein Zeitfenster von 1 Woche herauszoomt, ist ein viel größerer Schritt erforderlich (etwa 1 Stunde, abhängig von der genauen Größe des Diagramms auf dem Bildschirm).
+Zunächst einmal: Warum sollten Sie ein Aggregat verwenden? Es ist nicht sinnvoll, mehr Datenpunkte aus dem metrischen Speicher abzurufen, als in das Diagramm passen. Daher bestimmt SUSE Observability automatisch den Schritt, der zwischen 2 Datenpunkten erforderlich ist, um ein gutes Ergebnis zu erzielen. Bei kurzen Zeitfenstern (z. B. einem Diagramm mit Daten von nur einer Stunde) ergibt sich ein kleiner Schritt (etwa 10 Sekunden). Metriken werden oft nur alle 30 Sekunden erfasst, so dass sich bei 10-Sekunden-Schritten derselbe Wert drei Schritte lang wiederholt, bevor zum nächsten Wert gewechselt wird. Das Herauszoomen auf ein Zeitfenster von 1 Woche erfordert einen viel größeren Schritt (etwa 1 Stunde, je nach der genauen Größe des Diagramms auf dem Bildschirm).
 
-Wenn die Schritte größer werden als die Auflösung der erfassten Datenpunkte, muss eine Entscheidung getroffen werden, wie die Datenpunkte des 1-Stunden-Zeitraums in einen einzelnen Wert zusammengefasst werden. Wenn in der Abfrage bereits eine Aggregation über die Zeit angegeben ist, wird diese verwendet, um dies zu tun. Wenn jedoch keine Aggregation angegeben ist oder wenn das Aggregationsintervall kleiner ist als der Schritt, wird die `last_over_time` Aggregation verwendet, mit der `step` Größe als Intervall. Das Ergebnis ist, dass nur der letzte Datenpunkt für jede Stunde verwendet wird, um alle Datenpunkte in dieser Stunde zusammenzufassen.
+Wenn die Schritte größer werden als die Auflösung der gesammelten Datenpunkte, muss eine Entscheidung getroffen werden, wie die Datenpunkte des 1-Stunden-Zeitraums zu einem einzigen Wert zusammengefasst werden können. Wenn eine Aggregation über die Zeit bereits in der Abfrage angegeben ist, wird sie dafür verwendet. Wird jedoch keine Aggregation angegeben oder ist das Aggregationsintervall kleiner als der Schritt, wird die Aggregation `last_over_time` verwendet, wobei die Größe `step` das Intervall darstellt. Das Ergebnis ist, dass nur der letzte Datenpunkt für jede Stunde verwendet wird, um alle Datenpunkte in dieser Stunde "zusammenzufassen".
 
-Zusammenfassend lässt sich sagen, dass bei der Ausführung einer PromQL-Abfrage für einen Zeitraum von 1 Woche mit einem Schritt von 1 Stunde diese Abfrage:
+Zusammenfassend lässt sich sagen, dass bei der Ausführung einer PromQL-Abfrage für einen Zeitbereich von 1 Woche mit einem Schritt von 1 Stunde diese Abfrage:
 
 ----
 container_cpu_usage /1000000000
 ----
 
-automatisch in Folgendes umgewandelt wird:
+wird automatisch umgewandelt in:
 
 ----
 last_over_time(container_cpu_usage[1h]) /1000000000
 ----
 
-Probieren Sie es selbst im https://play.stackstate.com/#_/metrics?promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock_shop%22%2C%20pod_name%3D~%22carts.%2A%22%7D%5B%24%7B%5F%5Finterval%7D%5D%29%20%2F%201000000000&timeRange=LAST_7_DAYS[SUSE Observability Playground] aus.
+Probieren Sie es selbst aus auf dem https://play.stackstate.com/#_/metrics?promql=last_over_time%28container_cpu_usage%7Bnamespace%3D%22sock_shop%22%2C%20pod_name%3D~%22carts.%2A%22%7D%5B%24%7B%5F%5Finterval%7D%5D%29%20%2F%201000000000&timeRange=LAST_7_DAYS[Observability-Spielplatz] SUSE.
 
-image::k8s/k8s-metric-queries-for-chart-last-over-time.png[Letzte über die Zeit]
-image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[Max über die Zeit mit festem Bereich]
-image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[Max über die Zeit mit automatischem Bereich]
+image::k8s/k8s-metric-queries-for-chart-last-over-time.png[Letzte über Zeit]image::k8s/k8s-metric-queries-for-chart-max-over-time-fixed-range.png[Max über Zeit mit festem Bereich]image::k8s/k8s-metric-queries-for-chart-max-over-time-interval.png[Max über Zeit mit automatischem Bereich]
 
-Oft ist dieses Verhalten nicht beabsichtigt, und es ist besser, selbst zu entscheiden, welche Art von Aggregation benötigt wird. Mit verschiedenen Aggregationsfunktionen ist es möglich, bestimmtes Verhalten zu betonen (auf Kosten, anderes Verhalten zu verbergen). Ist es wichtiger, Spitzen, Täler, ein glattes Diagramm usw. zu sehen? Verwenden Sie dann den `${__interval}` Parameter für den Bereich, da er automatisch durch die `step` Größe ersetzt wird, die für die Abfrage verwendet wird. Das Ergebnis ist, dass alle Datenpunkte im Schritt verwendet werden.
+Oft ist dieses Verhalten nicht beabsichtigt, und es ist besser, selbst zu entscheiden, welche Art von Aggregation erforderlich ist. Mit Hilfe verschiedener Aggregationsfunktionen ist es möglich, bestimmte Verhaltensweisen hervorzuheben (auf Kosten der Ausblendung anderer Verhaltensweisen). Ist es wichtiger, Spitzenwerte, Talsohlen, ein glattes Diagramm usw. zu sehen? Verwenden Sie dann den Parameter `${__interval}` für den Bereich, da dieser automatisch durch die für die Abfrage verwendete `step` Größe ersetzt wird. Das Ergebnis ist, dass alle Datenpunkte des Schritts verwendet werden.
 
-image::k8s/k8s-metric-queries-small-range.png[Ein fester Bereich, shorter than the data resolution]
-image::k8s/k8s-metric-queries-interval-for-range.png[Automatischer Bereich, based on step but with a lower limit]
+image::k8s/k8s-metric-queries-small-range.png[Ein fester Bereich, shorter than the data resolution]image::k8s/k8s-metric-queries-interval-for-range.png[Automatischer Bereich, based on step but with a lower limit]
 
-Der `${__interval}` Parameter verhindert ein weiteres Problem. Wenn die `step` Größe und damit der `${__interval}` Wert auf eine kleinere Größe als die Auflösung der gespeicherten Metrikdaten schrumpfen würde, würde dies zu Lücken im Diagramm führen.
+Der Parameter `${__interval}` verhindert ein weiteres Problem. Wenn die Größe von `step` und damit der Wert von `${__interval}` auf eine kleinere Größe als die Auflösung der gespeicherten metrischen Daten schrumpfen würde, würde dies zu Lücken im Diagramm führen.
 
-Daher wird `${__interval}` niemals kleiner als das 2-fache des standardmäßigen Abfrageintervalls (das standardmäßige Abfrageintervall beträgt 30 Sekunden) des SUSE Observability-Agenten.
+Daher wird `${__interval}` niemals kleiner als das 2* Standard-Scrape-Intervall (das Standard-Scrape-Intervall beträgt 30 Sekunden) des SUSE Observability-Agenten sein.
 
-Schließlich benötigt die `rate()` Funktion mindestens 2 Datenpunkte im Intervall, um überhaupt eine Rate zu berechnen. Mit weniger als 2 Datenpunkten wird die Rate keinen Wert haben. Daher ist `${__rate_interval}` garantiert immer mindestens das 4-fache des Abfrageintervalls. Dies garantiert, dass es keine unerwarteten Lücken oder andere seltsame Verhaltensweisen in den Raten-Diagrammen gibt, es sei denn, Daten fehlen.
+Schließlich erfordert die Funktion `rate()`, dass mindestens 2 Datenpunkte im Intervall liegen, damit überhaupt eine Rate berechnet werden kann. Bei weniger als 2 Datenpunkten hat die Rate keinen Wert. Daher ist garantiert, dass `${__rate_interval}` immer mindestens 4 * das Scrape-Intervall beträgt. Dies garantiert, dass keine unerwarteten Lücken oder andere seltsame Verhaltensweisen in Kurstabellen auftreten, es sei denn, es fehlen Daten.
 
-Es gibt einige ausgezeichnete Blogbeiträge im Internet, die dies ausführlicher erklären:
+Im Internet gibt es einige hervorragende Blogbeiträge, die dies näher erläutern:
 
 * https://www.robustperception.io/step-and-query_range/[Schritt und Abfragebereich]
-* https://www.robustperception.io/what-range-should-i-use-with-rate/[Welchen Bereich sollte ich mit rate() verwenden?]
+* https://www.robustperception.io/what-range-should-i-use-with-rate/[Welchen Bereich sollte ich bei rate() verwenden?]
 * https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-%5F%5Frate_interval-for-prometheus-rate-queries-that-just-work/[Einführung von __rate_interval in Grafana]
 
 == Siehe auch
@@ -100,6 +96,6 @@ Es gibt einige ausgezeichnete Blogbeiträge im Internet, die dies ausführlicher
 Einige weitere Ressourcen zum Verständnis von PromQL-Abfragen:
 
 * https://promlabs.com/blog/2020/06/18/the-anatomy-of-a-promql-query/[Anatomie einer PromQL-Abfrage]
-* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[Auswahl von Daten in PromQL]
-* https://iximiuz.com/en/posts/prometheus-vector-matching/[Anleitung zum Verbinden mehrerer Metriken]
-* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[Aggregation über die Zeit]
+* https://promlabs.com/blog/2020/07/02/selecting-data-in-promql/[Daten in PromQL auswählen]
+* https://iximiuz.com/en/posts/prometheus-vector-matching/[Wie man mehrere Metriken verbindet]
+* https://iximiuz.com/en/posts/prometheus-functions-agg-over-time/[Aggregation im Zeitverlauf]
