@@ -1,0 +1,165 @@
+include::partial$variables.adoc[]
+= 创建新政策
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 创建一个策略，对所有命名空间资源进行评估，并禁止在默认命名空间中创建这些资源，以便进行实践学习。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "create-policy"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"创建策略"、"开放策略代理"、"opa"、"rego"]
+:sidebar_label: 创建新政策
+:current-version: {page-origin-branch}
+
+您可以创建一个有助于理解重要概念的政策样本。
+
+[NOTE]
+====
+您可以使用https://github.com/kubewarden/opa-policy-template[] kubewarden/opa-policy-template 移植现有策略。
+====
+
+
+== 要求
+
+本节将介绍策略的编写、编译和执行。
+完成本教程需要这些工具：
+
+* https://github.com/open-policy-agent/opa/releases[`+opa+`]注意：您将使用`+opa+` CLI 将策略构建为`+wasm+` 目标。
+* https://github.com/kubewarden/kwctl/releases[`+kwctl+`]注意：您将使用`+kwctl+` 来执行您构建的策略。
+
+== 政策
+
+您将创建一个策略，用于评估任何类型的命名空间资源。
+其目的是在目标命名空间为`+default+` 时禁止创建任何资源。否则，请求将被接受。
+首先创建一个名为`+opa-policy+` 的文件夹。
+
+在`+opa-policy+` 文件夹中创建名为`+data+` 的文件夹。
+该文件夹包含 Kubernetes API 服务器记录的`+AdmissionReview+` 对象。
+为了简化练习，我们减少了这些内容，这样你就可以专注于重要的部分。
+
+在`+data+` 目录中创建`+default-ns.json+` 文件，内容如下：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "default",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+这将模拟在`+default+` 命名空间内创建 pod 操作。
+现在，在`+data+` 目录内的`+other-ns.json+` 中创建另一个请求示例：
+
+[subs="+attributes",json]
+----
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+    "operation": "CREATE",
+    "object": {
+      "kind": "Pod",
+      "apiVersion": "v1",
+      "metadata": {
+        "name": "nginx",
+        "namespace": "other",
+        "uid": "04dc7a5e-e1f1-4e34-8d65-2c9337a43e64"
+      }
+    }
+  }
+}
+----
+
+您可以看到这模拟了另一个 pod 创建请求，这次是在名为`+other+` 的命名空间下。
+
+返回`+opa-policy+` 文件夹，开始编写您的 Rego 政策。
+
+在`+opa-policy+` 文件夹中创建一个名为`+request.rego+` 的文件。
+名字可以是任何东西，但这次练习就用这个名字。
+这是一个 Rego 文件，包含有关请求/响应本身的实用程序代码。
+特别是，它可以让你简化策略代码，并在不同的策略中重复使用这一通用部分。
+
+内容如下
+
+[,rego]
+----
+package policy
+
+import data.kubernetes.admission
+
+main = {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": response,
+}
+
+response = {
+    "uid": input.request.uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", admission.deny)
+    reason != ""
+} else = {
+    "uid": input.request.uid,
+    "allowed": true,
+} {
+    true
+}
+----
+
+在这一点上，您没有必要详细研究雷戈代码。
+您可以在https://www.openpolicyagent.org/docs/latest/policy-language/[网站]上了解它。
+
+在这种情况下，它会返回`+allowed: true+` 或`+allowed: false+` 。
+这取决于另一个软件包`+data.kubernetes.admission+` 是否有求值为`+true+` 的`+deny+` 语句。
+
+如果`+data.kubernetes.admission.deny+` 的值为`+true+` ，则`+response+` 的值为第一块。
+否则，它的评估结果将是第二个区块，从而导致接受。
+由于`+deny+` 块的评估结果都不是`+true+` ，这意味着策略接受了请求。
+
+这只是政策的外壳，是实用工具。
+现在，在`+opa-policy+` 文件夹中创建另一个文件，例如`+policy.rego+` ，其中包含这些内容：
+
+[,rego]
+----
+package kubernetes.admission
+
+deny[msg] {
+    input.request.object.metadata.namespace == "default"
+    msg := "it is forbidden to use the default namespace"
+}
+----
+
+这是保单的重要部分。
+如果`+deny+` 语句中的所有语句的值都为`+true+` ，则 语句的值为`+true+` 。
+在这种情况下，只有一条语句，即检查命名空间是否为`+default+` 。
+
+根据开放策略代理的设计，`+input+` 与`+AdmissionReview+` 对象一起拥有可查询对象，因此我们可以方便地检查它。
+
+如果一切顺利，你的树应该是下面这个样子：
+
+[subs="+attributes",console]
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── request.rego
+
+1 directory, 4 files
+----
