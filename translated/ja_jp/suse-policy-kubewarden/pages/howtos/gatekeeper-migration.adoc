@@ -1,0 +1,468 @@
+include::partial$variables.adoc[]
+= ゲートキーパーのポリシーの移行 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: WebAssembly に Rego コードをコンパイルするという 2 つの主なステップを経て、既存の Gatekeeper ポリシーを移行することにより、{project-name} ポリシーを設定します。
+:keywords: ["{project-name}", kubewarden, gatekeeper ]。
+:doc-persona:
+  [kubewarden-operator, kubewarden-integrator, kubewarden-policy-developer]
+:doc-type: [howto]
+:doc-topic: [operator-manual]
+
+このガイドでは、既存の Gatekeeper ポリシーを{project-name} ポリシーに変換する方法を説明します。このプロセスには主に2つのステップがある：
+. RegoプログラムをWebAssembly（Wasm）モジュールにコンパイルします。
+. WebAssembly モジュールを{short-project-name} ポリシーとして配布します。
+
+xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[Regoポリシーのチュートリアルでは]、RegoコードをWebAssemblyモジュールにコンパイルするためのビルドプロセスのほとんどをカバーしています。このガイドでは、ゲートキーパーのカスタムリソース定義（CRD）を抽出し、機能的な{short-project-name} ポリシーに移行するステップバイステップのプロセスに焦点を当てます。基本的なゲートキーパーのデモ・ポリシーを使用しています。
+
+== 前提条件
+
+* link:https://github.com/open-policy-agent/opa/releases[opa]: このツールを使ってwasmにコードをビルドする。このガイドは`+v1.5.1+` 。
+* link:https://github.com/kubewarden/kwctl/releases[`+kwctl+`]{short-project-name} ウェブアセンブリモジュールの準備と実行に使用するツールです。
+* link:https://github.com/bats-core/bats-core[`+bats+`]エンドツーエンドのテストを実行するためのツール。もし、このようなテストを書こうと決めたのなら
+* link:https://github.com/mikefarah/yq[`+yq+`]yamlファイルからデータを抽出するためのツール。
+
+== ポリシーを移行する前に
+
+Gatekeeper ポリシーの移行プロセスを開始する前に、{short-project-name}link:https://artifacthub.io/packages/search?kind=13[ カタログに]ある、すでに利用可能なポリシーを使用することを検討してください。link:https://github.com/kubewarden/rego-policies-library[ポリシーの]一部は一般に公開されており、OPA とゲートキーパーのポリシーは{short-project-name} に移行された。
+
+また、{short-project-name} と Gatekeeper のxref:/explanations/comparisons/opa-comparison.adoc[比較]ドキュメントもご覧ください。
+
+== ステップ1：{short-project-name} ポリシープロジェクトを初期化する
+
+まず、{short-project-name} Gatekeeperlink:https://github.com/kubewarden/gatekeeper-policy-template[テンプレートを]使用して、基本的なポリシープロジェクトの構造を作成します。これは、ポリシーをビルドしてテストするための Makefile ターゲットを提供する。テンプレートからポリシーコードを作成したら、Makefileコマンドを実行して、ポリシーのビルドとテストが正常に実行されることを確認します：
+
+[source,console]
+----
+$ make policy.wasm test
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+opa test *.rego
+PASS: 2/2
+----
+
+== ステップ2：ゲートキーパーのポリシーコードを移行する
+
+次に、Gatekeeper ポリシーの移行を開始する。これには、`+ConstraintTemplate+` とそれに関連する`+Constraint+` リソースを{short-project-name}ポリシーに変換することが含まれる。{short-project-name} コンテキストでは、`+ConstraintTemplate+` をコア・ポリシー・コードと考え、`+Constraint+` インスタンスは{short-project-name} 内で実行されるポリシー・インスタンスに変換する。
+
+まず、`+ConstraintTemplate+` の Rego コードを、{short-project-name} テンプレートが生成した`+policy.rego+`ファイルにコピーします。この例では、Gatekeeper リポジトリにある以下の基本的なlink:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[デモポリシーを]使用します。
+
+[.details]
+.ゲートキーパー ポリシー yaml
+[%collapsible]
+====
+[source,yaml]
+----
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        # Schema for the `+parameters+` field
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("you must provide labels: %v", [missing])
+        }
+----
+====
+
+レゴのコード・スニペットを`+rego+` フィールドから`+policy.rego+` ファイルにコピーする：
+
+[source,console]
+----
+cat gatekeeper/demo/basic/templates/k8srequiredlabels_template.yaml | yq ".spec.targets[0].rego" > policy.rego
+----
+
+=== レゴコードの適応 {short-project-name}
+
+レゴコード内で使用されている`+package+` の名前が`+policy+` であることを確認する必要がある。
+これは、{short-project-name} ゲートキーパーのテンプレートが多くの場所で期待する値である。
+
+これを変更しないと、ポリシーを構築し、エンド・ツー・エンドのテストを実行するときにエラーが発生します。
+
+例えば、今回変換するデモ・ポリシーは`+k8srequiredlabels+` パッケージの中で定義されているので、この値を`+policy+` に変更する必要がある。
+
+このように、`+policy.rego+` ：
+
+[source,rego]
+----
+package policy
+
+violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+provided := {label | input.review.object.metadata.labels[label]}
+required := {label | label := input.parameters.labels[_]}
+missing := required - provided
+count(missing) > 0
+msg := sprintf("you must provide labels: %v", [missing])
+}
+----
+
+この変更後にコードをビルドしようとすると、新たなコンパイルエラーが見つかるかもしれない：
+
+[source,console]
+----
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+error: load error: 2 errors occurred during loading:
+policy.rego:3: rego_parse_error: `+if+` keyword is required before rule body
+policy.rego:3: rego_parse_error: `+contains+` keyword is required for partial set rules
+make: *** [Makefile:4: policy.wasm] Error 1
+----
+
+ポリシーの作成者は、`+opa+` CLIでコードを正常にビルドできるように、これらのエラーを修正する必要があります。具体的な変更点は、`+opa+` バージョンと元のポリシーコードによって異なる場合があります。OPA v1以前のレゴ・ポリシーを移行するため、v1に準拠するようコードを更新する必要がある。最終的な`+policy.rego+` ：
+
+[source,rego]
+----
+package policy
+
+violation contains {"msg": msg, "details": {"missing_labels": missing}} if {
+  provided := {label | input.review.object.metadata.labels[label]}
+  required := {label | label := input.parameters.labels[_]}
+  missing := required - provided
+  count(missing) > 0
+  msg = sprintf("you must provide labels: %v", [missing])
+}
+----
+
+コードを調整したら、ポリシーを構築する：
+
+[source,console]
+----
+$ make policy.wasm
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+----
+
+Gatekeeper ポリシーの作成方法については、xref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[チュートリアルを]参照してください。
+
+=== レゴ・ポリシーのコードとOPA v1.0.0の互換性
+
+2024年12月にリリースされたOPA（Open Policy Agent）link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[.0.0では] v1、レゴ・ポリシーの構文に関する変更が導入されました。
+
+以前は、すべてのルール定義の`+if+` 、マルチバリュー・ルールの`+contains+` はオプションであったが、現在は必須である。この変更はほとんどの古い保険に影響する。
+
+以下はその要約である：
+
+* *OPA v1.0.0 構文*：OPA v1.0.0では、すべてのルール定義に`+if+` 、複数値のルールには`+contains+` 。この構文に従わないポリシーは壊れてしまいます。
+* *後方互換性*：新しいv1.0.0構文を使用しない古いポリシーをビルドする必要がある場合は、`opa build`コマンドに`+--v0-compatible+` フラグを指定する必要があります。
+* *ゲートキーパーの統合*：Gatekeeper はlink:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[.19.0 リリースで] v3、OPA 依存性を v1.0.0 に更新した。
+* *ゲートキーパーのテンプレートにあるレゴのバージョン*：`+code.engine: Rego+` の下にある`+source+` フィールドで`+version: "v1"+` を明示的に指定しない限り、Gatekeeper は`+v0+` の構文が使用されていると見なす。
+
+`+v0+` と`+v1+` バージョンの Rego の扱いについては、Gatekeeper のドキュメントのlink:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[このセクションを]参照してください。
+
+これが何を意味するのか：
+
+* ゲートキーパーのCRにレゴのバージョンが明記されていない場合、`+v0+` 。`OPA_V0_COMPATIBLE=true make`コマンドを使用してポリシーを構築する必要があります。
+* ゲートキーパー CR が明示的に`+version: "v1"+` を指定している場合は、環境変数を設定せずにポリシーを構築する必要があります。
+
+== ステップ3：テストの更新と実行
+
+ポリシーの作成者は、ポリシーの初期バージョンのテストを作成しないことを強くお勧めします。もしこれが当てはまるなら、テストの実行に使われるMakefileターゲットを無効にする必要がある。デフォルトのCIジョブはこれらのターゲットが定義されていることを期待しているので、これらのターゲットを完全に削除することはできない。その代わりに、`+opa+` と`+bats+` を呼び出すコマンドを、"no-op "操作に置き換えるべきである。例えば、`+echo+` コマンドを使って、テストが実行されない理由の説明を表示することができる。
+
+{short-project-name} Gatekeeper テンプレートには、Rego の単体テストと、Bats と`+kwctl+` を使用したエンドツーエンド（e2e）テストの両方が含まれている。もしテストを含めるつもりなら、両方のセットをあなたのポリシーに合わせる必要がある。
+
+ゲートキーパーのポリシーにすでにレゴテストがある場合は、`+policy_test.rego+` ファイルにコピーできます。これらは`+make test+` コマンドを実行すると自動的に実行される。
+
+[CAUTION]
+====
+`+policy_test.rego+` で記述するレゴ・テストには、<<_rego_policy_code_and_opa_v1_0_0_compatibility,レゴ・ポリシー・コードおよび OPA v1.0.0 互換性>>セクションで詳述したのと同じ互換性の問題が適用されることに留意してください。
+====
+
+このガイドで移行するポリシーにはテストがありません。そこで、`+policy_test.rego+` のテスト・ファイルにいくつかの基本的なテストを追加する：
+
+[source,rego]
+----
+package policy
+
+review_required_labels := {
+    "parameters": {"labels": ["test"]},
+    "review": {"object": {"metadata": {"labels": {"test": "value"}}}},
+}
+
+review_missing_labels := {
+    "parameters": {"labels": ["test"]},
+    "review": {"object": {"metadata": {"labels": {"other": "value"}}}},
+}
+
+test_accept if {
+    r = review_required_labels
+    res = violation with input as r
+    count(res) = 0
+}
+
+test_reject if {
+    r = review_missing_labels
+    res = violation with input as r
+    count(res) = 1
+}
+----
+
+さて、`+make test+` を実行すると、ポリシーが検証されるはずだ：
+
+[source,console]
+----
+$ make policy.wasm test
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+opa test *.rego
+PASS: 2/2
+----
+
+次に、e2e テストファイル (`+e2e.bats+`) を更新する：
+
+[source,bash]
+----
+#!/usr/bin/env bats
+
+@test "accept because required label is present" {
+  run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/settings.json --request-path test_data/accept_deploy_request.json
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+
+@test "reject because required label is missing" {
+run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/settings.json --request-path test_data/reject_deploy_request.json
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request rejected
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : '.*message.*you must provide labels: \[test\]') -ne 0 ]
+}
+----
+
+これらのテストをサポートするために、`+test_data/settings.json+` 、`+test_data/accept_deploy_request.json+` 、`+test_data/reject_deploy_request.json+`ファイルを作成する必要がある。
+
+[.details]
+.test_data/settings.json
+[%collapsible]
+====
+[source,json]
+----
+{
+  "labels": ["test"]
+}
+----
+====
+
+`+AdmissionRequest+` JSONはかなり長くなる可能性があり、このガイドは簡潔にまとめたいので、`+accept_deploy_request.json+` と`+reject_deploy_request.json+` の全内容はここには掲載しない。しかしxref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`+kwctl scaffold+`]コマンドを使ってこれらのファイルを生成することができる。このガイドで重要なのは、一方のリクエストには必要なラベルがなく、もう一方にはラベルが定義されていることである。
+
+e2eテストがパスしているかチェックする：
+
+[source,console]
+----
+$ make e2e-tests
+bats e2e.bats
+e2e.bats
+  ✓ accept because required label is present
+  ✓ reject because required label is missing
+----
+
+[IMPORTANT]
+====
+ポリシーのパラメーター（たとえば、この例ではラベル）は、ポリシー設定に由来する。これは、Gatekeeper の Constraints と同じように、同じポリシーを異なるパラメータ/設定で複数展開することができます。
+====
+
+== ステップ4：`+metadata.yml+` 配布準備
+
+機能的なポリシーができたので、`+metadata.yml+` ファイルを配布する準備をします。このファイルは、ポリシーの説明、作者、ライセンス、その他の重要な情報を含む注釈を定義する。重要なのは、ポリシーが検証できるリソースと動詞を指定する`+rules+` を定義することである。この情報により、`+kwctl scaffold+` コマンドがクラスタにポリシーを展開するためのマニフェストを生成します。
+
+ゲートキーパーの`+ConstraintTemplates+` で定義されたポリシーのインスタンスである`+Constraints+` CRD は、ポリシーインスタンスが評価するリソースを指定する。
+したがって、`+ConstraintTemplate+` を適用した既存の`+Constraints+` があれば、`+metadata.yml+` ファイルで定義すべきリソースの良い参考となる。例えば、先に使用したゲートキーパーの例では、`+k8srequiredlabels+``+ConstraintTemplate+` から作成された`+K8sRequiredLabels+` `+Constraint+` が`+Namespaces+` に適用される：
+
+[source,yaml]
+----
+apiVersion: constraints.gatekeeper.sh/v1beta
+kind: K8sRequiredLabels
+metadata:
+  name: ns-must-have-gk
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Namespace"]
+  parameters:
+    labels: ["gatekeeper"]
+----
+
+これに基づいて、`+metadata.yml+` の`+rules+` セクションを更新し、`+CREATE+` と`+UPDATE+` の操作中に`+namespaces+` を検証するための新しい`+rule+` を含める：
+
+[source,yaml]
+----
+rules:
+  - apiGroups: ["apps"]
+    apiVersions: ["v1"]
+    resources: ["deployments"]
+    operations: ["CREATE", "UPDATE"]
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["namespaces"]
+    operations: ["CREATE", "UPDATE"]
+mutating: false
+contextAware: false
+executionMode: gatekeeper
+backgroundAudit: true
+annotations:
+  io.artifacthub.displayName: Policy Name
+  io.artifacthub.resources: Pod
+  io.artifacthub.keywords: pod, cool policy, kubewarden
+  io.kubewarden.policy.ociUrl: ghcr.io/yourorg/policies/policy-name
+  io.kubewarden.policy.title: policy-name
+  io.kubewarden.policy.version: 0.0.1-unreleased
+  io.kubewarden.policy.description: Short description
+  io.kubewarden.policy.author: "Author name <author-email@example.com>"
+  io.kubewarden.policy.url: https://github.com/yourorg/policy-name
+  io.kubewarden.policy.source: https://github.com/yourorg/policy-name
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.severity: medium
+  io.kubewarden.policy.category: Resource validation
+----
+
+これで、ポリシーの配布と展開の準備が整いました。xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[ポリシーを]リモートレジストリにプッシュする方法については、チュートリアルの「xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[ポリシーの公開」]セクションを参照してください。
+
+`+kwctl+` を使用してポリシーマニフェストを雛形化できます：
+
+[source,console]
+----
+$ kwctl scaffold manifest --type ClusterAdmissionPolicy annotated-policy.wasm
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Resource validation
+    io.kubewarden.policy.severity: medium
+  name: policy-name
+spec:
+  module: file:///home/jvanz/SUSE/mygatekeeperpolicy/annotated-policy.wasm
+  settings: {}
+  rules:
+  - apiGroups:
+    - apps
+    apiVersions:
+    - v1
+    resources:
+    - deployments
+    operations:
+    - CREATE
+    - UPDATE
+  - apiGroups:
+    - ''
+    apiVersions:
+    - v1
+    resources:
+    - namespaces
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+----
+
+=== ポリシー設定の定義
+
+このポリシーには、ゲートキーパーが`+Constraint+` 内で定義するパラメータがある。生成された{short-project-name}ポリシー マニフェストの`+settings+` セクションを更新して、これらの必要なパラメータを含める必要があります。次の例では、設定を定義するだけでなく、OCI レジストリからポリシーをテストできます：
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Resource validation
+    io.kubewarden.policy.severity: medium
+  name: policy-name
+spec:
+  module: registry://ghcr.io/jvanz/policies/mygatekeeperpolicy:latest
+  settings:
+    labels:
+      - "gatekeeper"
+  rules:
+    - apiGroups:
+        - apps
+      apiVersions:
+        - v1
+      resources:
+        - deployments
+      operations:
+        - CREATE
+        - UPDATE
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - namespaces
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+----
+
+必要な`+gatekeeper+` ラベルがないネームスペースをデプロイしようとします：
+
+[source,console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: your-namespace-name
+  labels:
+    purpose: demo
+EOF
+Error from server: error when creating "STDIN": admission webhook "clusterwide-policy-name.kubewarden.admission" denied the request: you must provide labels: [gatekeeper]
+----
+
+そして、必要なラベルを持つ別の名前空間：
+
+[source,console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: your-namespace-name
+  labels:
+    purpose: demo
+    gatekeeper: test
+EOF
+
+namespace/your-namespace-name created
+----
