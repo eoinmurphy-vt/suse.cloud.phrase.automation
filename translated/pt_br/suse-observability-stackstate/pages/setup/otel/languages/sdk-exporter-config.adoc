@@ -1,0 +1,56 @@
+= Configuração do exportador
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidade do SUSE
+
+Todos os SDKs, independentemente do idioma, usam a mesma configuração básica para definir o Open Telemetry https://opentelemetry.io/docs/concepts/glossary/#_service[nome do serviço] e o endpoint do exportador (ou seja, para onde a telemetria é enviada).
+
+Eles podem ser configurados definindo variáveis de ambiente para seu aplicativo instrumentado.
+
+No Kubernetes, defina essas variáveis de ambiente no manifesto de sua carga de trabalho (substitua `+<the-service-name>+` por um nome para seu serviço de aplicativo):
+
+[,yaml]
+----
+...
+spec:
+  containers:
+  - env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://opentelemetry-collector.open-telemetry.svc.cluster.local:4317
+    - name: OTEL_SERVICE_NAME
+      value: <the-service-name>
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: grpc
+...
+----
+
+O ponto de extremidade especificado no exemplo pressupõe que o coletor foi instalado usando os padrões do xref:/setup/otel/collector.adoc[guia de instalação]. Ele usa a porta `+4317+`, que usa a versão `+gRPC+` do protocolo OTLP. Algumas instrumentações são compatíveis apenas com HTTP; nesse caso, use a porta `+4318+`.
+
+O nome do serviço também pode ser derivado dos rótulos do Kubernetes que já podem estar presentes. Por exemplo, assim:
+
+[,yaml]
+----
+spec:
+  containers:
+  - env:
+    - name: OTEL_SERVICE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.labels['app.kubernetes.io/component']
+----
+
+== gRPC vs HTTP
+
+OTLP, o Open Telemetry Protocol, oferece suporte a gRPC e protobuf por HTTP. Alguns SDKs também oferecem suporte a JSON por HTTP. Na seção anterior, o protocolo do exportador foi definido como `+gRPC+`, o que geralmente proporciona o melhor desempenho e é o padrão para muitos SDKs. No entanto, em alguns casos, isso pode ser problemático:
+
+* Alguns firewalls não estão configurados para lidar com gRPC
+* Os proxies (reversos) e os balanceadores de carga podem não suportar o gRPC sem configuração adicional
+* As conexões de longa duração do gRPC podem causar problemas no balanceamento de carga.
+
+Para mudar para HTTP em vez de gRPC, altere o protocolo para `+http+` _e_ use a porta `+4318+`.
+
+Em resumo, use HTTP caso o gRPC apresente problemas:
+
+* `+grpc+` protocolo usa a porta `+4317+`
+* `+http+` protocolo usa a porta `+4318+`
