@@ -1,0 +1,224 @@
+= カスタムOSイメージの構築と使用方法
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+== カスタムDockerfileでOSイメージをリマスターする
+
+{elemental-product-name} が提供するOSイメージはコンテナ・イメージなので、新しいコンテナ・イメージを作成するために、Dockerfileのベース・イメージとして使用することもできる。
+
+Elementalプロジェクトは、画像用にいくつかのフレーバーを公開している：
+
+* ベアメタル：ベアメタル展開に適したファームウェアとドライバを含むイメージ。
+* rt：ベアメタルイメージをベースにしているが、リアルタイムカーネルが含まれている。
+* kvmである：VMに適したスリムなイメージ。
+* ベース：他のフレーバーが使用するエレメンタルに必要な基本システム。
+
+追加パッケージが必要な場合、以下の例ではどのように追加できるかを示します：
+
+[,docker]
+----
+# The version of Elemental to modify.
+FROM registry.suse.com/suse/sl-micro/6.0/baremetal-os-container:latest
+
+# Custom commands
+RUN rpm --import <repo-signing-key-url> && \
+    zypper addrepo --refresh <repo_url> extra_repo && \
+    zypper install -y <extra_package>
+
+# IMPORTANT: /etc/os-release is used for versioning/upgrade. The
+# values here should reflect the tag of the image currently being built
+ARG IMAGE_REPO=norepo
+ARG IMAGE_TAG=latest
+RUN \
+    sed -i -e "s|^IMAGE_REPO=.*|IMAGE_REPO=\"${IMAGE_REPO}\"|g" /etc/os-release && \
+    sed -i -e "s|^IMAGE_TAG=.*|IMAGE_TAG=\"${IMAGE_TAG}\"|g" /etc/os-release && \
+    sed -i -e "s|^IMAGE=.*|IMAGE=\"${IMAGE_REPO}:${IMAGE_TAG}\"|g" /etc/os-release
+
+# IMPORTANT: it is good practice to recreate the initrd and re-apply `+elemental-init+`
+# command that was used in the base image. This ensures that any eventual change that should
+# be synced in initrd included binaries is also applied there and consistent.
+RUN elemental init --force elemental-rootfs,grub-config,dracut-config,cloud-config-essentials,elemental-setup
+----
+
+`+latest+` はカスタマイズしたい基本バージョン。
+
+そして以下のコマンドを実行する。
+
+[,bash]
+----
+docker build --build-arg IMAGE_REPO=myrepo/custom-build \
+             --build-arg IMAGE_TAG=v1.1.1 \
+             -t myrepo/custom-build:v1.1.1 .
+docker push myrepo/custom-build:v1.1.1
+----
+
+カスタマイズされた新しいOSは、Dockerイメージ`+myrepo/custom-build:v1.1.1+` 。
+
+[,bash]
+----
+docker run -it myrepo/custom-build:v1.1.1 bash
+----
+
+## カスタムブータブルインストールISOを作成する
+
+{elemental-product-name} コンテナ・イメージを活用してルート・ファイルシステムを構築するため、マルチステージ環境でこれを使用し、カスタム・コンテナ・イメージをバンドルしたカスタムブータブル・メディアを作成することができる。
+
+[,docker]
+----
+FROM registry.suse.com/suse/sl-micro/6.0/baremetal-os-container:latest AS os
+
+# Check the previous section on building custom images
+
+# The released OS already includes the toolchain for building ISOs
+FROM registry.suse.com/suse/sl-micro/6.0/baremetal-os-container:latest AS builder
+
+ARG TARGETARCH
+WORKDIR /iso
+COPY --from=os / rootfs
+
+# work around buildah issue: https://github.com/containers/buildah/issues/4242
+RUN rm -f rootfs/etc/resolv.conf
+
+RUN elemental build-iso \
+        dir:rootfs \
+        --bootloader-in-rootfs \
+        --squash-no-compression \
+        -o /output -n "elemental-${TARGETARCH}"
+
+FROM busybox
+COPY --from=builder /output /elemental-iso
+
+ENTRYPOINT ["busybox", "sh", "-c"]
+----
+
+通常の`+docker build+` ：
+
+[,bash]
+----
+docker build -t myrepo/custom-build:v1.1.1 \
+              --build-arg IMAGE_REPO=myrepo/custom-build-iso \
+              --build-arg IMAGE_TAG=v1.1.1 \
+              .
+----
+
+出来上がったコンテナ・イメージは、実際にはISOを含むコンテナ・イメージであり、このコンテナ・イメージもOCIレジストリにプッシュすることができる。としてコンテナを実行することで、ISOイメージをコンテナからカレントフォルダに展開することができる：
+
+[,bash]
+----
+docker run --rm -v $(pwd):/host mytest-image "busybox cp /elemental-iso/*.iso /host"
+----
+
+新しくカスタマイズされたインストールメディアは`+elemental-<arch>.iso+` にあります。
+
+上記のコンテナ実行は、_elemental-operatorが_コンテナからISOを抽出し、登録URLを含む新しいものを構築するために行うことと同等である。したがって、これは、コンテナがレジストリにプッシュされ、_elemental-operatorが_ xref:references/seedimage-reference.adoc[SeedImage]リソースのための`+baseImage+` として使用できることを確認するための良いチェックマークでもある。
+
+== カスタムイメージをManagedOSVersionリソースとしてリストアップします。
+
+{elemental-product-name} では、OSコンテナ・イメージとISOコンテナ・イメージをManagedOSVersionリソースとしてリストアップすることは必須ではないが、便利である。特にUIの観点からは、{elemental-product-name} UIエクステンションからカスタム画像を表示し、使いやすくすることができます。
+
+前のセクションの例の続きで、`+myrepo/custom-build:v1.1.1+` として参照されるカスタムOSコンテナが構築され、最終的にレジストリにプッシュされた。これで、このイメージをManagedOSVersionリソースとして追加する準備が整った：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: ManagedOSVersion
+metadata:
+  name: v1.1.1-custom-build
+  namespace: fleet-default
+spec:
+  metadata:
+    displayName: Custom build image
+    upgradeImage: myrepo/custom-build:v1.1.1
+  type: container
+  version: v1.1.1
+----
+
+`+type: container+` によると、これはコンテナOSである。これにより、イメージ`+myrepo/custom-build:v1.1.1+` 、UIからOSのアップグレードが可能になる。
+
+最後に、ISO`+myrepo/custom-build-iso:v1.1.1+` のカスタムコンテナも、ManagedOSVersion リソースとして含めることができます：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: ManagedOSVersion
+metadata:
+  name: v1.1.1-custom-build-iso
+  namespace: fleet-default
+spec:
+  metadata:
+    displayName: Custom build ISO image
+    uri: myrepo/custom-build-iso:v1.1.1
+  type: iso
+  version: v1.1.1
+----
+
+`+type: iso+` 、これはISOであると書かれている。これにより、画像`+myrepo/custom-build-iso:v1.1.1+` 、UIからSeedImagesを生成する対象となる。
+
+== カスタムパーティションサイズ
+
+カスタムイメージを構築する際には、ディスクパーティションサイズを考慮し、イメージとアップグレードスナップショットが長期間にわたって正しく収まるようにすることが重要です。
+
+パーティション設定はカスタムイメージに含めることもできますし、インストー ルメディアの生成に使用するxref:references/seedimage-reference.adoc[SeedImage]に適用することもできます。
+
+なお、`+size+` の値はすべてメガバイトで表されており、`+0+` の値はディスクの残りを使用することになる。これは、`+persistent+` パーティションに`+size+` が定義されていない場合のデフォルトの動作である。詳しくは、https://github.com/rancher/elemental-toolkit/blob/main/config.yaml.example[の設定サンプルを]ご覧ください。
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: custom-partitions-iso
+  namespace: fleet-default
+spec:
+  cloud-config:
+    write_files:
+    - path: /etc/elemental/config.d/partitions.yaml
+      content: |
+        install:
+          partitions:
+            recovery:
+              size: 8192
+            state:
+              size: 16384
+    - path: /etc/elemental/config.d/snapshotter.yaml
+      content: |
+        snapshotter:
+          max-snaps: 2
+  baseImage: myrepo/custom-build-iso:v1.1.1
+  registrationRef:
+    name: my-machine-registration
+    namespace: fleet-default
+----
+
+`+state+` パーティションにはすべてのシステムスナップショットが保存されます。したがって、このパーティションのサイズを決める際には、次の式を考慮することができる：`+$image_size * ($max_number_of_snapshots + 1 + 1)+`.`+$max_number_of_snapshots+` も同様に、上のサンプルのようにカスタム設定ファイルで設定できる。
+
+デフォルトでは、`+btrfs+` スナップショッタータイプの場合は`+4+` 、`+loopdevice+` タイプの場合は`+2+` であることに注意してください。xref:references/machineregistration-reference.adoc#_config_elemental_install_snapshotter[MachineRegistrationを]編集することで、使用するスナップショッターのタイプを設定できます。ステート・パーティションはlink:{elemental_toolkit_url}[{elemental_toolkit_name}]ワーク・ディレクトリにも使用されるため、`+$image_size+` 相当の空き領域を残しておくとよいでしょう。アップグレードの際などにイメージを正しく解凍できるようにするためです。
+
+最後に、余分な`+$image_size+` 。これは、`+loopdevice+` スナップショッタータイプを使用する場合に特に重要です。新しい画像が、元々インストールされていたものよりもサイズが大きくなってしまうからです。逆に、`+btrfs+` snapshotterを使用することで、`+state+` パーティションのスペースを節約したり、同じスペースを使用してより多くのスナップショットを保持することができます。
+
+== {elemental-product-name} ベース画像の検索
+
+クレーンを使用すると、拡張に適した以下のSL-Micro画像を見つけることができる：
+
+[,shell]
+----
+$ crane catalog registry.suse.com | grep -i "suse/sl-micro"
+suse/sl-micro/6.0/baremetal-iso-image
+suse/sl-micro/6.0/baremetal-os-container
+suse/sl-micro/6.0/base-iso-image
+suse/sl-micro/6.0/base-os-container
+suse/sl-micro/6.0/kvm-iso-image
+suse/sl-micro/6.0/kvm-os-container
+suse/sl-micro/6.0/rt-iso-image
+suse/sl-micro/6.0/rt-os-container
+suse/sl-micro/6.1/baremetal-iso-image
+suse/sl-micro/6.1/baremetal-os-container
+suse/sl-micro/6.1/base-iso-image
+suse/sl-micro/6.1/base-os-container
+suse/sl-micro/6.1/kvm-iso-image
+suse/sl-micro/6.1/kvm-os-container
+suse/sl-micro/6.1/rt-iso-image
+suse/sl-micro/6.1/rt-os-container
+----
+
+接尾辞が`+-iso-image+` のイメージには、あらかじめビルドされたISOイメージと、コンテンツをボリュームにコピーするためのビジーボックスシステムが含まれています。サフィックスが`+-os-container+` のイメージには、カスタムイメージのベースとして使用できるルートファイルシステムが含まれています。
