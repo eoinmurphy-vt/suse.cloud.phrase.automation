@@ -1,0 +1,211 @@
+= 开放 ID 连接（OIDC）
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+
+== 概述
+
+SUSE Observability 可使用 OIDC 身份验证提供程序进行身份验证。要启用此功能，您需要对 SUSE Observability 和 OIDC 提供商进行配置，使其能够相互通信。以下各节将介绍相应的设置。
+
+== 配置 OIDC 提供商
+
+在配置 SUSE Observability 使用 OIDC 进行身份验证之前，您需要在 OIDC 提供商上为 SUSE Observability 创建一个客户端。
+
+=== 牧场主
+
+[NOTE]
+这仅适用于 Rancher 2.12 或更高版本。 您需要https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/users/authn-and-authz/configure-oidc-provider.html[将 Rancher 配置为 OIDC 提供商]。
+
+在 Rancher 本地群集中创建 OIDCClient 资源：
+[,yaml]
+----
+apiVersion: management.cattle.io/v3
+kind: OIDCClient
+metadata:
+  name: oidc-observability
+spec:
+  tokenExpirationSeconds: 600
+  refreshTokenExpirationSeconds: 3600
+  redirectURIs:
+    - "https://<observability-base-url>/loginCallback?client_name=StsOidcClient"
+----
+
+Rancher 会在其状态字段中提供客户端 ID 和秘密：
+[,yaml]
+----
+apiVersion: management.cattle.io/v3
+kind: OIDCClient
+metadata:
+  name: oidc-observability
+spec:
+  tokenExpirationSeconds: 600
+  refreshTokenExpirationSeconds: 3600
+  redirectURIs:
+    - "https://<observability-base-url>/loginCallback?client_name=StsOidcClient"
+status:
+  clientID: <oidc-client-id>
+  clientSecrets:
+    client-secret-1:
+      createdAt: "xxx"
+      lastFiveCharacters: xxx
+----
+
+您可以使用
+[,bash]
+----
+kubectl get secret <oidc-client-id> -n cattle-oidc-client-secrets -o jsonpath="{.data.client-secret-1}" | base64 -d
+----
+
+
+=== 其他 OIDC 提供商
+
+客户端使用以下设置（如 OIDC 提供商需要）：
+
+* 使用 OIDC 授权流程，它通常也被称为授权代码流程。SUSE Observability 不支持隐式授予和混合流，因此无需启用对它们的支持。
+* 将*重定向 URI*设置为 SUSE Observability 的基本 URL，后缀为`+/loginCallback?client_name=StsOidcClient+` 。例如`+https://stackstate.acme.com/loginCallback?client_name=StsOidcClient+` 。对于某些 OIDC 提供商，如 Google 和 Azure Entra ID，重定向 URI 必须完全匹配，包括任何查询参数。在这种情况下，您应该像这样配置 URI`+https://stackstate.acme.com/loginCallback?client_name=StsOidcClient+` 。
+* 让 SUSE Observability 至少能访问`+openid+` 和`+email+` 或与 OIDC 提供商相同的作用域。根据不同的提供商，可能需要更多的范围，如果有单独的`+profile+` ，也请将其包括在内。
+* SUSE Observability 需要 OIDC 脱机访问。对于某些身份供应商，这需要一个额外的范围，通常称为`+offline_access+` 。
+
+配置结果应产生一个*clientId*和一个*secret*。复制并保留这些内容，用于配置 SUSE Observability。同时写下提供商的*discoveryUri*。通常在同一屏幕中或在文档中可以找到。
+
+== 为 OIDC 配置 SUSE Observability
+
+=== 牧场主
+
+[NOTE]
+这仅适用于 Rancher 2.12 或更高版本。 您需要https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/users/authn-and-authz/configure-oidc-provider.html[将 Rancher 配置为 OIDC 提供商]。
+
+要将 Rancher 配置为 SUSE Observability 的 OIDC 提供商，需要在身份验证值中添加 OIDC 详情：
+[,yaml]
+----
+stackstate:
+  authentication:
+    rancher:
+      clientId: "<oidc-client-id>"
+      secret: "<oidc-secret>"
+      baseUrl: "<rancher-url>"
+----
+您可以使用以下字段覆盖和扩展 Rancher 的 OIDC 配置：
+
+* **discoveryUri**- 用于发现 OIDC 提供商的 URI。通常，在 OIDC 提供商中创建客户端时也会记录或返回。
+* **redirectUri**- 可选项（示例中没有）：SUSE Observability 登录回调端点可访问的 URI。默认情况下使用`+stackstate.baseUrl+` 填充，但也可以重载。这必须是一个指向`+/loginCallback+` 路径的完全限定 URL。
+* **customParameters**- 作为自定义请求参数发送给 OIDC 提供商的键/值对的可选映射。某些 OIDC 提供商需要默认情况下不发送的额外请求参数。
+
+如果由于设置不使用可验证的 SSL 证书而需要禁用 TLS 验证，可以通过应用程序配置禁用 SSL 检查（不要在生产中使用）：
+
+用于**非 HA**设置：
+[,yaml]
+----
+stackstate:
+  components:
+    server:
+      extraEnv:
+        open:
+          CONFIG_FORCE_stackstate_misc_sslCertificateChecking: false
+----
+对于**HA（高可用性）**设置：
+[,yaml]
+----
+stackstate:
+  components:
+    api:
+      extraEnv:
+        open:
+          CONFIG_FORCE_stackstate_misc_sslCertificateChecking: false
+----
+
+在 HA 部署中，api 组件以不同方式处理配置。使用以下内容：=== Kubernetes
+
+要配置 SUSE Observability 在 Kubernetes 上使用 OIDC 身份验证提供程序，需要在文件`+authentication.yaml+` 中添加 OIDC 详细信息和用户角色映射。例如
+
+[,yaml]
+----
+stackstate:
+  authentication:
+    oidc:
+      clientId: "<client-id-from-oidc-provider>"
+      secret: "<secret-from-oidc-provider>"
+      discoveryUri: "https://oidc.acme.com/.well-known/openid-configuration"
+      jwsAlgorithm: RS256
+      scope: ["openid", "email"]
+      jwtClaims:
+        usernameField: email
+        displayNameField: name
+        groupsField: groups
+      customParameters:
+        access_type: offline
+
+    # map the groups from OIDC provider
+    # to the 4 standard roles in SUSE Observability (guest, powerUser, k8sTroubleshooter and admin)
+    roles:
+      guest: ["guest-group-in-oidc-provider"]
+      powerUser: ["powerUser-group-in-oidc-provider"]
+      admin: ["admin-group-in-oidc-provider"]
+      k8sTroubleshooter: ["troubleshooter-group-in-oidc-provider"]
+----
+
+请按照以下步骤配置 SUSE Observability 以使用 OIDC 进行身份验证：
+
+. 在`+authentication.yaml+` - 添加 OIDC 身份验证提供程序的详细信息（见上文示例）：
+ ** *clientId*-xref:/setup/security/authentication/oidc.adoc#_configure_the_oidc_provider[您为 SUSE Observability 创建的 OIDC 客户端]的 ID。
+ ** *secret*-xref:/setup/security/authentication/oidc.adoc#_configure_the_oidc_provider[您为 SUSE Observability 创建的 OIDC 客户端]的密文
+ ** *discoveryUri*- 用于发现 OIDC 提供商的 URI。通常在 OIDC 提供商中创建客户端时也会记录或返回。
+ ** *jwsAlgorithm*- OIDC 的默认值是`+RS256+` 。如果您的 OIDC 提供商使用不同的版本，可在此处进行设置。
+ ** *scope*- 应与 OIDC 提供商配置中提供的范围相匹配，或者是该范围的子集。SUSE Observability 利用这一点请求访问 OIDC 提供商中用户配置文件的这些部分。
+ ** *redirectUri*- 可选项（示例中没有）：SUSE Observability 登录回调端点可访问的 URI。默认情况下使用`+stackstate.baseUrl+` 填充，但也可以重载。这必须是一个指向`+/loginCallback+` 路径的完全限定 URL。
+ ** *customParameters*- 作为自定义请求参数发送给 OIDC 提供商的键/值对的可选映射。某些 OIDC 提供商需要默认情况下不发送的额外请求参数。
+ ** *jwtClaims* -
+  *** *usernameField*- OIDC 用户配置文件中用作用户名的字段。默认情况下，这将是`+preferred_username+` ，但许多提供商省略了这一字段。`+email+` 是一个不错的选择。
+  *** *displayNameField*- OIDC 用户配置文件中用作显示名称的字段。默认情况下，这将是`+name+` 。
+  *** *groupsField*- SUSE Observability 将从中读取用户的角色/组的字段。
+. 在`+authentication.yaml+` 中 - 使用`+roles.guest+`,`+roles.powerUser+`,`+roles.admin+` 或`+roles.platformAdmin+` 设置将用户角色从 OIDC 映射到正确的 SUSE Observability 主题（请参阅上面的示例）。有关详细信息，请参阅xref:/setup/security/rbac/rbac_permissions.adoc#_predefined_roles[默认 SUSE Observability 角色]。还可以创建更多 SUSE Observability 角色，请参阅xref:/setup/security/rbac/README.adoc[RBAC 文档]。
+. 将`+authentication.yaml+` 文件与 SUSE Observability 安装说明中的`+values.yaml+` 文件一起存储。
+. 运行 Helm 升级以应用更改：
++
+[,text]
+----
+ helm upgrade \
+   --install \
+   --namespace suse-observability \
+   --values values.yaml \
+   --values authentication.yaml \
+ suse-observability \
+ suse-observability/suse-observability
+----
+
+[NOTE]
+====
+*请注意：*
+
+* 首次运行 helm upgrade 命令会导致 pod 重新启动，这可能会造成短暂的可用性中断。
+* 在`+helm upgrade+` 的每次运行中都包含`+authentication.yaml+` 。
+* 身份验证配置存储为 Kubernetes 秘密。
+====
+
+
+== 设置指南
+
+* xref:/setup/security/authentication/oidc/microsoft-entra-id.adoc[Microsoft Entra ID]
+
+== 使用外部秘密
+
+当 oidc 保密信息来自外部保密信息时，请按照xref:/setup/security/external-secrets.adoc#_getting_authentication_data_from_an_external_secret[上述步骤]操作，但要填写以下数据：
+
+[,yaml]
+----
+kind: Secret
+metadata:
+   name: "<custom-secret-name>"
+type: Opaque
+data:
+  oidc_client_id: <base64 of client id>
+  oidc_secret: <base64 of secret>
+----
+
+== 另见
+
+* xref:/setup/security/authentication/troubleshooting.adoc[对身份验证和授权进行故障排除]
+* xref:/setup/security/authentication/authentication_options.adoc[验证选项]
+* xref:/setup/security/rbac/rbac_permissions.adoc#_predefined_roles[预定义 SUSE Observability 角色的权限]
+* xref:/setup/security/rbac/rbac_roles.adoc[创建 RBAC 角色]
+* xref:/setup/security/external-secrets.adoc#_getting_authentication_data_from_an_external_secret[外部秘密]
