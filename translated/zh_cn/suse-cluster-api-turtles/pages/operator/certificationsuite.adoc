@@ -1,0 +1,121 @@
+= 提供商测试套件
+:revdate: 2025-09-16
+:page-revdate: {revdate}
+
+本节介绍如何利用现有的 E2E 套件将任何 CAPI 提供商与 Turtles 集成，并验证集群的配置和导入是否按预期进行。验证执行以下操作：
+
+* 在所需环境中创建管理群集。
+* 安装 Rancher 和 Turtles 以及所有先决条件。
+* 安装 Gitea。
+* 运行该套件，创建 git repo，使用 Fleet 应用集群模板，并验证集群是否已创建并成功导入 Rancher。
+
+测试套件可用于对xref:../overview/certified.adoc[认证表中]未列出的提供商进行认证，详见xref:../operator/certification.adoc[提供商认证]。
+
+== 如何使用
+
+重用测试套件的主要参考资料是https://github.com/rancher-sandbox/turtles-integration-suite-example[，]其中包含一个示例，说明如何将给定的 CAPI 提供商与{product_name} 集成，并根据 GitOps 工作流程进行一系列检查。
+
+== 执行前
+
+Turtles 中使用的端到端测试环境提供了多种配置选择，具体取决于您正在运行的测试类型和正在执行的检查类型。如果刚开始使用测试套件，我们建议您尽量保持配置简单，限制自定义的数量，这样您就能理解流程及其配置细节。您可以通过克隆样本库开始供应商测试之旅：
+
+----
+git clone https://github.com/rancher-sandbox/turtles-integration-suite-example.git
+----
+
+最简单的测试执行可以创建一个不使用面向互联网端点的本地环境。这将检查范围限制在本地下游集群（实际上是通过 CAPD 提供的 CAPI 集群），但这足以运行集成示例。您只需指定在本地运行该版本即可。
+
+----
+MANAGEMENT_CLUSTER_ENVIRONMENT="isolated-kind" make test
+----
+
+在检查与其他基础设施提供商（如云供应商的提供商）的集成时，您必须通过端点将 Rancher 实例提供给下游集群，而这些集群已不在本地环境中。我们之前使用的`+MANAGEMENT_CLUSTER_ENVIRONMENT+` 变量支持以下值：
+
+----
+MANAGEMENT_CLUSTER_ENVIRONMENT: "kind" # supported options are eks, isolated-kind, kind
+----
+
+`+isolated-kind+`，这是我们用于本地测试的值，`+kind+` 将部署等效的本地环境。不同的是，`+kind+` 还将通过https://ngrok.com/[] ngrok 配置一个可公开访问的端点。您可以获得一个免费（有限）的`+ngrok+` 端点，并将其用于执行测试。在运行`+make test+` 之前，还需要设置以下环境变量：
+
+----
+NGROK_API_KEY: ""
+NGROK_AUTHTOKEN: ""
+----
+
+使用此配置，在环境创建过程中，Rancher 实例将被配置为可通过`+ngrok+` 端点访问，下游群集将能与之通信。
+
+<<_other_options,其他选项>>"部分包含在执行前可以配置的更多信息。
+
+== 基本工作流程
+
+在前面的章节中，我们介绍了样本测试集成中执行的主要操作：
+
+[discrete]
+==== 在所需环境中创建管理群集。
+
+* 这不是海龟的特定要求，因为在使用 CAPI 时，需要有一个管理集群，用来创建代表下游集群的资源。这是测试环境的主要部分，根据传递给测试套件的环境变量，它既可以托管在本地（使用`+kind+` ），也可以托管在云中（`+eks+` ）。
+
+[discrete]
+==== 安装 Rancher 和 Turtles 以及所有先决条件。
+
+* Turtles 是 Rancher 扩展，因此需要安装 Rancher 才能部署。Rancher 管理器将在第一步中创建的管理集群中运行，Turtles 图表将在 Rancher 可用时安装。如果使用面向互联网的配置，入口控制器将使 Rancher 可以从外部网络（如部署在云中的集群）到达。
+
+[discrete]
+==== 运行该套件，创建 git repo，使用 Fleet 应用集群模板，并验证集群是否已创建并成功导入 Rancher。
+
+* 主测试套件和用作示例的测试套件基于 GitOps 流程，并使用https://github.com/rancher/fleet[Fleet]作为 GitOps 协调工具。它将根据提供的集群模板（可查看集成示例https://github.com/rancher-sandbox/turtles-integration-suite-example/tree/main/suites/data/cluster-templates[在此] ）创建 YAML 文件中定义的 CAPI 集群。一旦这些集群可用，将xref:../tutorials/first-cluster.adoc[使用 Turtles]将其配置xref:../tutorials/first-cluster.adoc[导入 Rancher]，并验证下游集群是否可通过 Rancher 访问。它还会检查是否可以在下游群集上执行删除操作，以及这些群集在 Rancher 中是否不再可用。
+
+== 其他选择
+:kubernetes-version: v1.31.4
+
+您可以查看`+turtles-integration-suite-example+` 资源库中的`+config.yaml+` https://github.com/rancher-sandbox/turtles-integration-suite-example/blob/main/config/config.yaml[文件]，其中包含测试环境部署和测试执行过程中使用的环境变量列表。以下是上述 YAML 文件的截断版本：
+
+[source,yaml,subs=attributes+]
+----
+...
+variables:
+  CLUSTERCTL_BINARY_PATH: ""
+  USE_EXISTING_CLUSTER: "false"
+  SKIP_RESOURCE_CLEANUP: "false"
+  ARTIFACTS_FOLDER: "_artifacts"
+  MANAGEMENT_CLUSTER_ENVIRONMENT: "kind" # supported options are eks, isolated-kind, kind
+  RANCHER_VERSION: "{rancher_version}"
+  KUBERNETES_VERSION: "{kubernetes-version}"
+  KUBERNETES_MANAGEMENT_VERSION: "{kubernetes-version}"
+  KUBERNETES_MANAGEMENT_AWS_REGION: "eu-west-2"
+  RKE2_VERSION: "{kubernetes-version}+rke2r1"
+  TURTLES_PATH: "turtles/rancher-turtles"
+  TURTLES_REPO_NAME: "turtles"
+  TURTLES_URL: https://rancher.github.io/turtles
+  TURTLES_VERSION: "{turtles_version}"
+  RANCHER_HOSTNAME: "localhost"
+  RANCHER_FEATURES: ""
+  RANCHER_PATH: "rancher-latest/rancher"
+  RANCHER_REPO_NAME: "rancher-latest"
+  RANCHER_URL: "https://releases.rancher.com/server-charts/latest"
+  CERT_MANAGER_URL: "https://charts.jetstack.io"
+  CERT_MANAGER_REPO_NAME: "jetstack"
+  CERT_MANAGER_PATH: "jetstack/cert-manager"
+  ...
+  ...
+  ...
+  HELM_BINARY_PATH: "helm"
+  HELM_EXTRA_VALUES_FOLDER: "/tmp"
+  # Additional setup for establishing rancher ingress
+  NGROK_REPO_NAME: "ngrok"
+  NGROK_URL: "https://ngrok.github.io/kubernetes-ingress-controller"
+  NGROK_PATH: "ngrok/kubernetes-ingress-controller"
+  NGROK_API_KEY: ""
+  NGROK_AUTHTOKEN: ""
+  GITEA_REPO_NAME: "gitea-charts"
+  GITEA_REPO_URL: "https://dl.gitea.com/charts/"
+  GITEA_CHART_NAME: "gitea"
+  GITEA_CHART_VERSION: "10.6.0"
+  ...
+----
+
+[TIP]
+====
+您可以参阅https://github.com/rancher/turtles/tree/main/test/e2e#e2e-tests[资源库] Turtles，查看所有套件和参数，以便自定义测试执行。我们建议，只有在熟悉测试环境的部署/配置并有特定集成要求的情况下才这样做。
+====
+
