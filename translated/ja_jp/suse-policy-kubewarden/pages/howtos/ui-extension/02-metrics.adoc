@@ -1,0 +1,110 @@
+include::partial$variables.adoc[]
+= モニタリング
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: {project-name} 、Prometheusと連携してRancher環境の監視を設定する。
+:doc-persona: ["kubewarden-operator"、"kubewarden-integrator"]]。
+:doc-topic: ["operator-manual", "metrics-and-monitoring"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "user interface extension", "metrics", "monitoring" ]。
+:current-version: {page-origin-branch}
+
+Rancherには、GrafanaとPrometheusを使った監視用のクラスタツールがある。このツールを使用して、{project-name} と統合し、Policy Server の全体的なメトリックまたは特定のポリシーのメトリックを表示できます。
+
+[CAUTION]
+====
+
+Monitoringツールをインストールするには、少なくとも4コアのクラスタが必要です。
+
+====
+
+
+== 前提条件
+
+プロメテウス・オペレーターが必要だ。xref:howtos/telemetry/30-metrics-qs.adoc#_install_prometheus[以下の]手順に従ってインストールしてください。
+
+== インストール
+
+=== サービスモニターを作成する
+
+* マニフェストをインポートして ServiceMonitors を作成します。
+* {short-project-name} のインストール・ネームスペースを指定する必要があります。
+
+これらの手順は、xref:howtos/telemetry/30-metrics-qs.adoc[テレメトリ・メトリクスの説明からの]転用です。
+
+[subs="+attributes",yaml]
+----
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubewarden-controller
+  namespace: cattle-kubewarden-system
+spec:
+  endpoints:
+    - interval: 10s
+      port: metrics
+  namespaceSelector:
+    matchNames:
+      - cattle-kubewarden-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubewarden-controller
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubewarden-policy-server
+  namespace: cattle-kubewarden-system
+spec:
+  endpoints:
+    - interval: 10s
+      port: metrics
+  namespaceSelector:
+    matchNames:
+      - cattle-kubewarden-system
+  selector:
+    matchLabels:
+      app: kubewarden-policy-server-default
+----
+
+=== `+rancher-kubewarden-controller+` リソースのテレメトリーを有効にする。
+
+* Apps & Marketplace → Installed Appsに移動します。
+* `+rancher-kubewarden-controller+`リソースの`+Edit/Upgrade+` アクションを選択します。
+* `+telemetry+` の YAML を`+enabled: "true"+` に編集し、メトリクスのポートが正しいことを確認する。
+
+[,yml]
+----
+telemetry:
+  metrics: true
+  mode: sidecar
+  sidecar:
+    metrics:
+      port: 8080
+----
+
+[NOTE]
+====
+
+新しいConfigMapをロードするために、Monitoringリソースを再デプロイする必要があるかもしれません。Workloads → Deploymentsから行うことができる。`+cattle-monitoring-system+` 名前空間のすべてのリソースを選択し、`+Redeploy+` アクションを選択します。
+
+====
+
+
+=== ポリシーとポリシーサーバーのGrafanaダッシュボードConfigMapを作成する
+
+[NOTE]
+====
+この方法は、エアギャップのある設備に適している。
+====
+
+
+ダッシュボードはPolicy ServerとPoliciesの間で一意であるため、作成を分ける必要があります。
+
+ポリシー サーバまたは特定のポリシーの詳細ビューで表示します：
+
+* メトリクス」タブに移動する。
+* プロンプトに従ってConfigMapを作成する。
+* ページをリロードしてGrafanaビューを更新する（Grafanaが新しいダッシュボードを認識するのに時間がかかる場合がある）。
+
+各リソースの詳細ページで、Policy Serverまたは任意のPolicyのメトリクスを表示できます。Grafana UI内の{short-project-name} ダッシュボードや、Prometheus UIからイベントを表示することもできます。
