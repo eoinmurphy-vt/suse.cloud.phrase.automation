@@ -1,0 +1,468 @@
+= MachineRegistration リファレンス
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+MachineRegistrationリソースで可能：
+
+* 登録プロセスを設定する
+* OSのインストールパラメータを提供する
+* 登録するマシンで有効なxref:rancher-os-management/architecture/services/architecture-services.adoc[{elemental-product-name} サービスを]定義する。一度作成されると、ノードがxref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[マシンを]登録してxref:rancher-os-management/architecture/services/architecture-machineonboarding.adoc[オンボーディングプロセスを]開始するために使用する登録 URL を生成する。
+
+MachineRegistrationは、{elemental_operator_name} 、登録URLと関連する`+ServiceAccount+` の生成に成功したときにtrueになる`+Ready+` 条件を持つ。この時点から、ターゲットホストは登録URLに接続してプロビジョニングプロセスを開始できる。
+
+登録URLに対するHTTP GETリクエストは、_登録ファイルを_返す。登録データ（つまり、作成されたばかりのMachineRegistrationの_spec:config:elemental:registration_セクション）を含む.yamlファイルである。
+登録ファイルには、ターゲットホストが自己登録を行い、{elemental-product-name} プロビジョニングを開始するために必要なすべてのデータが含まれています。
+
+`+MachineRegistration+` リソース仕様で設定できるキーはいくつかある。
+
+.マシン登録
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineName: name
+  machineInventoryLabels:
+    label: value
+  machineInventoryAnnotations:
+    annotation: value
+  config:
+    cloud-config:
+        ...
+    elemental:
+        registration:
+            ...
+        install:
+            ...
+----
+
+== `+config.cloud-config+`
+
+ノードに注入されるクラウド設定を含みます。
+yipとcloud-initの両方の構文がサポートされている。詳細については、『xref:references/cloud-config-reference.adoc[Cloud Config Reference]』を参照してください。
+
+== `+config.network+`
+
+https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20220125-ipam-integration.md#ipam-provider[] CAPI統合をサポートするDeclarative Networking構成が含まれる。 +
+詳細については、xref:operator-operational-tasks/declarative-networking/networking.adoc[Declarative Network Referenceを]参照のこと。
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| コンフィギュレーター
+| ストリング
+| nmc
+| 使用するネットワーク・コンフィギュレーター (`+nmc+`,`+nmstate+`, または`+nmconnections+`)
+
+| ipAddresses
+| objRefMap
+| 何もない
+| `+IPPool+` 。マップ・キーは、ネットワーク・コンフィグ・テンプレートでIPAアドレスの置換に使うことができる。
+
+| コンフィグ
+| obj
+| 何もない
+| ネットワーク設定テンプレート。構文は使用する`+configurator+` によって異なる。
+|===
+
+== `+config.elemental.registration+`
+
+{elemental_operator_name} への接続と初期登録に使用されるコンフィギュレーションが含まれる。
+
+以下の値をサポート：
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| url
+| ストリング
+| 何もない
+| に接続するためのURL {elemental_operator_name}
+
+| サーティフィケート
+| ストリング
+| 何もない
+| サーバが'url'で提供する証明書を検証するCA（証明書がパブリックCAによって署名されていない場合は必須）
+
+| ノーサンビオス
+| ブール
+| 擬似
+| SMBIOSのデータを以下に送るかどうか。 {elemental_operator_name}
+
+| no-toolkit
+| ブール
+| 擬似
+| {elemental_toolkit_url}[{elemental_toolkit_name"}] サポートを無効にし、xref:operator-operational-tasks/unmanaged-os.adoc[アンマネージドOSの]登録を許可する。
+|===
+
+[CAUTION]
+====
+以下の値は開発目的のみのものです。
+====
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| オーサー
+| ストリング
+| tpm
+| 登録時に使用する認証方法。`+tpm+` 、`+mac+` 、`+sys-uuid+` のいずれか。詳しくは「xref:rancher-os-management/authentication.adoc[認証]」をご覧ください。 
+
+| emulate-tpm
+| ブール
+| 擬似
+| これは、TPMのソフトウェア・エミュレーションを使用します（TPMハードウェアのないホストに必要です）。
+
+| emulated-tpm-seed
+| int64
+| 1
+| emulate-tpm' で使用するシードを修正。ランダムシードを得るには-1を設定する。詳細はxref:operator-operational-tasks/tpm.adoc[TPMを]参照
+|===
+
+== `+config.elemental.install+`
+
+ISOからブートしたときに`+elemental-register --install+` 。 https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental_install.md[`+elemental install+`]
+
+以下の値をサポート：
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| ファームウェア
+| ストリング
+| efi
+| インストールするファームウェア ('efi' または 'bios')
+
+| 装置
+| ストリング
+| 何もない
+| システムをインストールするデバイス
+
+| device-selector
+| ストリング
+| 何もない
+| システムをインストールする機器の選択ルール
+
+| ノーフォーマット
+| ブール
+| 擬似
+| ディスクをフォーマットしないでください。COS_STATE、COS_RECOVERY、COS_PERSISTENT、COS_OEMパーティションがターゲット・ディスク上にすでに存在することを意味する。
+
+| コンフィグアルル
+| リスト
+| 何もない
+| Cloud-initの設定ファイルの場所
+
+| アイソ
+| ストリング
+| 何もない
+| 実行中の ISO の代わりに ISO url からインストールを実行します。
+
+| system-uri
+| ストリング
+| 何もない
+| 実行中の ISO を使う代わりに、システムイメージのソースとそのタイプ (例えば 'docker:registry.org/image:tag') を設定します。
+
+| デバッグ
+| ブール
+| 擬似
+| デバッグ出力を有効にする
+
+| ティティ
+| ストリング
+| 何もない
+| grubに名前付きttyを追加する
+
+| パワーオフ
+| ブール
+| 擬似
+| インストール後のシステムのシャットダウン
+
+| 再起動
+| ブール
+| 擬似
+| インストール後にシステムを再起動する
+
+| snapshotter
+| obj
+| 何もない
+| スナップショッターの設定。<<#_config_elemental_install_snapshotter,`+config.elemental.install.snapshotter+` 参照>>。
+
+| eject-cd
+| ブール
+| 擬似
+| 再起動時にCDを取り出してみる
+|===
+
+[CAUTION]
+====
+`+iso+` と`+system-uri+` の両方を使用する場合は、`+iso+` の値が優先されます。
+====
+
+インストー ルに成功するためには、`+device+` または`+device-selector+` のどちらかのフィールドを指定する必要があるだけで、それ以外のパラメータはすべてオプションである。
+
+`+device+` 、`+device-selector+` の両方が指定された場合、`+device+` の値が使用され、`+device-selector+` は無視される。
+
+.詳細はこちら
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      install:
+        device: /dev/sda
+        debug: true
+        reboot: true
+        eject-cd: true
+        system-uri: registry.suse.com/rancher/sle-micro/5.5:latest
+----
+====
+
+== `+config.elemental.install.device-selector+`
+
+`+device-selector+` フィールドは、インストール中に動的にデバイスを選択するために使用できます。このフィールドには、以下のようなルールのリストが含まれている：
+
+.詳細はこちら
+[%collapsible]
+====
+.デバイス名に基づくデバイスセレクタの例
+[,yaml]
+----
+device-selector:
+  - key: Name
+    operator: In
+    values:
+      - /dev/sda
+      - /dev/vda
+      - /dev/nvme0
+----
+====
+
+.詳細はこちら
+[%collapsible]
+====
+.デバイスサイズに基づくデバイスセレクターの例
+[,yaml]
+----
+device-selector:
+  - key: Size
+    operator: Lt
+    values:
+      - 100Gi
+  - key: Size
+    operator: Gt
+    values:
+      - 30Gi
+----
+====
+
+現在サポートされているオペレーターは以下の通り：
+
+|===
+| オペレーター | 説明
+
+| で
+| キーが指定された値のいずれかに一致する
+
+| NotIn
+| キーが提供された値のいずれとも一致しない。
+
+| Gt
+| キーが提供された1つの値より大きい
+
+| Lt
+| キーが提供された1つの値より小さい
+|===
+
+現在サポートされているキーは以下の通り：
+
+|===
+| キー | 説明
+
+| 名称
+| デバイス名（例：/dev/sda）
+
+| サイズ
+| デバイスのサイズ（値はkubernetesのリソースを使用して指定できます。）
+|===
+
+ルールはAND:される。つまり、すべてのルールが対象となるデバイスにマッチしなければならない。
+
+== `+config.elemental.install.snapshotter+`
+
+Elemental がインストールされたマシンのスナップショットを管理する方法を設定できます。新しいスナップショットは、新しいOSイメージでマシンをxref:node-operational-tasks/upgrade.adoc[アップグレードする]ときなどに作成される。
+
+loopdevice snapshotterは、ext4ファイルシステム上に新しいイメージを展開しますが、btrfs snapshotterは、基礎となるhttps://archive.kernel.org/oldwiki/btrfs.wiki.kernel.org/index.php/SysadminGuide.html#Snapshots[`+btrfs+` スナップショット]機能を利用し、複数のスナップショットを保存するために必要なディスク容量を大幅に削減します。
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| タイプ
+| ストリング
+| loopdevice
+| OS イメージのスナップショット管理に使用されるデバイスのタイプ（「loopdevice」または「btrfs」）。
+
+|===
+
+== `+config.elemental.reset+`
+
+リカバリー・パーティションから起動し、`+elemental-register --reset+` を介して適用されるリセット設定が含まれている。 https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental_reset.md[`+elemental reset+`]
+
+以下の値をサポート：
+
+|===
+| キー | タイプ | デフォルト値 | 説明
+
+| 使用可能
+| ブール
+| 擬似
+| この MachineRegistration から作成された MachineInventories は、リセット機能が有効になります。
+
+| reset-persistent
+| ブール
+| 真の
+| COS_PERSISTENTパーティションのフォーマット
+
+| reset-oem
+| ブール
+| 真の
+| COS_OEMパーティションをフォーマットする
+
+| コンフィグアルル
+| リスト
+| 何もない
+| クラウドイット設定ファイル
+
+| system-uri
+| ストリング
+| 何もない
+| 実行中の ISO を使う代わりに、システムイメージのソースとそのタイプ (例えば 'docker:registry.org/image:tag') を設定します。
+
+| デバッグ
+| ブール
+| 擬似
+| デバッグ出力を有効にする
+
+| パワーオフ
+| ブール
+| 擬似
+| リセット後のシステムのシャットダウン
+
+| 再起動
+| ブール
+| 真の
+| リセット後にシステムを再起動する
+|===
+
+.詳細はこちら
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      reset:
+        enabled: true
+        reset-persistent: true
+        reset-oem: true
+        reboot: true
+        system-uri: registry.suse.com/rancher/sle-micro/5.5:latest
+----
+====
+
+== `+machineName+`
+
+これは、ノードに設定される名前と、ホスト名を必要とする kubernetes リソース (例えば rke2 デプロイされたポッドは、ポッド名の一部としてノードホスト名を使用します)`+String+` タイプを指します。
+
+[NOTE]
+====
+`+elemental:registration:no-smbios+` （デフォルト）を`+false+` （デフォルト）に設定すると、machineNameはhttps://www.dmtf.org/standards/smbios[SMBIOS]データで補間され、ハードウェア情報を保存できるようになる。
+
+`+machineName+` が指定されない場合は、`+m-$UUID+` の形式でデフォルトのものが設定される。
+UUIDは、利用可能であればSMBIOSデータから取得され、そうでなければランダムなUUIDが生成される。
+====
+
+.詳細はこちら
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineName: hostname-test-4
+----
+====
+
+== `+machineInventoryLabels+`
+
+この`+MachineRegistration+``+Key: value+` タイプから作成される`+MachineInventory+` に設定されるラベル。これらのラベルは、xref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate] の選択基準を確立するために使用される。
+
+{elemental-product-name} ノードは24時間ごとに`+elemental-register+` 。 +
+`+machineInventoryLabels+` を更新することで、次に登録更新が成功したときに、すべての登録ノードが新しいラベルを適用するようにすることができる。
+
+[IMPORTANT]
+====
+`+elemental:registration:no-smbios+` （デフォルト）が`+false+` （デフォルト）に設定されている場合、ラベルはhttps://www.dmtf.org/standards/smbios[SMBIOS]データで補間される。これにより、カスタムラベルにハードウェア情報を保存することができる。
+====
+
+.詳細はこちら
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineInventoryLabels:
+    my.prefix.io/element: fire
+    my.prefix.io/cpus: 32
+    my.prefix.io/manufacturer: "${System Information/Manufacturer}"
+    my.prefix.io/productName: "${System Information/Product Name}"
+    my.prefix.io/serialNumber: "${System Information/Serial Number}"
+    my.prefix.io/machineUUID: "${System Information/UUID}"
+----
+====
+
+== `+machineInventoryAnnotations+`
+
+この`+MachineRegistration+``+Key: value+` タイプから作成される`+MachineInventory+` に設定される注釈
+
+.詳細はこちら
+[%collapsible]
+====
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  machineInventoryAnnotations:
+    owner: bob
+    version: 1.0.0
+----
+====
