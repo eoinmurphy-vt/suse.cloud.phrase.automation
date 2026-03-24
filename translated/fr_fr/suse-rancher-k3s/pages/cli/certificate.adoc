@@ -1,0 +1,370 @@
+= Certificat k3s
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-12-30
+:page-revdate: {revdate}
+
+[#_client_and_server_certificates]
+== Certificats du client et du serveur
+
+Les certificats clients et serveurs de K3 sont valables pendant 365 jours à compter de leur date d'émission.
+Tout certificat expiré ou en passe d'expirer depuis moins de 120 jours est automatiquement renouvelé à chaque démarrage de K3s.
+Ce renouvellement réutilise les clés existantes et prolonge la durée de vie des certificats existants.
+Si vous souhaitez générer de nouveaux certificats et de nouvelles clés, au lieu de prolonger la validité des certificats existants, utilisez la sous-commande xref:#_rotating_client_and_server_certificates[`+rotate+`] décrite ci-dessous.
+
+Lorsqu'un certificat est sur le point d'expirer dans les 120 jours, un événement d'alerte Kubernetes avec `+reason: CertificateExpirationWarning+` est créé, avec une relation au nœud utilisant le certificat.
+
+Avant les versions de mai 2025 (v1.33.1+k3s1, v1.32.5+k3s1, v1.31.9+k3s1, v1.30.13+k3s1), les alertes et la rotation étaient déclenchées après 90 jours, au lieu de 120 jours.
+
+=== Vérification des dates d'expiration
+
+[IMPORTANT]
+.Version Gate
+====
+Le format de sortie est configurable à partir des versions de janvier 2025 : v1.32.0+k3s1, v1.31.5+k3s1, v1.30.9+k3s1, v1.30.13+k3s1.
+
+Un nouveau format contenant plus d'informations est disponible à partir des versions de mai 2025 : v1.33.1+k3s1, v1.32.5+k3s1, v1.31.9+k3s1, v1.29.13+k3s1.
+====
+
+Pour vérifier les certificats de nœuds et leur date d'expiration, utilisez la fonction `+k3s certificate check --output table+`:
+
+[,bash]
+----
+FILENAME                    SUBJECT                     USAGES       EXPIRES                  RESIDUAL TIME   STATUS
+--------                    -------                     ------       -------                  -------------   ------
+client-kube-proxy.crt       system:kube-proxy           ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-kube-proxy.crt       k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+client-kubelet.crt          system:node:ip-10-11-0-14   ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-kubelet.crt          k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+serving-kubelet.crt         ip-10-11-0-14               ServerAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+serving-kubelet.crt         k3s-server-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+client-k3s-controller.crt   system:k3s-controller       ClientAuth   Jun 09, 2026 10:17 UTC   1 year          OK
+client-k3s-controller.crt   k3s-client-ca@1749464211    CertSign     Jun 07, 2035 10:16 UTC   10 years        OK
+----
+
+[NOTE]
+.DEUX FOIS LE MÊME CERTIFICAT
+====
+Chaque fichier de certificat`(` colonne`+FILENAME +)` contient au moins deux certificats : le certificat client/serveur de la feuille (ou de l'entité finale), les certificats intermédiaires de l'autorité de certification et le certificat de l'autorité de certification racine.
+====
+
+En cas de résultats inattendus, assurez-vous que vous spécifiez le bon répertoire de données avec l'option `+--data-dir+` (si vous utilisez un répertoire de données personnalisé), ou utilisez l'option `+--debug+` pour obtenir des résultats supplémentaires du processus de vérification.
+
+[#_rotating_client_and_server_certificates]
+=== Rotation des certificats du client et du serveur
+
+Pour alterner manuellement les certificats des clients et des serveurs, utilisez la sous-commande `+k3s certificate rotate+`:
+
+[,bash]
+----
+# Stop K3s
+systemctl stop k3s
+
+# Rotate certificates
+k3s certificate rotate
+
+# Start K3s
+systemctl start k3s
+----
+
+Des certificats individuels ou des listes de certificats peuvent faire l'objet d'une rotation en spécifiant le nom du certificat :
+
+[,bash]
+----
+k3s certificate rotate --service <SERVICE>,<SERVICE>
+----
+
+Les certificats suivants peuvent faire l'objet d'une rotation : `+admin+` `+api-server+` , `+controller-manager+`, `+scheduler+`, `+k3s-controller+`, `+k3s-server+`, `+cloud-controller+`, `+etcd+`, `+auth-proxy+`, `+kubelet+`, `+kube-proxy+`.
+
+[#_certificate_authority_ca_certificates]
+== Certificats d'autorité de certification (AC)
+
+Kubernetes a besoin d'un certain nombre de certificats d'autorité de certification pour fonctionner correctement. Pour plus d'informations sur la façon dont Kubernetes utilise les certificats d'AC, voir la documentation Kubernetes https://kubernetes.io/docs/setup/best-practices/certificates/#all-certificates[Certificates and Requirements.] PKI 
+
+Par défaut, K3s génère des certificats d'autorité de certification auto-signés lors du démarrage du premier nœud de serveur. Ces certificats d'autorité de certification sont valables 10 ans à compter de leur date d'émission et ne sont pas renouvelés automatiquement.
+
+Les certificats et les clés de l'autorité de certification font autorité et sont stockés dans la clé d'amorçage du magasin de données, chiffrés à l'aide du xref:cli/token.adoc#_server[jeton du serveur] comme phrase de passe PBKDF2 avec AES256-GCM et HMAC-SHA1.
+Des copies des certificats et des clés de l'autorité de certification sont extraites sur le disque lors du démarrage du serveur K3s.
+Tout serveur peut générer des certificats de feuilles pour les nœuds lorsqu'ils rejoignent le cluster, et les contrôleurs de Kubernetes https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/[l'API] peuvent émettre des certificats supplémentaires au moment de l'exécution.
+
+Pour effectuer une rotation des certificats et des clés de l'autorité de certification, utilisez la commande `+k3s certificate rotate-ca+`.
+La commande effectue des contrôles d'intégrité pour confirmer que les certificats et les clés mis à jour sont utilisables.
+Si les données mises à jour sont acceptables, la clé d'amorçage chiffrée du datastore est mise à jour et les nouveaux certificats et clés seront utilisés lors du prochain démarrage de K3s.
+Si des problèmes sont rencontrés lors de la validation des certificats et des clés, une erreur est signalée dans le journal du système et l'opération est annulée sans modification.
+
+[IMPORTANT]
+.Version Gate
+====
+La prise en charge de la commande `+k3s certificate rotate-ca+` et la possibilité d'utiliser des certificats d'autorité de certification signés par une autorité de certification externe sont disponibles à partir des versions 2023-02 (v1.26.2+k3s1, v1.25.7+k3s1, v1.24.11+k3s1, v1.23.17+k3s1).
+====
+
+
+=== Utilisation de certificats d'autorité de certification personnalisés
+
+==== Mises en garde contre la réutilisation de l'AC
+
+[WARNING]
+====
+Il n'est pas recommandé de partager des autorités de certification racines ou intermédiaires entre plusieurs clusters, ni d'utiliser une autorité de certification privée existante comme autorité de certification de cluster.
+====
+
+Lorsque plusieurs clusters partagent une racine de confiance commune, tout certificat de client ou de serveur émis par un cluster sera également approuvé par tous les autres clusters, car tous les certificats sont liés à la même ancre de confiance, à savoir l'autorité de certification racine commune.
+Cela signifie que tout utilisateur disposant d'un certificat client (ou kubeconfig) valide pour un cluster est également en mesure de s'authentifier auprès d'autres clusters, et que tout RBAC correspondant à l'utilisateur ou au groupe d'un client est également appliqué dans ces autres clusters.
+De même, les certificats de serveur émis par une grappe sont également approuvés par toutes les autres grappes et par toutes les autres infrastructures ou clients qui font confiance à l'autorité de certification racine.
+
+Kubernetes ne prend pas en charge l'utilisation des listes de révocation de certificats.
+Si vous devez révoquer un certificat pour une raison quelconque (par exemple, en raison d'un kubeconfig administrateur compromis), vous devez effectuer un remplacement complet de l'autorité de certification du cluster afin d'invalider la confiance du certificat.
+
+==== Utilisation de certificats d'autorité de certification personnalisés
+
+Si les certificats et les clés de l'autorité de certification se trouvent au bon endroit lors du démarrage initial du premier serveur de la grappe, la génération automatique des certificats de l'autorité de certification sera ignorée.
+
+Un exemple de script permettant de précréer les certificats et les clés appropriés est disponible à l'adresse https://github.com/k3s-io/k3s/blob/main/contrib/util/generate-custom-ca-certs.sh[dans le répertoire K3s à l'adresse `+contrib/util/generate-custom-ca-certs.sh+`].
+Ce script doit être exécuté avant le premier démarrage de K3s et créera un ensemble complet de certificats d'autorité de certification de feuilles signés par des certificats d'autorité de certification racine et intermédiaire communs.
+Si vous disposez d'une autorité de certification racine ou intermédiaire, ce script peut être utilisé (ou servir de point de départ) pour créer les bons certificats d'autorité de certification afin de provisionner un cluster K3s avec une PKI ancrée dans une autorité existante.
+
+Les fichiers de l'autorité de certification personnalisée doivent être placés à l'adresse `+/var/lib/rancher/k3s/server/tls+`. Les fichiers suivants sont nécessaires :
+
+* `+server-ca.crt+`
+* `+server-ca.key+`
+* `+client-ca.crt+`
+* `+client-ca.key+`
+* `+request-header-ca.crt+`
+* `+request-header-ca.key+` +
+_// note : les fichiers etcd sont nécessaires même si etcd intégré n'est pas utilisé._
+* `+etcd/peer-ca.crt+`
+* `+etcd/peer-ca.key+`
+* `+etcd/server-ca.crt+`
+* `+etcd/server-ca.key+` +
+_// note : Il s'agit de la clé privée utilisée pour signer les jetons de compte de service. Il n'y a pas de certificat correspondant._
+* `+service.key+`
+
+==== Topologie CA personnalisée
+
+Les certificats d'autorité de certification personnalisés générés par le script d'exemple ont la topologie suivante :
+
+[mermaid]
+....
+graph TD root("Root CA") intermediate("Intermediate CA") server-ca("Server CA") client-ca("Client CA") request-header-ca("API Aggregation CA") etcd-peer-ca("etcd Peer CA") etcd-server-ca("etcd Server CA")
+
+  root-hash>"Join token CA hash"]
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  root -.-|SHA256| root-hash
+  root ---> intermediate
+  intermediate --> server-ca ==> kube-server-certs
+  intermediate --> client-ca ==> kube-client-certs
+  intermediate --> request-header-ca ==> request-header-certs
+  intermediate --> etcd-peer-ca ==> etcd-peer-certs
+  intermediate --> etcd-server-ca ==> etcd-server-certs
+....
+
+==== Utilisation du script d'exemple
+
+[IMPORTANT]
+.Important
+====
+Si vous souhaitez signer les certificats de l'autorité de certification du cluster avec une autorité de certification racine existante à l'aide du script d'exemple, vous devez placer les fichiers racine et intermédiaire dans le répertoire cible avant d'exécuter le script.
+Si les fichiers n'existent pas, le script créera de nouveaux certificats d'autorité de certification racine et intermédiaire.
+====
+
+
+Si vous souhaitez utiliser uniquement un certificat d'autorité de certification racine existant, fournissez les fichiers suivants :
+
+* `+root-ca.pem+`
+* `+root-ca.key+`
+
+Si vous souhaitez utiliser des certificats d'autorité de certification racine et intermédiaire existants, fournissez les fichiers suivants :
+
+* `+root-ca.pem+`
+* `+intermediate-ca.pem+`
+* `+intermediate-ca.key+`
+
+Le script d'exemple utilise les autorités de certification fournies comme racine pour tous les groupes d'autorités de certification du cluster - serveur, client, agrégation d'API et etcd Peer/Server.
+Pour les cas d'utilisation avancés, tels que l'utilisation des autorités de certification fournies pour certains lots seulement, ou l'utilisation de différentes autorités de certification pour différents lots, le script d'exemple doit être modifié pour répondre aux besoins spécifiques de votre organisation.
+
+Pour utiliser le script d'exemple afin de générer des certificats et des clés personnalisés avant de lancer K3s, exécutez les commandes suivantes :
+
+[,bash]
+----
+# Create the target directory for cert generation.
+mkdir -p /var/lib/rancher/k3s/server/tls
+
+# Copy your root CA cert and intermediate CA cert+key into the correct location for the script.
+# For the purposes of this example, we assume you have existing root and intermediate CA files in /etc/ssl.
+# If you do not have an existing root and/or intermediate CA, the script will generate them for you.
+cp /etc/ssl/certs/root-ca.pem /etc/ssl/certs/intermediate-ca.pem /etc/ssl/private/intermediate-ca.key /var/lib/rancher/k3s/server/tls
+
+# Generate custom CA certs and keys.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/generate-custom-ca-certs.sh | bash -
+----
+
+Si la commande se termine avec succès, vous pouvez installer et/ou démarrer K3s pour la première fois.
+Si le script a généré des fichiers d'autorité de certification racine et/ou intermédiaire, vous devez sauvegarder ces fichiers afin de pouvoir les réutiliser s'il est nécessaire d'effectuer une rotation des certificats d'autorité de certification à une date ultérieure.
+
+=== Rotation des certificats d'autorité de certification personnalisés
+
+Pour faire pivoter les certificats d'autorité de certification personnalisés, utilisez la sous-commande `+k3s certificate rotate-ca+`.
+Les fichiers mis à jour doivent être stockés dans un répertoire temporaire, chargés dans le magasin de données et k3s doit être redémarré sur tous les nœuds pour utiliser les certificats mis à jour.
+
+[CAUTION]
+====
+Vous ne devez pas écraser les données en cours d'utilisation sur `+/var/lib/rancher/k3s/server/tls+`. +
+Placez les certificats et les clés mis à jour dans un répertoire distinct.
+====
+
+
+Un cluster qui a été démarré avec des certificats d'autorité de certification personnalisés peut renouveler ou changer les certificats d'autorité de certification et les clés sans interruption, tant que la même autorité de certification racine est utilisée.
+
+Si une nouvelle autorité de certification racine est nécessaire, la rotation sera perturbée. L'option `+k3s certificate rotate-ca --force+` doit être utilisée, tous les nœuds qui ont été joints avec un xref:cli/token.adoc#_secure[jeton sécurisé] (y compris les serveurs) devront être reconfigurés pour utiliser la nouvelle valeur du jeton, et les pods devront être redémarrés pour faire confiance à la nouvelle autorité de certification racine.
+
+==== Utilisation du script d'exemple
+
+Le script `+generate-custom-ca-certs.sh+` cité en exemple ci-dessus peut également être utilisé pour générer des certificats mis à jour dans un nouveau répertoire temporaire, en copiant les fichiers à l'emplacement correct et en définissant la variable d'environnement `+DATA_DIR+`.
+Pour utiliser le script d'exemple afin de générer des certificats et des clés mis à jour, exécutez les commandes suivantes :
+
+[,bash]
+----
+# Create a temporary directory for cert generation.
+mkdir -p /opt/k3s/server/tls
+
+# Copy your root CA cert and intermediate CA cert+key into the correct location for the script.
+# Non-disruptive rotation requires the same root CA that was used to generate the original certificates.
+# If the original files are still in the data directory, you can just run:
+cp /var/lib/rancher/k3s/server/tls/root-ca.* /var/lib/rancher/k3s/server/tls/intermediate-ca.* /opt/k3s/server/tls
+
+# Copy the current service-account signing key, so that existing service-account tokens are not invalidated.
+cp /var/lib/rancher/k3s/server/tls/service.key /opt/k3s/server/tls
+
+# Generate updated custom CA certs and keys.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/generate-custom-ca-certs.sh | DATA_DIR=/opt/k3s bash -
+
+# Load the updated CA certs and keys into the datastore.
+k3s certificate rotate-ca --path=/opt/k3s/server
+----
+
+Si la commande `+rotate-ca+` renvoie une erreur, vérifiez les erreurs dans le journal de service.
+Si la commande se termine avec succès, redémarrez les K3 sur tous les nœuds du cluster - d'abord les serveurs, puis les agents.
+
+Si vous avez utilisé l'option `+--force+` ou modifié l'autorité de certification racine, assurez-vous que tous les nœuds qui ont été joints à l'aide d'un xref:cli/token.adoc#_secure[jeton sécurisé] sont reconfigurés pour utiliser la nouvelle valeur du jeton avant d'être redémarrés.
+Le jeton peut être stocké dans un fichier `+.env+`, une unité systemd ou config.yaml, en fonction de la manière dont le nœud a été configuré lors de l'installation initiale.
+
+=== Rotation des certificats d'autorité de certification auto-signés
+
+Pour faire pivoter les certificats d'autorité de certification auto-signés générés par K3s, utilisez la sous-commande `+k3s certificate rotate-ca+`.
+Les fichiers mis à jour doivent être stockés dans un répertoire temporaire, chargés dans le magasin de données et k3s doit être redémarré sur tous les nœuds pour utiliser les certificats mis à jour.
+
+[CAUTION]
+====
+Vous ne devez pas écraser les données en cours d'utilisation sur `+/var/lib/rancher/k3s/server/tls+`. +
+Placez les certificats et les clés mis à jour dans un répertoire distinct.
+====
+
+
+Si le cluster a été démarré avec des certificats d'autorité de certification auto-signés par défaut, la rotation sera perturbée. Tous les nœuds qui ont été joints à l'aide d'un xref:cli/token.adoc#_secure[jeton sécurisé] devront être reconfigurés pour faire confiance au nouveau hachage de l'autorité de certification.
+Si les nouveaux certificats d'autorité de certification ne sont pas signés par les anciens certificats d'autorité de certification, vous devrez utiliser l'option `+--force+` pour contourner les contrôles d'intégrité, et les pods devront être redémarrés pour faire confiance à la nouvelle autorité de certification racine.
+
+==== Topologie par défaut de l'autorité de certification
+
+Les certificats d'autorité de certification auto-signés par défaut ont la topologie suivante :
+
+[mermaid]
+....
+graph TD server-ca("Server CA") client-ca("Client CA") request-header-ca("API Aggregation CA") etcd-peer-ca("etcd Peer CA") etcd-server-ca("etcd Server CA")
+
+  root-hash>"Join token CA hash"]
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  server-ca -.-|SHA256| root-hash
+  server-ca ===> kube-server-certs
+  client-ca ===> kube-client-certs
+  request-header-ca ===> request-header-certs
+  etcd-peer-ca ===> etcd-peer-certs
+  etcd-server-ca ===> etcd-server-certs
+....
+
+Lors de la rotation des autorités de certification auto-signées par défaut, une topologie de certificats modifiée avec des autorités de certification intermédiaires et une nouvelle autorité de certification racine cosignée par l'ancienne autorité de certification peut être utilisée afin qu'il y ait une chaîne de confiance continue entre l'ancienne et la nouvelle autorité de certification :
+
+[mermaid]
+....
+graph TD server-ca-old("Server CA<br/>(old)") client-ca-old("Client CA<br/>(old)") request-header-ca-old("API Aggregation CA<br/>(old)") etcd-peer-ca-old("etcd Peer CA<br/>(old)") etcd-server-ca-old("etcd Server CA<br/>(old)")
+
+  root-hash>"Join token CA hash"]
+
+  server-ca-xsigned("Server CA<br/>(cross-signed)") client-ca-xsigned("Client CA<br/>(cross-signed)") request-header-ca-xsigned("API Aggregation CA<br/>(cross-signed)") etcd-peer-ca-xsigned("etcd Peer CA<br/>(cross-signed)") etcd-server-ca-xsigned("etcd Server CA<br/>(cross-signed)")
+
+  server-ca-ssigned("Server CA<br/>(self-signed)")
+  client-ca-ssigned("Client CA<br/>(self-signed)")
+  request-header-ca-ssigned("API Aggregation CA<br/>(self-signed)")
+  etcd-peer-ca-ssigned("etcd Peer CA<br/>(self-signed)")
+  etcd-server-ca-ssigned("etcd Server CA<br/>(self-signed)")
+
+  server-ca("Intermediate<br/>Server CA") client-ca("Intermediate<br/>Client CA") request-header-ca("Intermediate<br/>API Aggregation CA") etcd-peer-ca("Intermediate<br/>etcd Peer CA") etcd-server-ca("Intermediate<br>etcd Server CA")
+
+  kube-server-certs[["Kubernetes servers<br/>(control-plane and kubelet listeners)"]]
+  kube-client-certs[["Kubernetes clients<br/>(apiserver and kubelet clients)"]]
+  request-header-certs[["Kubernetes API aggregation<br/>(apiserver proxy client)"]]
+  etcd-peer-certs[["etcd peer client/server<br/>(etcd replication)"]]
+  etcd-server-certs[["etcd client/server certificates<br/>(Kubernetes <-> etcd)"]]
+
+  server-ca-ssigned -.-|SHA256| root-hash server-ca-ssigned --> server-ca ==> kube-server-certs server-ca-old --> server-ca-xsigned --> server-ca client-ca-ssigned --> client-ca ==> kube-client-certs client-ca-old --> client-ca-xsigned --> client-ca request-header-ca-ssigned --> request-header-ca ==> request-header-certs request-header-ca-old --> request-header-ca-xsigned --> request-header-ca etcd-peer-ca-ssigned --> etcd-peer-ca ==> etcd-peer-certs etcd-peer-ca-old --> etcd-peer-ca-xsigned --> etcd-peer-ca etcd-server-ca-signé --> etcd-server-ca ==> etcd-server-certs etcd-server-ca-old --> etcd-server-ca-xsigned --> etcd-server-ca
+....
+
+==== Utilisation du script d'exemple
+
+Un exemple de script permettant de créer des certificats d'autorité de certification mis à jour et des clés contresignées par les autorités de certification existantes est disponible à l'adresse https://github.com/k3s-io/k3s/blob/main/contrib/util/rotate-default-ca-certs.sh[dans le répertoire K3s à l'adresse `+contrib/util/rotate-default-ca-certs.sh+`].
+
+Pour utiliser le script d'exemple afin de générer des certificats auto-signés mis à jour et contresignés par les autorités de certification existantes, exécutez les commandes suivantes :
+
+[,bash]
+----
+# Create updated CA certs and keys, cross-signed by the current CAs.
+# This script will create a new temporary directory containing the updated certs, and output the new token values.
+curl -sL https://github.com/k3s-io/k3s/raw/main/contrib/util/rotate-default-ca-certs.sh | bash -
+
+# Load the updated certs into the datastore; see the script output for the updated token values.
+k3s certificate rotate-ca --path=/var/lib/rancher/k3s/server/rotate-ca
+----
+
+Si la commande `+rotate-ca+` renvoie une erreur, vérifiez les erreurs dans le journal de service.
+Si la commande se termine avec succès, redémarrez les K3 sur tous les nœuds du cluster - d'abord les serveurs, puis les agents.
+
+Assurez-vous que tous les nœuds qui ont été joints avec un xref:cli/token.adoc#_secure[jeton sécurisé], y compris les autres nœuds de serveur, sont reconfigurés pour utiliser la nouvelle valeur du jeton avant d'être redémarrés.
+Le jeton peut être stocké dans un fichier `+.env+`, une unité systemd ou config.yaml, en fonction de la manière dont le nœud a été configuré lors de l'installation initiale.
+
+== Rotation des clés de l'émetteur du compte de service
+
+La clé de l'émetteur du compte de service est une clé privée RSA utilisée pour signer les jetons de compte de service.
+Lors de la rotation de la clé de l'émetteur du compte de service, au moins une ancienne clé doit être conservée dans le fichier afin que les jetons de compte de service existants ne soient pas invalidés.
+Elle peut être remplacée indépendamment des autorités de certification du groupe en utilisant le site `+k3s certificate rotate-ca+` pour installer uniquement un fichier `+service.key+` mis à jour qui comprend à la fois les nouvelles et les anciennes clés.
+
+[CAUTION]
+====
+Vous ne devez pas écraser les données en cours d'utilisation sur `+/var/lib/rancher/k3s/server/tls+`. +
+Placez la clé mise à jour dans un répertoire séparé.
+====
+
+
+Par exemple, pour faire pivoter uniquement la clé de l'émetteur du compte de service, exécutez les commandes suivantes :
+
+[,bash]
+----
+# Create a temporary directory for cert generation
+mkdir -p /opt/k3s/server/tls
+
+# Check OpenSSL version
+openssl version | grep -qF 'OpenSSL 3' && OPENSSL_GENRSA_FLAGS=-traditional
+
+# Generate a new key
+openssl genrsa ${OPENSSL_GENRSA_FLAGS:-} -out /opt/k3s/server/tls/service.key 2048
+
+# Append the existing key to avoid invalidating current tokens
+cat /var/lib/rancher/k3s/server/tls/service.key >> /opt/k3s/server/tls/service.key
+
+# Load the updated key into the datastore
+k3s certificate rotate-ca --path=/opt/k3s/server
+----
+
+Il est normal de voir des avertissements pour des fichiers qui ne sont pas mis à jour. Si la commande `+rotate-ca+` renvoie une erreur, vérifiez les erreurs dans le journal de service.
+Si la commande se termine avec succès, redémarrez les K3 sur tous les serveurs du cluster. Il n'est pas nécessaire de redémarrer les agents ou les pods.
