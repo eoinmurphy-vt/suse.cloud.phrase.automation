@@ -1,0 +1,103 @@
+include::partial$variables.adoc[]
+= 情境感知政策
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 开发人员可以创建上下文感知策略，在运行时获取 Kubernetes 集群信息，以确定 AdmissionRequest 的接受标准。
+:doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["explanations", "context-aware-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "context-aware policy", "clusteradmissionpolicy", "admissionpolicy", "admissionrequest", "cluster administrator"] 群集管理员
+:sidebar_label: 情境感知政策
+:sidebar_position: 20
+:current-version: {page-origin-branch}
+
+开发人员可以创建策略，在运行时从 Kubernetes 集群获取信息。这些都是情境感知政策。情境感知策略可利用集群中部署的资源信息来确定`+AdmissionRequest+` 是否可接受。
+
+[NOTE]
+====
+上下文感知策略仅适用于{project-name} ≥ v1.6.0 版本。
+====
+
+通过策略服务器的https://kubernetes.io/docs/concepts/security/service-accounts/[服务帐户]，可以控制策略可以访问群集中的哪些资源。集群管理员通过 Kubernetes RBAC 规则控制策略的访问权限。上下文感知策略只能*读取*请求的资源。
+
+出于安全考虑，只有`+ClusterAdmissionPolicy+` 策略能从 Kubernetes 集群获取信息。这是因为无权限用户可以部署`+AdmissionPolicy+` 资源。
+
+如果无权限用户将上下文感知策略作为`+AdmissionPolicy+` 部署，系统就会：
+
+- 阻止所有访问 Kubernetes 资源的尝试。
+- 向群集管理员报告。
+
+默认情况下，{short-project-name} 会封锁所有群集资源。{project-name} 管理员定义每个上下文感知策略可以读取哪些 Kubernetes 资源。`+contextAwareResources+` 来实现这一目标。
+
+下面的示例部署了一个需要访问`+Deployment+`和`+Pod+` 资源的策略：
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: context-aware-policy
+  namespace: default
+spec:
+  policyServer: default
+  module: "registry://ghcr.io/kubewarden/policies/context-aware-policy:v1.0.0"
+  settings: {}
+  contextAwareResources:
+    - apiVersion: "apps/v1"
+      kind: "deployment"
+    - apiVersion: "v1"
+      kind: "pod"
+  rules:
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployment"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+----
+
+部署后，该策略可读取`+deployment+` 和`+pod+` 资源的数据。
+
+策略作者为其上下文感知策略提供 Kubernetes 资源列表。{project-name}管理员可使用`+kwctl inspect+` 命令查看策略元数据。他们可以获得政策需要访问的资源清单。管理员使用该列表填充`+ClusterAdmissionPolicy+` 定义。
+
+[WARNING]
+====
+
+为防止系统滥用，{project-name} 管理员必须审查策略访问的资源。
+
+例如，评估入口对象的策略有充分理由读取群集中定义的`+Ingress+` 资源。同样的政策也无法证明有理由使用`+Secret+` 资源。
+
+政策应具有正常运行所需的最低访问权限。
+
+====
+
+
+[NOTE]
+====
+
+Kubernetes 资源识别使用`+apiVersion+` 和`+kind+` 。
+
+通常，`+apiVersion+` 是格式为`+<api>/<version>+` 的字符串。`+core+` API 组（Pod、Service 和其他）中的资源不应定义组名`+<api>+` 。它们只应定义`+<version>+` （例如`+v1+` ）。
+
+对于核心资源来说，第一种方法行不通，第二种方法可以。
+
+[subs="+attributes",console]
+----
+- apiVersion: "core/v1"
+  kind: "pod"
+----
+
+[subs="+attributes",console]
+----
+- apiVersion: "v1"
+  kind: "pod"
+----
+
+所有其他 Kubernetes 资源都需要完整的定义：`+<api>/<version>+` 。
+====
+
+
+== 更多阅读
+
+有关上下文感知策略的更多详细信息，请参阅参考文档的xref:../reference/spec/05-context-aware-policies.adoc[这一部分]。
