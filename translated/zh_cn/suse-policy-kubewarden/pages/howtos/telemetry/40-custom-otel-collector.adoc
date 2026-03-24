@@ -1,0 +1,324 @@
+include::partial$variables.adoc[]
+
+= 定制 OpenTelemetry 采集器
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 配置{project-name} ，以安全地将遥测数据发送到部署在群集中的自定义 OpenTelemetry 收集器。
+:keywords: kubewarden、kubernetes、度量、跟踪、opentelemetry
+:doc-persona: kubewarden-operator, kubewarden-integrator
+:doc-type: 如何
+:doc-topic: 操作手册、遥测、度量、快速入门
+
+本指南介绍如何配置{short-project-name} 以将遥测数据发送到已部署在群集上的 OpenTelemetry 收集器。
+
+您应该在群集中只部署一个https://opentelemetry.io/docs/collector/[OpenTelemetry Collector]实例。
+
+== 安装依赖项
+
+首先，安装 OpenTelemetry Collector 的依赖项。
+
+{project-name} 组件与收集器之间需要加密通信。您可以使用https://cert-manager.io/[cert-manager]管理安全通信所需的所有证书。
+
+OpenTelemetry 采集器跟踪会被发送到https://www.jaegertracing.io/[] Jaeger 实例。
+
+{short-project-name} 堆栈将指标发送到 OpenTelemetry 收集器。
+它将指标作为 Prometheus 端点进行公开。然后，Prometheus 实例会收集这些指标，并将其存储在数据库中。同一个 Prometheus 实例还提供一个用户界面，用于查看和使用度量指标。
+
+您创建的资源会被定义在`+kubewarden+` 命名空间中，或期待它的存在。因此，应首先创建命名空间：
+
+[source,console]
+----
+kubectl create namespace kubewarden
+----
+
+=== 安装证书管理器和 OpenTelemetry
+
+您可以通过这种方式安装 cert-manager 和 OpenTelemetry 操作员：
+
+[source,console]
+----
+helm repo add jetstack https://charts.jetstack.io
+helm install --wait \
+  --namespace cert-manager \
+  --create-namespace \
+  --set crds.enabled=true \
+  --version 1.18.2 \
+  cert-manager jetstack/cert-manager
+
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+helm install --wait \
+  --namespace open-telemetry \
+  --create-namespace \
+  --version 0.97.1 \
+  --set "manager.collectorImage.repository=otel/opentelemetry-collector-contrib" \
+  my-opentelemetry-operator open-telemetry/opentelemetry-operator
+----
+
+您可以使用 mTLS 设置{short-project-name} 组件与 OpenTelemetry Collector 之间的通信。
+
+为此，您需要创建整个公钥基础设施（PKI）：
+
+[source,yaml]
+----
+# pki.yaml file
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-client-certificate
+  namespace: kubewarden
+spec:
+  dnsNames:
+  - kubewarden.kubewarden.svc
+  - kubewarden.kubewarden.svc.cluster.local
+  issuerRef:
+  kind: Issuer
+  name: my-selfsigned-issuer
+  secretName: my-client-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: my-certificate
+  namespace: kubewarden
+spec:
+  dnsNames:
+  - my-collector-collector.kubewarden.svc
+  - my-collector-collector.kubewarden.svc.cluster.local
+  issuerRef:
+  kind: Issuer
+  name: my-selfsigned-issuer
+  secretName: my-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: my-selfsigned-issuer
+  namespace: kubewarden
+spec:
+  selfSigned: {}
+----
+应用清单：
+[source,console]
+----
+kubectl apply -f pki.yaml
+----
+
+=== 安装机甲战士和普罗米修斯
+
+然后，安装https://www.jaegertracing.io/[] Jaeger 来存储和可视化跟踪事件。
+
+[source,console]
+----
+helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+helm upgrade -i --wait \
+  --namespace jaeger \
+  --create-namespace \
+  --version 2.57.0 \
+  jaeger-operator jaegertracing/jaeger-operator \
+  --set rbac.clusterRole=true
+
+kubectl apply -f - <<EOF
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: my-open-telemetry
+  namespace: jaeger
+spec: {}
+EOF
+----
+
+如果您在 OpenTelemetry 快速入门中安装了特拉菲克，请使用`+Ingress+` 公开 Jaeger Query UI：
+
+[yaml]
+----
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind:输入元数据：名称：my-open-telemetry-query 名称空间：jaeger 规格：ingressClassName：traefik 规则：- http: paths: - path：/ pathType：前缀 后端： 服务： 名称： my-open-telemetry-query 端口： 编号：16686
+EOF
+----
+
+现在，您需要安装https://prometheus.io/[Prometheus]来存储和可视化指标。
+
+[source,console]
+----
+cat <<EOF > kube-prometheus-stack-values.yaml
+prometheus:
+  additionalServiceMonitors:
+  - name: kubewarden
+    selector:
+    matchLabels:
+      app.kubernetes.io/instance: kubewarden.my-collector
+    namespaceSelector:
+    matchNames:
+      - kubewarden
+    endpoints:
+    - port: prometheus
+    interval: 10s
+EOF
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install --wait --create-namespace \
+  --namespace prometheus \
+  --version 77.13.0 \
+  --values kube-prometheus-stack-values.yaml \
+  prometheus prometheus-community/kube-prometheus-stack
+----
+
+[NOTE]
+====
+
+Prometheus 服务监控器通过抓取在`+kubewarden+` 命名空间运行的 OpenTelemetry 收集器来获取{short-project-name} 指标。
+
+====
+
+== 安装 OpenTelemetry 采集器
+
+现在，您可以在`+kubewarden+`命名空间中部署自定义 OpenTelemetry 收集器。
+
+[source,yaml]
+----
+# otel-collector.yaml file
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: my-collector
+  namespace: kubewarden
+spec:
+  mode: deployment # This configuration is omittable.
+  volumes:
+  - name: server-certificate
+    secret:
+    secretName: my-server-cert
+  - name: client-certificate
+    secret:
+    secretName: my-client-cert
+  volumeMounts:
+  - name: server-certificate
+    mountPath: /tmp/etc/ssl/certs/my-server-cert
+    readOnly: true
+  - name: client-certificate
+    mountPath: /tmp/etc/ssl/certs/my-client-cert
+    readOnly: true
+  config:
+  receivers:
+    otlp:
+    protocols:
+      grpc:
+      tls:
+        cert_file: /tmp/etc/ssl/certs/my-server-cert/tls.crt
+        key_file: /tmp/etc/ssl/certs/my-server-cert/tls.key
+        client_ca_file: /tmp/etc/ssl/certs/my-client-cert/ca.crt
+  processors: {}
+  exporters:
+    debug:
+    verbosity: normal
+    prometheus:
+    endpoint: ":8080"
+    otlp/jaeger:
+    endpoint: "my-open-telemetry-collector.jaeger.svc.cluster.local:4317"
+    tls:
+      insecure: true
+  service:
+    pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: []
+      exporters: [debug, prometheus]
+    traces:
+      receivers: [otlp]
+      processors: []
+      exporters: [debug, otlp/jaeger]
+----
+应用清单：
+[source,console]
+----
+kubectl apply -f otel-collector.yaml
+----
+
+该配置使用一个琐碎的处理管道来接收跟踪事件并将其转发给 Jaeger。它还接收度量指标，并公开这些指标供 Prometheus 收集。
+
+您可以使用 mTLS 确保{short-project-name} 协议栈和 OpenTelemetry Collector 之间的通信安全。不过，为了降低示例的复杂性，OpenTelemetry 采集器与 Jaeger 之间的通信并不安全。
+
+== 安装{short-project-name} 堆栈
+
+当 OpenTelemetry Collector 运行时，您可以按常规方式部署{short-project-name} 。
+
+您需要配置{short-project-name} 组件，以便它们向 OpenTelemetry 收集器发送事件和指标。
+
+[source,yaml]
+----
+# values.yaml
+telemetry:
+  mode: custom
+  metrics: True
+  tracing: True
+  custom:
+  endpoint: "https://my-collector-collector.kubewarden.svc:4317"
+  insecure: false
+  otelCollectorCertificateSecret: "my-server-cert"
+  otelCollectorClientCertificateSecret: "my-client-cert"
+----
+
+`+otelCollectorCertificateSecret+` 密钥引用的 Secret 必须有一个名为`+ca.crt+` 的条目。其中包含签发 OpenTelemetry Collector 所用证书的 CA 的证书。
+
+`+otelCollectorClientCertificateSecret+` 密钥引用的 Secret 必须有以下条目：`+tls.crt+` 和`+tls.key+` 密钥。这些是{short-project-name} 协议栈用于验证 OpenTelemetry 收集器的客户端证书及其密钥。
+
+如果不使用加密或 mTLS，请将这些值留空。
+
+安装{short-project-name} 堆栈：
+
+[source,console]
+----
+helm install --wait \
+  --namespace kubewarden --create-namespace \
+  kubewarden-crds kubewarden/kubewarden-crds
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  --values values.yaml \
+  kubewarden-controller kubewarden/kubewarden-controller
+helm install --wait \
+  --namespace kubewarden \
+  --create-namespace \
+  kubewarden-defaults kubewarden/kubewarden-defaults \
+  --set recommendedPolicies.enabled=True \
+  --set recommendedPolicies.defaultPolicyMode=monitor
+----
+
+现在一切就绪。
+
+== 探索积家用户界面
+
+您可以使用 Jaeger 网络用户界面查看{short-project-name} 生成的跟踪事件。它们被归入`+kubewarden-policy-server+` 服务：
+
+image::jaeger-custom-otel-collector.png[积家仪表盘]
+
+要使用特捷飞客访问 Jaeger UI，请转发特捷飞客服务端口：
+
+[source,console]
+----
+kubectl -n traefik port-forward service/traefik 8080:80
+----
+
+网络用户界面可通过`+\http://localhost:8080+` 访问。
+
+如果想绕过特拉菲克，可直接将 Jaeger Query 服务进行端口转发：
+
+[source,console]
+----
+kubectl -n jaeger port-forward service/my-open-telemetry-query 16686
+----
+
+网络用户界面可通过`+\http://localhost:16686+` 访问。
+
+== 探索普罗米修斯用户界面
+
+您可以通过端口转发到本地计算机来访问 Prometheus 用户界面：
+
+[source,console]
+----
+kubectl port-forward -n prometheus --address 0.0.0.0 svc/prometheus-operated 9090
+----
+
+现在可以通过`+\http://localhost:9090+` 访问网络用户界面。
+
