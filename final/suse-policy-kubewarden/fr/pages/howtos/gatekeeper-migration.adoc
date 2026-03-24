@@ -1,41 +1,36 @@
 include::partial$variables.adoc[]
-= Migration des stratégies de Gatekeeper vers {project-name}
+= Migration des politiques Gatekeeper vers {project-name}
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Configurez une stratégie {project-name} en migrant une stratégie Gatekeeper existante à travers deux étapes principales : compiler le code Rego en WebAssembly.
+:description: Configurer une politique {project-name} en migrant une politique Gatekeeper existante à travers deux étapes principales : la compilation du code Rego en WebAssembly.
 :keywords: ["{project-name}", kubewarden, gatekeeper]
 :doc-persona:
   [kubewarden-operator, kubewarden-integrator, kubewarden-policy-developer]
 :doc-type: [howto]
 :doc-topic: [operator-manual]
 
-Ce guide vous montre comment convertir une stratégie Gatekeeper existante en une stratégie {project-name}. Ce processus implique deux étapes principales :
-. Compilez le programme Rego en un module WebAssembly (Wasm).
-. Distribuez le module WebAssembly en tant que stratégie {short-project-name}.
+Ce guide vous montre comment convertir une politique Gatekeeper existante en une politique{project-name}. Ce processus comporte deux étapes principales :
+. Compiler le programme Rego dans un module WebAssembly (Wasm).
+. Distribuer le module WebAssembly sous la forme d'une politique {short-project-name}.
 
-Le tutoriel xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[politiques Rego] couvre la plupart du processus de construction pour compiler le code Rego en un module WebAssembly. Ce guide se concentre sur le processus étape par étape d'extraction des définitions de ressources personnalisées (CRD) de Gatekeeper et de leur migration vers une stratégie {short-project-name} fonctionnelle. Il utilise une stratégie de démonstration de base de Gatekeeper.
+Le xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[tutoriel sur les politiques Rego] couvre la majeure partie du processus de compilation du code Rego dans un module WebAssembly. Ce guide se concentre sur le processus étape par étape d'extraction des définitions de ressources personnalisées (CRD) de Gatekeeper et de leur migration dans une politique fonctionnelle {short-project-name}. Il utilise une politique de démonstration Gatekeeper de base.
 
 == Conditions préalables
 
-* link:https://github.com/open-policy-agent/opa/releases[opa] : vous utilisez cet outil pour compiler le code en wasm. Ce guide a été rédigé en utilisant la version `v1.5.1`.
-* link:https://github.com/kubewarden/kwctl/releases[`kwctl`] : outil que vous utilisez pour préparer et exécuter le module WebAssembly {short-project-name}.
-* link:https://github.com/bats-core/bats-core[`bats`] : outil utilisé pour exécuter des tests de bout en bout. Si vous avez décidé d'écrire ce type de tests
-* link:https://github.com/mikefarah/yq[`yq`] : outil utilisé pour extraire des données des fichiers yaml.
+* link:https://github.com/open-policy-agent/opa/releases[opa]: vous utilisez cet outil pour construire le code dans wasm. Ce guide a été rédigé en utilisant la version `v1.5.1`.
+* link:https://github.com/kubewarden/kwctl/releases[`kwctl`]: outil que vous utilisez pour préparer et exécuter le module d'assemblage web {short-project-name}.
+* link:https://github.com/bats-core/bats-core[`bats`]outil utilisé pour effectuer des tests de bout en bout. Si vous décidez d'écrire ce type de tests
+* link:https://github.com/mikefarah/yq[`yq`]: outil permettant d'extraire des données de fichiers yaml
 
-== Avant de migrer vos stratégies
+== Avant de migrer vos politiques
 
-Avant de commencer le processus de migration des stratégies de Gatekeeper, envisagez d'utiliser les stratégies déjà disponibles dans le {short-project-name} link:https://artifacthub.io/packages/search?kind=13[catalogue]. Certaines des link:https://github.com/kubewarden/rego-policies-library[stratégies] sont des stratégies OPA et Gatekeeper publiquement disponibles migrées vers {short-project-name}.
+Avant de commencer le processus de migration des politiques Gatekeeper, envisagez d'utiliser les politiques déjà disponibles dans le {short-project-name}link:https://artifacthub.io/packages/search?kind=13[catalogue]. Certaines deslink:https://github.com/kubewarden/rego-policies-library[politiques du site] sont accessibles au public. Les politiques de l'OPA et du Gatekeeper ont migré vers le site {short-project-name}.
 
-De plus, jetez un œil à notre documentation xref:/explanations/comparisons/opa-comparison.adoc[comparaison] entre {short-project-name} et Gatekeeper.
+Consultez également notre documentationxref:/explanations/comparisons/opa-comparison.adoc[comparative]entre {short-project-name} et Gatekeeper.
 
-== Étape 1 : Initialisez votre projet de stratégie {short-project-name}
+== Étape 1 : Initialiser votre projet de politique {short-project-name} 
 
-Tout d'abord, utilisez le {short-project-name} Gatekeeper
-link:https://github.com/kubewarden/gatekeeper-policy-template[modèle] pour créer
-une structure de projet de stratégie de base. Cela fournit des cibles Makefile pour construire
-et tester votre stratégie. Après avoir créé le code de la stratégie à partir du modèle,
-exécutez les commandes Makefile pour vérifier que la construction de la stratégie et les tests s'exécutent
-avec succès :
+Tout d'abord, utilisez le {short-project-name} Gatekeeperlink:https://github.com/kubewarden/gatekeeper-policy-template[modèle] pour créer une structure de projet de politique de base. Il fournit des cibles Makefile pour la construction et le test de votre politique. Après avoir créé le code de la politique à partir du modèle, exécutez les commandes Makefile pour vérifier que la politique se construit et que les tests s'exécutent correctement :
 
 [source,console]
 ----
@@ -50,19 +45,14 @@ opa test *.rego
 PASS: 2/2
 ----
 
-== Étape 2 : Migrez le code de stratégie Gatekeeper
+== Étape 2 : Migrer le code de la politique du Gatekeeper
 
-Maintenant, commencez à migrer la stratégie Gatekeeper. Cela implique de convertir un
-`ConstraintTemplate` et ses ressources associées `Constraint` en une stratégie {short-project-name}. Dans un contexte {short-project-name}, considérez le `ConstraintTemplate` comme le code de stratégie noyau, tandis que les instances `Constraint` se traduisent par des instances de stratégie
-fonctionnant au sein de {short-project-name}.
+Commencez maintenant à migrer la politique Gatekeeper. Il s'agit de convertir une politique`ConstraintTemplate` et les ressources `Constraint` qui lui sont associées en une politique {short-project-name}. Dans le contexte de {short-project-name}, le code `ConstraintTemplate` est le code politique central, tandis que les instances `Constraint` se traduisent par des instances politiques exécutées au sein de {short-project-name}.
 
-Tout d'abord, copiez le code Rego de votre `ConstraintTemplate` dans le fichier `policy.rego`
-que le modèle {short-project-name} a généré. Pour cet exemple, vous devez utiliser la
-suivante link:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[stratégie de démonstration]
-du dépôt Gatekeeper.
+Tout d'abord, copiez le code Rego de votre `ConstraintTemplate` dans le fichier `policy.rego`que le modèle {short-project-name} a généré. Pour cet exemple, vous devez utiliser labase suivantelink:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[politique de démonstration de] à partir du référentiel Gatekeeper.
 
 [.details]
-.Stratégie YAML de Gatekeeper
+.Politique du gardien yaml
 [%collapsible]
 ====
 [source,yaml]
@@ -100,23 +90,23 @@ spec:
 ----
 ====
 
-Copiez le extrait de code Rego du champ `rego` dans votre fichier `policy.rego` :
+Copiez l'extrait de code Rego du champ `rego` dans votre fichier `policy.rego`:
 
 [source,console]
 ----
 cat gatekeeper/demo/basic/templates/k8srequiredlabels_template.yaml | yq ".spec.targets[0].rego" > policy.rego
 ----
 
-=== Adaptez le code Rego pour {short-project-name}
+=== Adapter le code Rego pour {short-project-name}
 
-Vous devez vous assurer que le nom `package` utilisé à l'intérieur du code Rego est `policy`.
-C'est la valeur attendue à de nombreux endroits par le modèle Gatekeeper {short-project-name}.
+Vous devez vous assurer que le nom `package` utilisé à l'intérieur du code Rego est bien `policy`.
+C'est la valeur attendue dans de nombreux endroits par le modèle {short-project-name} Gatekeeper.
 
-Si vous ne le changez pas, vous aurez des erreurs lors de la construction de la stratégie et de l'exécution de ses tests de bout en bout.
+Si vous ne le modifiez pas, des erreurs se produiront lors de l'élaboration de la politique et de l'exécution de ses tests de bout en bout.
 
-Par exemple, la stratégie de démonstration que nous convertissons est définie à l'intérieur du paquet `k8srequiredlabels`, cette valeur doit être changée pour être `policy`.
+Par exemple, la politique de démonstration que nous convertissons est définie dans le paquet `k8srequiredlabels`, cette valeur doit être remplacée par `policy`.
 
-Voici comment le contenu du fichier `policy.rego` doit être :
+C'est ainsi que doit se présenter le contenu du fichier `policy.rego`:
 
 [source,rego]
 ----
@@ -131,7 +121,7 @@ msg := sprintf("you must provide labels: %v", [missing])
 }
 ----
 
-Essayer de construire le code après ce changement pourrait révéler de nouvelles erreurs de compilation :
+Si vous tentez de compiler le code après cette modification, vous risquez de découvrir de nouvelles erreurs de compilation :
 
 [source,console]
 ----
@@ -142,8 +132,7 @@ policy.rego:3: rego_parse_error: `contains` keyword is required for partial set 
 make: *** [Makefile:4: policy.wasm] Error 1
 ----
 
-L'auteur de la stratégie doit corriger ces erreurs pour permettre au CLI `opa` de construire le
-code avec succès. Les changements spécifiques peuvent varier en fonction de la version `opa` et du code de stratégie original. Comme nous migrons une stratégie rego antérieure à OPA v1, nous devons mettre à jour le code pour qu'il soit conforme à la v1. Le code final `policy.rego` ressemble à ceci :
+L'auteur de la politique doit corriger ces erreurs pour permettre à l'interface CLI de `opa` de construire le code avec succès. Les changements spécifiques peuvent varier en fonction de la version `opa` et du code politique original. Comme nous migrons une politique rego antérieure à la version 1 de l'OPA, nous devons mettre à jour le code pour qu'il soit conforme à la version 1. Le code final de `policy.rego` ressemble à ceci :
 
 [source,rego]
 ----
@@ -158,7 +147,7 @@ violation contains {"msg": msg, "details": {"missing_labels": missing}} if {
 }
 ----
 
-Après avoir ajusté le code, construisez la stratégie :
+Après avoir ajusté le code, élaborez la politique :
 
 [source,console]
 ----
@@ -171,42 +160,42 @@ rm bundle.tar.gz
 touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
 ----
 
-Il y a plus d'informations sur la façon de construire des stratégies Gatekeeper dans notre xref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[tutoriel].
+Vous trouverez plus d'informations sur l'élaboration des politiques Gatekeeper dans notrexref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[tutoriel].
 
-=== Code de stratégie Rego et compatibilité avec OPA v1.0.0
+=== Code de la politique Rego et compatibilité avec l'OPA v1.0.0
 
-Avec la sortie d'OPA (Open Policy Agent) link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[v1.0.0] en décembre 2024, un changement majeur a été introduit concernant la syntaxe des stratégies Rego.
+Avec la publication de OPA (Open Policy Agent)link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[.0.0] v1 en décembre 2024, un changement radical a été introduit concernant la syntaxe de la politique Rego.
 
-Auparavant, `if` pour toutes les définitions de règles et `contains` pour les règles à valeurs multiples étaient optionnels ; maintenant, ils sont obligatoires. Ce changement affecte la plupart des anciennes stratégies.
+Auparavant, `if` pour toutes les définitions de règles et `contains` pour les règles à valeurs multiples étaient facultatifs ; désormais, ils sont obligatoires. Cette modification concerne la plupart des anciennes polices.
 
-Voici un résumé de ce que vous devez savoir :
+Voici un résumé de ce qu'il faut savoir :
 
-* *Syntaxe OPA v1.0.0* : OPA v1.0.0 impose l'utilisation de `if` pour toutes les définitions de règles et `contains` pour les règles à valeurs multiples. Les stratégies qui ne respectent pas cette syntaxe cesseront de fonctionner.
-* *Compatibilité avec les versions précédentes* : Si vous devez construire des stratégies plus anciennes qui n'utilisent pas la nouvelle syntaxe v1.0.0, vous devez fournir le drapeau `--v0-compatible` à la commande `opa build`.
-* *Intégration de Gatekeeper* : Gatekeeper a mis à jour sa dépendance OPA à v1.0.0 dans sa link:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[version 3.19.0].
-* *Version Rego dans les modèles Gatekeeper* : Gatekeeper suppose que la syntaxe `v0` est utilisée à moins que le modèle ne spécifie explicitement `version: "v1"` dans le champ `source` sous `code.engine: Rego`.
+* *OPA v1.0.0 Syntaxe*: L'OPA v1.0.0 impose l'utilisation de `if` pour toutes les définitions de règles et de `contains` pour les règles à valeurs multiples. Les politiques qui ne respectent pas cette syntaxe seront interrompues.
+* *Rétrocompatibilité*: Si vous devez créer des politiques plus anciennes qui n'utilisent pas la nouvelle syntaxe v1.0.0, vous devez fournir le drapeau `--v0-compatible` à la commande `opa build.` 
+* *Intégration d'un gardien*: Gatekeeper a mis à jour sa dépendance OPA à la version 1.0.0 dans sa link:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[version] v3
+* *Version Rego dans les modèles Gatekeeper*: Gatekeeper suppose que la syntaxe `v0` est utilisée à moins que le modèle ne spécifie explicitement `version: "v1"` dans le champ `source` sous `code.engine: Rego`.
 
-Voir link:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[cette section] des documents de Gatekeeper pour plus de détails sur la façon dont les versions `v0` et `v1` de Rego sont gérées.
+Voir link:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[cette section]de la documentation de Gatekeeper pour plus de détails sur la façon dont les versions `v0` et `v1` de Rego sont gérées.
 
 Ce que cela signifie pour vous :
 
-* Si le CR de Gatekeeper ne spécifie pas de version de Rego, cela implique que `v0` sera utilisé. Vous devez construire la stratégie en utilisant la commande `OPA_V0_COMPATIBLE=true make`.
-* Si le CR de Gatekeeper spécifie explicitement `version: "v1"`, vous devez construire la stratégie sans aucune variable d'environnement définie.
+* Si la CR Gatekeeper ne spécifie pas de version de Rego, cela signifie que `v0` sera utilisé. Vous devez créer la politique à l'aide de la commande `make OPA_V0_COMPATIBLE=true`.
+* Si la CR Gatekeeper spécifie explicitement `version: "v1"`, vous devez élaborer la politique sans définir de variable d'environnement.
 
-== Étape 3 : Mettez à jour et exécutez les tests
+== Étape 3 : Mise à jour et exécution des tests
 
-Bien que fortement recommandé, les auteurs de stratégies peuvent omettre de créer des tests pour la version initiale d'une stratégie. Si cela vous concerne, vous devrez désactiver les cibles Makefile utilisées pour exécuter les tests. Vous ne pouvez pas supprimer ces cibles entièrement, car les travaux CI par défaut s'attendent à ce qu'elles soient définies. Au lieu de cela, vous devriez remplacer les commandes qui appellent `opa` et `bats` par une opération "no-op". Par exemple, vous pouvez utiliser une commande `echo` pour imprimer une explication sur pourquoi les tests ne sont pas exécutés.
+Bien que cela soit fortement recommandé, les auteurs de politiques peuvent ne pas créer de tests pour la version initiale d'une politique. Si c'est votre cas, vous devrez désactiver les cibles Makefile utilisées pour exécuter les tests. Vous ne pouvez pas supprimer complètement ces cibles, car les travaux de CI par défaut s'attendent à ce qu'elles soient définies. En revanche, vous devez remplacer les commandes qui appellent `opa` et `bats` par une opération "no-op". Par exemple, vous pouvez utiliser une commande `echo` pour imprimer une explication sur la raison pour laquelle les tests ne sont pas exécutés.
 
-Le modèle Gatekeeper {short-project-name} inclut à la fois des tests unitaires Rego et des tests de bout en bout (e2e) utilisant Bats et `kwctl`. Si vous prévoyez d'inclure des tests, les deux ensembles doivent être adaptés à votre stratégie.
+Le modèle {short-project-name} Gatekeeper comprend à la fois des tests unitaires Rego et des tests de bout en bout (e2e) utilisant Bats et `kwctl`. Si vous prévoyez d'inclure des tests, les deux séries doivent être adaptées à votre politique.
 
-Si votre stratégie Gatekeeper a déjà des tests Rego, vous pouvez les copier dans le fichier `policy_test.rego`. Ils s'exécutent automatiquement lorsque vous exécutez la commande `make test`.
+Si votre politique Gatekeeper comporte déjà des tests Rego, vous pouvez les copier dans le fichier`policy_test.rego`. Ils sont exécutés automatiquement lorsque vous exécutez la commande`make test`.
 
 [CAUTION]
 ====
-Gardez à l'esprit que tous les tests Rego que vous écrivez dans `policy_test.rego` sont soumis aux mêmes problèmes de compatibilité détaillés dans la section <<_rego_policy_code_and_opa_v1_0_0_compatibility,Code de stratégie Rego et compatibilité OPA v1.0.0>>.
+Gardez à l'esprit que tous les tests Rego que vous écrivez dans `policy_test.rego` sont soumis aux mêmes problèmes de compatibilité détaillés dans le <<_rego_policy_code_and_opa_v1_0_0_compatibility,code de la politique Rego et la>> section <<_rego_policy_code_and_opa_v1_0_0_compatibility,Compatibilité avec l'OPA v1.0.0.>> 
 ====
 
-La stratégie que vous migrez dans ce guide n'a pas de tests ; nous devons les ajouter nous-mêmes. Par conséquent, nous mettrons à jour le fichier de test `policy_test.rego` avec quelques tests de base :
+La politique que vous migrez dans ce guide ne comporte pas de tests ; nous devons les ajouter nous-mêmes. C'est pourquoi nous allons mettre à jour le fichier de test `policy_test.rego` avec quelques tests de base :
 
 [source,rego]
 ----
@@ -235,7 +224,7 @@ test_reject if {
 }
 ----
 
-Maintenant, l'exécution de `make test` devrait valider votre stratégie :
+L'exécution du site `make test` devrait maintenant valider votre politique :
 
 [source,console]
 ----
@@ -280,7 +269,7 @@ run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/sett
 }
 ----
 
-Vous devrez créer les fichiers `test_data/settings.json`, `test_data/accept_deploy_request.json` et `test_data/reject_deploy_request.json` pour soutenir ces tests.
+Vous devrez créer les fichiers `test_data/settings.json`,`test_data/accept_deploy_request.json` et `test_data/reject_deploy_request.json`pour prendre en charge ces tests.
 
 [.details]
 .test_data/settings.json
@@ -294,9 +283,9 @@ Vous devrez créer les fichiers `test_data/settings.json`, `test_data/accept_dep
 ----
 ====
 
-Nous n'inclurons pas le contenu complet de `accept_deploy_request.json` et `reject_deploy_request.json` ici, car `AdmissionRequest` JSON peut être assez long, et nous voulons garder ce guide concis. Cependant, vous pouvez utiliser la commande xref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`kwctl scaffold`] pour générer ces fichiers. La clé de ce guide est qu'une demande devrait manquer de l'étiquette requise, tandis que l'autre devrait avoir l'étiquette définie.
+Nous n'inclurons pas le contenu complet de `accept_deploy_request.json` et`reject_deploy_request.json` ici, car `AdmissionRequest` JSON peut être assez long, et nous voulons garder ce guide concis. Cependant, vous pouvez utiliser la commandexref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`kwctl scaffold`]pour générer ces fichiers. La clé de ce guide est qu'une demande doit être dépourvue de l'étiquette requise, tandis que l'autre doit avoir l'étiquette définie.
 
-Vérifiez si les tests e2e passent :
+Vérifier si les tests e2e passent :
 
 [source,console]
 ----
@@ -309,15 +298,15 @@ e2e.bats
 
 [IMPORTANT]
 ====
-Les paramètres de la stratégie (par exemple, les étiquettes dans cet exemple) proviennent des paramètres de la stratégie. Cela vous permet de déployer plusieurs instances de la même stratégie avec des paramètres/réglages différents, similaire à la façon dont les contraintes fonctionnent dans Gatekeeper.
+Les paramètres de la politique (par exemple, les étiquettes dans cet exemple) proviennent des paramètres de la politique. Cela vous permet de déployer plusieurs instances de la même politique avec des paramètres/réglages différents, de la même manière que les contraintes fonctionnent dans Gatekeeper.
 ====
 
-== Étape 4 : Préparez `metadata.yml` pour la distribution
+== Étape 4 : Préparer `metadata.yml` pour la distribution
 
-Maintenant que vous avez une stratégie fonctionnelle, préparez le fichier `metadata.yml` pour la distribution. Ce fichier définit des annotations avec la description de la stratégie, l'auteur, la licence et d'autres informations essentielles. Essentiellement, il définit le `rules` qui spécifie quelles ressources et verbes la stratégie peut valider. Cette information alimente la commande `kwctl scaffold` pour générer le manifeste pour déployer la stratégie dans votre cluster.
+Maintenant que vous disposez d'une politique fonctionnelle, préparez le fichier `metadata.yml` en vue de sa diffusion. Ce fichier définit les annotations avec la description de la politique, l'auteur, la licence et d'autres informations essentielles. Il est essentiel de définir le site`rules` qui précise les ressources et les verbes que la politique peut valider. Ces informations permettent à la commande `kwctl scaffold` de générer le manifeste pour déployer la politique dans votre cluster.
 
-Les CRD `Constraints` de Gatekeeper, qui sont des instances de stratégies définies dans `ConstraintTemplates`, spécifient quelles ressources une instance de stratégie évalue.
-Par conséquent, si vous avez des `Constraints` existants qui appliquent un `ConstraintTemplate`, ils offrent une bonne référence pour les ressources que vous devriez définir dans votre fichier `metadata.yml`. Par exemple, dans l'exemple de Gatekeeper utilisé précédemment, le `K8sRequiredLabels` `Constraint` créé à partir du `k8srequiredlabels` `ConstraintTemplate` s'applique à `Namespaces` :
+Les CRD de Gatekeeper `Constraints`, qui sont des instances de politiques définies dans`ConstraintTemplates`, spécifient les ressources qu'une instance de politique évalue.
+Par conséquent, si vous avez des `Constraints` existants qui appliquent un `ConstraintTemplate`, ils constituent une bonne référence pour les ressources que vous devez définir dans votre fichier`metadata.yml`. Par exemple, dans l'exemple de Gatekeeper utilisé plus haut, le`K8sRequiredLabels` `Constraint` créé à partir du `k8srequiredlabels``ConstraintTemplate` s'applique au `Namespaces`:
 
 [source,yaml]
 ----
@@ -334,7 +323,7 @@ spec:
     labels: ["gatekeeper"]
 ----
 
-Sur cette base, mettez à jour la section `rules` de votre `metadata.yml` pour inclure un nouveau `rule` pour valider `namespaces` lors des opérations `CREATE` et `UPDATE` :
+Sur cette base, mettez à jour la section `rules` de votre `metadata.yml` pour inclure un nouveau`rule` pour la validation de `namespaces` pendant les opérations `CREATE` et `UPDATE`:
 
 [source,yaml]
 ----
@@ -367,9 +356,9 @@ annotations:
   io.kubewarden.policy.category: Resource validation
 ----
 
-Maintenant, votre stratégie est prête pour la distribution et le déploiement. Référez-vous à la section xref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[Publication de la stratégie] du tutoriel pour apprendre comment la pousser vers un registre distant.
+Votre politique est maintenant prête à être distribuée et déployée. Reportez-vous à la sectionxref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[Publier la stratégie du]didacticiel pour savoir comment l'envoyer dans un registre distant.
 
-Vous pouvez créer le manifeste de la stratégie en utilisant `kwctl` :
+Vous pouvez échafauder le manifeste de politique à l'aide de `kwctl`:
 
 [source,console]
 ----
@@ -406,9 +395,9 @@ spec:
   mutating: false
 ----
 
-=== Définir les paramètres de la stratégie
+=== Définir les paramètres de la politique
 
-Cette stratégie a des paramètres, que Gatekeeper définit dans le `Constraint`. Vous devez mettre à jour la section `settings` dans le manifeste de stratégie {short-project-name} généré pour inclure ces paramètres requis. Dans l'exemple suivant, au-delà de la définition des paramètres, vous pouvez tester la stratégie depuis le registre OCI :
+Cette politique a des paramètres que Gatekeeper définit dans le site`Constraint`. Vous devez mettre à jour la section `settings` dans le manifeste de stratégie {short-project-name}généré pour inclure ces paramètres requis. Dans l'exemple suivant, en plus de définir les paramètres, vous pouvez tester la politique à partir du registre OCI :
 
 [source,yaml]
 ----
@@ -446,7 +435,7 @@ spec:
   mutating: false
 ----
 
-Essayez de déployer un espace de noms manquant l'étiquette requise `gatekeeper` :
+Essayez de déployer un espace de noms sans l'étiquette `gatekeeper` requise :
 
 [source,console]
 ----
