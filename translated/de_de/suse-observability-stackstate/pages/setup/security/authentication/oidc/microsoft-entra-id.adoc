@@ -1,0 +1,59 @@
+= Microsoft Entra ID
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability Selbstgehostet
+:experimental:
+
+== Erstellen einer Anwendung in Entra ID
+
+. Registrieren Sie eine Anwendung in Entra ID, indem Sie folgen https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app?tabs=client-secret[dieser Anleitung]
+ .. Als Anzeigename können Sie z. B. verwenden, `+SUSE Observability+`
+ .. Wählen Sie die Plattform `+Web+` und geben Sie die Weiterleitungs-URL an: `+https://<your-stackstate-installation>/loginCallback?client_name=StsOidcClient+`
+ .. Verwenden Sie beim Hinzufügen von Anmeldedaten die `+client secret+` Anmeldedaten und stellen Sie sicher, dass Sie das Geheimnis speichern
+. Die anderen Abschnitte im Abschnitt `+Prepare for development+` sind nicht erforderlich, aber für eine Produktionsinstallation sollten Sie sie befolgen, um einen Eigentümer festzulegen und möglicherweise bestimmte Bereiche vorab zu genehmigen (siehe den nächsten Abschnitt zu den Bereichen, die SUSE Observability anfordert)
+. Stellen Sie abschließend sicher, dass SUSE Observability die Gruppen für einen Benutzer erhält (erforderlich für die Autorisierung), indem Sie den Gruppenanspruch zur App-Registrierung hinzufügen (siehe https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims?tabs=appui#_configure_groups_optional_claims[] ). Der Rest dieses Dokuments geht davon aus, dass Sie die Token-Eigenschaften nicht angepasst haben und SUSE Observability die Gruppen-ID erhält.
+
+== Konfigurieren von SUSE Observability
+
+Erstellen Sie mithilfe der Registrierungsinformationen für die App eine neue `+authentication.yaml+` -Datei für SUSE Observability:
+
+----
+stackstate:
+  authentication:
+    oidc:
+      # The client id is in the list of essentials on the overview page of the App registration
+      clientId: "<Application (client) ID>"
+      secret: "<Application (client) secret>"
+      # The Directory (Tenant) ID is in the list of essentials on the overview page of the App registration
+      discoveryUri: "https://login.microsoftonline.com/<Directory (tenant) ID>/v2.0/.well-known/openid-configuration"
+      jwsAlgorithm: RS256
+      scope: ["openid", "email", "profile", "offline_access"]
+      jwtClaims:
+        usernameField: "email"
+        groupsField: groups
+    roles:
+      guest: []
+      powerUser: []
+      admin: [ "aaaaaaaa-bbbb-1111-2222-aabbccddeeff", "eeeeeeeeee-bbbb-1111-2222-aabbccddeeff" ]
+      k8sTroubleshooter: []
+----
+
+Erhalten Sie die Werte für:
+
+* Anwendungs-(Client-)ID: im Abschnitt Essentials auf der Übersichtsseite der Anwendungsregistrierung
+* Anwendungsgeheimnis (Client): in Schritt 1 des vorherigen Abschnitts erstellt und irgendwo gespeichert
+* Verzeichnis (Mieter) ID: im Abschnitt Essentials auf der Übersichtsseite der App-Registrierung
+* Die Gruppenkennungen für die verschiedenen Rollen: In Entra ID admin gehen Sie zu menu:IdentityAll[Groups]. Die Gruppen-IDs stehen in der zweiten Spalte mit der Bezeichnung `+Object Id+`. Entscheiden Sie, welche Entra ID Gruppen welche Berechtigungsstufen haben sollen und weisen Sie diese den entsprechenden Rollen im obigen yaml Beispiel zu (entfernen Sie die 2 Beispielgruppen-IDs).
+
+Stellen Sie nun SUSE Observability mit dem für die Installation verwendeten helm-Befehl erneut bereit, fügen Sie aber jetzt die neue Datei `+authentication.yaml+` ein: `+helm upgrade ... --values authentication.yaml+`. Stellen Sie sicher, dass Sie diese Datei beim Upgrade immer mit einbeziehen.
+
+=== Gebrauchte Zielfernrohre
+
+SUSE Observability ist für die Abfrage von 4 Bereichen konfiguriert:
+
+* openid, für die Authentifizierung
+* E-Mail, um Nutzer zu identifizieren
+* Profil, um das Benutzerprofil abfragen zu können, das die Gruppen für die Benutzer enthält
+* offline_access, damit ein Benutzer länger angemeldet bleiben kann, ohne sich erneut authentifizieren zu müssen, und damit der Benutzer SUSE Observabilities-API-Tokens verwenden kann.
+
+Weitere Einzelheiten finden Sie unter https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-permissions-and-consent[Berechtigungen und Zustimmung in der Microsoft Identitätsplattform (learn.microsoft.com)].
