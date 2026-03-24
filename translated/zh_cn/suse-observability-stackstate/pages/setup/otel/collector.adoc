@@ -1,0 +1,269 @@
+= 打开遥测集电极
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE 可观察性
+
+OpenTelemetry Collector 提供了一个与供应商无关的实施方案，用于接收、处理和输出遥测数据。使用 Open Telemetry SDK 的应用程序可使用收集器向 SUSE Observability 发送遥测数据（跟踪和度量）。
+
+您的应用程序在使用 OpenTelemetry SDK 设置后，可使用收集器将跟踪和度量等遥测数据发送到 SUSE Observability 或其他收集器（进行进一步处理）。采集器默认设置为通过本地开放式遥测协议 OTLP 接收这些数据。它还可以接收其他仪表 SDK 提供的其他格式的数据，如用于跟踪的 Jaeger 和 Zipkin，以及用于度量的 Influx 和 Prometheus。
+
+收集器运行在您的应用程序附近，在同一个 Kubernetes 集群中，在同一个虚拟机上，等等。这样，SDK 就能快速将数据卸载到采集器，然后采集器就能进行转换、批处理和过滤。它可用于多个应用程序，并允许轻松更改数据处理管道。
+
+有关安装指南，请使用不同的xref:/setup/otel/getting-started/README.adoc[入门指南]。入门指南提供了入门所需的基本采集器配置，但随着时间的推移，你会希望根据自己的需要对其进行定制，并添加额外的接收器、处理器和输出器，以根据自己的需要定制采集管道。
+
+== 配置
+
+采集器配置定义了处理不同遥测信号的管道。处理管道中的组件可分为几类，每个组件都有自己的配置。下面我们将概述不同的配置部分以及如何使用它们。
+
+=== 接收器
+
+接收器通过 OTLP 接收来自仪器应用的遥测数据：
+
+[,yaml]
+----
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+----
+
+还有更多的接收器通过其他协议（例如 Zipkin 跟踪器）接受数据，或主动从各种来源收集数据：
+
+* 主机指标
+* Kubernetes 指标
+* 普罗米修斯度量标准（OpenMetrics）
+* 数据库
+
+有些接收器支持所有 3 种信号（轨迹、指标、日志），有些则只支持 1 或 2 种，例如 Prometheus 接收器只能收集指标。opentelemetry-collector-contrib 仓库https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver[所有接收器]的配置文档。
+
+=== 处理器
+
+接收器的数据可由处理器进行转换或过滤。
+
+[,yaml]
+----
+processors:
+  batch: {}
+----
+
+批处理器会对所有 3 个信号进行批处理，从而提高压缩率并减少外发连接的数量。opentelemetry-collector-contrib 软件仓库https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor[所有处理器]的配置文档。
+
+=== 出口商
+
+要向 SUSE Observability 后端发送数据，收集器需要使用出口程序。不同的协议有不同的输出程序，有基于推送的，也有基于拉动的，还有不同的后端。使用 OTLP 协议，还可以将另一个收集器作为额外处理的目的地。
+
+[,yaml]
+----
+exporters:
+  # The gRPC otlp exporter
+  otlp/suse-observability:
+    auth:
+      authenticator: bearertokenauth
+    # Put in your own otlp endpoint
+    endpoint: <otlp-suse-observability-endpoint>
+    # Use snappy compression, if no compression specified the data will be uncompressed
+    compression: snappy
+----
+
+SUSE Observability 输出程序要求使用 api 密钥进行身份验证，以配置使用<<_extensions,身份验证扩展>>。opentelemetry-collector-contrib资源库已为提供了https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/exporter[所有输出程序]，并附有配置文档。
+
+如果 gRPC 输出程序无法正常工作（另请参阅xref:/setup/otel/troubleshooting.adoc#_some_proxies_and_firewalls_dont_work_well_with_grpc[故障排除]），可以使用`+otlphttp+` 输出程序，转而使用效率稍低的 HTTP OTLP 协议。将`+pipelines+` 和`+exporter+` 部分中对`+otlp/suse-observability+` 的所有引用替换为`+otlphttp/suse-observability+` ，并确保将导出器配置更新为
+
+[,yaml]
+----
+exporters:
+  # The gRPC otlp exporter
+  otlphttp/suse-observability:
+    auth:
+      authenticator: bearertokenauth
+    # Put in your own otlp HTTP endpoint
+    endpoint: <otlp-http-suse-observability-endpoint>
+    # Use snappy compression, if no compression specified the data will be uncompressed
+    compression: snappy
+----
+
+[CAUTION]
+====
+SUSE Observability 的 OTLP HTTP 端点与 OTLP 端点不同。使用xref:/setup/otel/otlp-apis.adoc[OTLP API]查找正确的 URL。
+====
+
+
+=== 服务管道
+
+为每个遥测信号配置一个单独的管道。流水线在`+service.pipeline+` 部分进行配置，定义了哪些接收器、处理器和输出器应按何种顺序使用。在管道中使用一个组件之前，必须先在其配置部分对其进行定义。例如，`+batch+` 处理器没有任何配置，但仍需在`+processors+` 部分声明。已配置但未包含在管道中的组件根本不会激活。
+
+[,yaml]
+----
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, spanmetrics, otlp/suse-observability]
+    metrics:
+      receivers: [otlp, spanmetrics, prometheus]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug, otlp/suse-observability]
+----
+
+=== 扩展
+
+扩展功能不直接用于处理数据的管道，而是以其他方式扩展收集器的功能。对于 SUSE Observability，它用于使用 api 密钥配置身份验证。扩展程序必须在配置部分中定义后才能使用。与管道组件类似，扩展只有在`+service.extensions+` 部分启用后才会激活。
+
+[,yaml]
+----
+extensions:
+  bearertokenauth:
+    scheme: SUSEObservability
+    token: "${env:API_KEY}"
+service:
+  extensions: [ bearertokenauth ]
+----
+
+opentelemetry-collector-contrib 软件仓库https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension[所有扩展的]配置文档。
+
+== 遥测技术的变革
+
+https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor[opentelemetry-collector-contrib 软件仓库]中有许多处理器。在此，我们尝试概述常用处理器及其功能。如需了解更多详细信息和更多处理器，请使用https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor[opentelemetry-collector-contrib 软件仓库]。
+
+=== 过滤
+
+有些仪器或应用程序可能会产生大量遥测数据，但这些数据对于您的使用情况来说是嘈杂和不需要的。https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/filterprocessor[过滤器处理器]可用于放弃收集器中不需要的数据，以避免将数据发送到 SUSE Observability。例如，删除一个特定服务的所有数据：
+
+[,yaml]
+----
+processors:
+  filter/ignore-service1:
+    error_mode: ignore
+    traces:
+      span:
+        - resource.attributes["service.name"] == "service1"
+----
+
+滤波器处理器使用https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/README.md[Open Telemetry Transformation Lanuage (OTTL)]来定义滤波器。
+
+=== 添加、修改或删除属性
+
+https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/attributesprocessor[属性处理器]可更改跨度、日志或度量的属性。
+
+[,yaml]
+----
+processors:
+  attributes/accountid:
+    actions:
+      - key: account_id
+        value: 2245
+        action: insert
+----
+
+https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/resourceprocessor[资源处理器]可以修改xref:/setup/otel/concepts.adoc#_resources[资源]的属性。例如，为每个资源添加 Kubernetes 集群名称：
+
+[,yaml]
+----
+  processors:
+    resource/add-k8s-cluster:
+      attributes:
+      - key: k8s.cluster.name
+        action: upsert
+        value: my-k8s-cluster
+----
+
+要更改度量名称和其他度量特定信息，还可以使用https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/metricstransformprocessor[metrics transformer]。
+
+=== 变革
+
+https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/transformprocessor[变换处理器]可用于设置跨度状态等：
+
+[,yaml]
+----
+processors:
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - set(span.status.code, STATUS_CODE_OK) where span.attributes["http.request.status_code"] == 400
+----
+
+它还支持更多转换，如修改跨度名称、转换度量类型或修改日志事件。请参阅https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/transformprocessor[readme]，了解所有可能性。它使用https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/pkg/ottl/README.md[Open Telemetry Transformation Lanuage (OTTL)]来定义过滤器。
+
+== 擦洗敏感数据
+
+收集器是移除或混淆敏感数据的理想场所，因为它位于应用程序和 SUSE Observability 之间，并拥有可<<_transforming_telemetry,过滤和转换数据的>>处理器。除了已经讨论过的过滤和转换功能外，还有一个https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/redactionprocessor[编辑处理器]，可以屏蔽与块列表相匹配的属性值。它还可以移除与指定的允许属性列表不匹配的属性，但这样做很快就会导致大多数属性被移除，从而导致可观测能力非常有限。请注意，它不会处理资源属性。
+
+仅屏蔽特定属性和/或值的示例：
+
+[,yaml]
+----
+processors:
+  redaction:
+    allow_all_keys: true
+    # attributes matching the regexes on the list are masked.
+    blocked_key_patterns:
+      - ".*token.*"
+      - ".*api_key.*"
+    blocked_values: # Regular expressions for blocking values of allowed span attributes
+      - '4[0-9]{12}(?:[0-9]{3})?' # Visa credit card number
+      - '(5[1-5][0-9]{14})' # MasterCard number
+    summary: debug
+----
+
+== 试用采集器
+
+入门指南介绍了如何将收集器部署到 Kubernetes 或使用 Linux 软件包进行生产就绪设置。也可以直接以 docker 容器的形式运行，例如用于测试，以进行试用：
+
+[,bash]
+----
+docker run \
+  -p 127.0.0.1:4317:4317 \
+  -p 127.0.0.1:4318:4318 \
+  -v $(pwd)/config.yaml:/etc/otelcol-contrib/config.yaml \
+  ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:latest
+----
+
+它使用收集器贡献镜像，其中包括所有贡献组件（接收器、处理器等）。该图像还有一个更小、更有限的版本，但可用的组件非常有限：
+
+[,bash]
+----
+docker run \
+  -p 127.0.0.1:4317:4317 \
+  -p 127.0.0.1:4318:4318 \
+  -v $(pwd)/config.yaml:/etc/otelcol/config.yaml \
+  ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector:latest
+----
+
+请注意，Kubernetes 安装默认使用 Kubernetes 分发的收集器镜像`+ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s+` ，它比基本镜像有更多组件，但比 contrib 镜像少。如果在使用该镜像时遇到组件缺失的问题，只需将其切换为使用 contrib image`+ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib+` 即可。
+
+== 故障排除
+
+=== 来自输出程序的 HTTP 请求过大
+
+在某些情况下，对遥测数据的 HTTP 请求可能会变得非常大，SUSE Observability 可能会拒绝这些请求。SUSE Observability 的 gRPC 协议限制为 4MB。如果遇到 HTTP 请求限制，可以通过更改压缩算法和限制最大批量大小来降低请求大小。
+
+==== HTTP 请求压缩
+
+入门指南在采集器上启用了`+snappy+` 压缩，这不是最好的压缩方式，但比`+gzip+` 占用更少的 CPU 资源。如果您取消了压缩，可以重新启用，或者改用更高的压缩算法https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configgrpc/README.md#_compression_comparison[压缩率] 。gRPC 和 HTTP 协议也有相同的压缩类型。
+
+==== 最大批量
+
+要减少 HTTP 请求的大小，可以通过在`+batch+` 处理器中添加限制批量大小的配置来实现：
+
+[,yaml]
+----
+processor:
+  batch: {}
+    send_batch_size: 8192 # This is the default value
+    send_batch_max_size: 10000 # The default is 0, meaning no max size at all
+----
+
+批量大小是以跨度、度量数据点或日志记录的数量（而不是字节数）来定义的，因此您可能需要进行一些试验才能找到适合您情况的正确设置。更多详情，请参阅https://github.com/open-telemetry/opentelemetry-collector/blob/main/processor/batchprocessor/README.md[处理器文档] 批量。
+
+== 相关资源
+
+Open Telemetry 文档提供了有关配置和其他安装选项的更多详细信息：
+
+* 打开遥测采集器配置： https://opentelemetry.io/docs/collector/configuration/
+* 在 Kubernetes 上安装收集器： https://opentelemetry.io/docs/kubernetes/helm/collector/
+* 使用 Kubernetes 操作员而不是收集器 Helm 图表： https://opentelemetry.io/docs/kubernetes/operator/
+* 打开遥测采样： https://opentelemetry.io/blog/2022/tail-sampling/
