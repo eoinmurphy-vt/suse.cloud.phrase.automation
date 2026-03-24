@@ -1,0 +1,468 @@
+include::partial$variables.adoc[]
+= Migration des politiques Gatekeeper vers {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Configurer une politique {project-name} en migrant une politique Gatekeeper existante à travers deux étapes principales : la compilation du code Rego en WebAssembly.
+:keywords: ["{project-name}", kubewarden, gatekeeper]
+:doc-persona:
+  [kubewarden-operator, kubewarden-integrator, kubewarden-policy-developer]
+:doc-type: [howto]
+:doc-topic: [operator-manual]
+
+Ce guide vous montre comment convertir une politique Gatekeeper existante en une politique{project-name}. Ce processus comporte deux étapes principales :
+. Compiler le programme Rego dans un module WebAssembly (Wasm).
+. Distribuer le module WebAssembly sous la forme d'une politique {short-project-name}.
+
+Le xref:/tutorials/writing-policies/rego/01-intro-rego.adoc[tutoriel sur les politiques Rego] couvre la majeure partie du processus de compilation du code Rego dans un module WebAssembly. Ce guide se concentre sur le processus étape par étape d'extraction des définitions de ressources personnalisées (CRD) de Gatekeeper et de leur migration dans une politique fonctionnelle {short-project-name}. Il utilise une politique de démonstration Gatekeeper de base.
+
+== Conditions préalables
+
+* link:https://github.com/open-policy-agent/opa/releases[opa]: vous utilisez cet outil pour construire le code dans wasm. Ce guide a été rédigé en utilisant la version `+v1.5.1+`.
+* link:https://github.com/kubewarden/kwctl/releases[`+kwctl+`]: outil que vous utilisez pour préparer et exécuter le module d'assemblage web {short-project-name}.
+* link:https://github.com/bats-core/bats-core[`+bats+`]outil utilisé pour effectuer des tests de bout en bout. Si vous décidez d'écrire ce type de tests
+* link:https://github.com/mikefarah/yq[`+yq+`]: outil permettant d'extraire des données de fichiers yaml
+
+== Avant de migrer vos politiques
+
+Avant de commencer le processus de migration des politiques Gatekeeper, envisagez d'utiliser les politiques déjà disponibles dans le {short-project-name}link:https://artifacthub.io/packages/search?kind=13[catalogue]. Certaines deslink:https://github.com/kubewarden/rego-policies-library[politiques du site] sont accessibles au public. Les politiques de l'OPA et du Gatekeeper ont migré vers le site {short-project-name}.
+
+Consultez également notre documentationxref:/explanations/comparisons/opa-comparison.adoc[comparative]entre {short-project-name} et Gatekeeper.
+
+== Étape 1 : Initialiser votre projet de politique {short-project-name} 
+
+Tout d'abord, utilisez le {short-project-name} Gatekeeperlink:https://github.com/kubewarden/gatekeeper-policy-template[modèle] pour créer une structure de projet de politique de base. Il fournit des cibles Makefile pour la construction et le test de votre politique. Après avoir créé le code de la politique à partir du modèle, exécutez les commandes Makefile pour vérifier que la politique se construit et que les tests s'exécutent correctement :
+
+[source,console]
+----
+$ make policy.wasm test
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+opa test *.rego
+PASS: 2/2
+----
+
+== Étape 2 : Migrer le code de la politique du Gatekeeper
+
+Commencez maintenant à migrer la politique Gatekeeper. Il s'agit de convertir une politique`+ConstraintTemplate+` et les ressources `+Constraint+` qui lui sont associées en une politique {short-project-name}. Dans le contexte de {short-project-name}, le code `+ConstraintTemplate+` est le code politique central, tandis que les instances `+Constraint+` se traduisent par des instances politiques exécutées au sein de {short-project-name}.
+
+Tout d'abord, copiez le code Rego de votre `+ConstraintTemplate+` dans le fichier `+policy.rego+`que le modèle {short-project-name} a généré. Pour cet exemple, vous devez utiliser labase suivantelink:https://github.com/open-policy-agent/gatekeeper/blob/896d6620f9c16d7a5d91a74a6a4260db8d735640/demo/basic/demo.sh#L1[politique de démonstration de] à partir du référentiel Gatekeeper.
+
+[.details]
+.Politique du gardien yaml
+[%collapsible]
+====
+[source,yaml]
+----
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        # Schema for the `+parameters+` field
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("you must provide labels: %v", [missing])
+        }
+----
+====
+
+Copiez l'extrait de code Rego du champ `+rego+` dans votre fichier `+policy.rego+`:
+
+[source,console]
+----
+cat gatekeeper/demo/basic/templates/k8srequiredlabels_template.yaml | yq ".spec.targets[0].rego" > policy.rego
+----
+
+=== Adapter le code Rego pour {short-project-name}
+
+Vous devez vous assurer que le nom `+package+` utilisé à l'intérieur du code Rego est bien `+policy+`.
+C'est la valeur attendue dans de nombreux endroits par le modèle {short-project-name} Gatekeeper.
+
+Si vous ne le modifiez pas, des erreurs se produiront lors de l'élaboration de la politique et de l'exécution de ses tests de bout en bout.
+
+Par exemple, la politique de démonstration que nous convertissons est définie dans le paquet `+k8srequiredlabels+`, cette valeur doit être remplacée par `+policy+`.
+
+C'est ainsi que doit se présenter le contenu du fichier `+policy.rego+`:
+
+[source,rego]
+----
+package policy
+
+violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+provided := {label | input.review.object.metadata.labels[label]}
+required := {label | label := input.parameters.labels[_]}
+missing := required - provided
+count(missing) > 0
+msg := sprintf("you must provide labels: %v", [missing])
+}
+----
+
+Si vous tentez de compiler le code après cette modification, vous risquez de découvrir de nouvelles erreurs de compilation :
+
+[source,console]
+----
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+error: load error: 2 errors occurred during loading:
+policy.rego:3: rego_parse_error: `+if+` keyword is required before rule body
+policy.rego:3: rego_parse_error: `+contains+` keyword is required for partial set rules
+make: *** [Makefile:4: policy.wasm] Error 1
+----
+
+L'auteur de la politique doit corriger ces erreurs pour permettre à l'interface CLI de `+opa+` de construire le code avec succès. Les changements spécifiques peuvent varier en fonction de la version `+opa+` et du code politique original. Comme nous migrons une politique rego antérieure à la version 1 de l'OPA, nous devons mettre à jour le code pour qu'il soit conforme à la version 1. Le code final de `+policy.rego+` ressemble à ceci :
+
+[source,rego]
+----
+package policy
+
+violation contains {"msg": msg, "details": {"missing_labels": missing}} if {
+  provided := {label | input.review.object.metadata.labels[label]}
+  required := {label | label := input.parameters.labels[_]}
+  missing := required - provided
+  count(missing) > 0
+  msg = sprintf("you must provide labels: %v", [missing])
+}
+----
+
+Après avoir ajusté le code, élaborez la politique :
+
+[source,console]
+----
+$ make policy.wasm
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+----
+
+Vous trouverez plus d'informations sur l'élaboration des politiques Gatekeeper dans notrexref:/tutorials/writing-policies/rego/gatekeeper/03-build-and-run.adoc[tutoriel].
+
+=== Code de la politique Rego et compatibilité avec l'OPA v1.0.0
+
+Avec la publication de OPA (Open Policy Agent)link:https://github.com/open-policy-agent/opa/releases/tag/v1.0.0[.0.0] v1 en décembre 2024, un changement radical a été introduit concernant la syntaxe de la politique Rego.
+
+Auparavant, `+if+` pour toutes les définitions de règles et `+contains+` pour les règles à valeurs multiples étaient facultatifs ; désormais, ils sont obligatoires. Cette modification concerne la plupart des anciennes polices.
+
+Voici un résumé de ce qu'il faut savoir :
+
+* *OPA v1.0.0 Syntaxe*: L'OPA v1.0.0 impose l'utilisation de `+if+` pour toutes les définitions de règles et de `+contains+` pour les règles à valeurs multiples. Les politiques qui ne respectent pas cette syntaxe seront interrompues.
+* *Rétrocompatibilité*: Si vous devez créer des politiques plus anciennes qui n'utilisent pas la nouvelle syntaxe v1.0.0, vous devez fournir le drapeau `+--v0-compatible+` à la commande `opa build.` 
+* *Intégration d'un gardien*: Gatekeeper a mis à jour sa dépendance OPA à la version 1.0.0 dans sa link:https://github.com/open-policy-agent/gatekeeper/releases/tag/v3.19.0[version] v3
+* *Version Rego dans les modèles Gatekeeper*: Gatekeeper suppose que la syntaxe `+v0+` est utilisée à moins que le modèle ne spécifie explicitement `+version: "v1"+` dans le champ `+source+` sous `+code.engine: Rego+`.
+
+Voir link:https://open-policy-agent.github.io/gatekeeper/website/docs/constrainttemplates/#enable-opa-rego-v1-syntax-in-constrainttemplates[cette section]de la documentation de Gatekeeper pour plus de détails sur la façon dont les versions `+v0+` et `+v1+` de Rego sont gérées.
+
+Ce que cela signifie pour vous :
+
+* Si la CR Gatekeeper ne spécifie pas de version de Rego, cela signifie que `+v0+` sera utilisé. Vous devez créer la politique à l'aide de la commande `make OPA_V0_COMPATIBLE=true`.
+* Si la CR Gatekeeper spécifie explicitement `+version: "v1"+`, vous devez élaborer la politique sans définir de variable d'environnement.
+
+== Étape 3 : Mise à jour et exécution des tests
+
+Bien que cela soit fortement recommandé, les auteurs de politiques peuvent ne pas créer de tests pour la version initiale d'une politique. Si c'est votre cas, vous devrez désactiver les cibles Makefile utilisées pour exécuter les tests. Vous ne pouvez pas supprimer complètement ces cibles, car les travaux de CI par défaut s'attendent à ce qu'elles soient définies. En revanche, vous devez remplacer les commandes qui appellent `+opa+` et `+bats+` par une opération "no-op". Par exemple, vous pouvez utiliser une commande `+echo+` pour imprimer une explication sur la raison pour laquelle les tests ne sont pas exécutés.
+
+Le modèle {short-project-name} Gatekeeper comprend à la fois des tests unitaires Rego et des tests de bout en bout (e2e) utilisant Bats et `+kwctl+`. Si vous prévoyez d'inclure des tests, les deux séries doivent être adaptées à votre politique.
+
+Si votre politique Gatekeeper comporte déjà des tests Rego, vous pouvez les copier dans le fichier`+policy_test.rego+`. Ils sont exécutés automatiquement lorsque vous exécutez la commande`+make test+`.
+
+[CAUTION]
+====
+Gardez à l'esprit que tous les tests Rego que vous écrivez dans `+policy_test.rego+` sont soumis aux mêmes problèmes de compatibilité détaillés dans le <<_rego_policy_code_and_opa_v1_0_0_compatibility,code de la politique Rego et la>> section <<_rego_policy_code_and_opa_v1_0_0_compatibility,Compatibilité avec l'OPA v1.0.0.>> 
+====
+
+La politique que vous migrez dans ce guide ne comporte pas de tests ; nous devons les ajouter nous-mêmes. C'est pourquoi nous allons mettre à jour le fichier de test `+policy_test.rego+` avec quelques tests de base :
+
+[source,rego]
+----
+package policy
+
+review_required_labels := {
+    "parameters": {"labels": ["test"]},
+    "review": {"object": {"metadata": {"labels": {"test": "value"}}}},
+}
+
+review_missing_labels := {
+    "parameters": {"labels": ["test"]},
+    "review": {"object": {"metadata": {"labels": {"other": "value"}}}},
+}
+
+test_accept if {
+    r = review_required_labels
+    res = violation with input as r
+    count(res) = 0
+}
+
+test_reject if {
+    r = review_missing_labels
+    res = violation with input as r
+    count(res) = 1
+}
+----
+
+L'exécution du site `+make test+` devrait maintenant valider votre politique :
+
+[source,console]
+----
+$ make policy.wasm test
+opa build -t wasm -e policy/violation -o bundle.tar.gz policy.rego
+tar xvf bundle.tar.gz /policy.wasm
+tar: Removing leading `/' from member names
+/policy.wasm
+rm bundle.tar.gz
+touch policy.wasm # opa creates the bundle with unix epoch timestamp, fix it
+opa test *.rego
+PASS: 2/2
+----
+
+Ensuite, mettez à jour le fichier de tests e2e (`+e2e.bats+`) :
+
+[source,bash]
+----
+#!/usr/bin/env bats
+
+@test "accept because required label is present" {
+  run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/settings.json --request-path test_data/accept_deploy_request.json
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request accepted
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*true') -ne 0 ]
+}
+
+@test "reject because required label is missing" {
+run kwctl run -e gatekeeper annotated-policy.wasm --settings-path test_data/settings.json --request-path test_data/reject_deploy_request.json
+
+  # this prints the output when one the checks below fails
+  echo "output = ${output}"
+
+  # request rejected
+  [ "$status" -eq 0 ]
+  [ $(expr "$output" : '.*allowed.*false') -ne 0 ]
+  [ $(expr "$output" : '.*message.*you must provide labels: \[test\]') -ne 0 ]
+}
+----
+
+Vous devrez créer les fichiers `+test_data/settings.json+`,`+test_data/accept_deploy_request.json+` et `+test_data/reject_deploy_request.json+`pour prendre en charge ces tests.
+
+[.details]
+.test_data/settings.json
+[%collapsible]
+====
+[source,json]
+----
+{
+  "labels": ["test"]
+}
+----
+====
+
+Nous n'inclurons pas le contenu complet de `+accept_deploy_request.json+` et`+reject_deploy_request.json+` ici, car `+AdmissionRequest+` JSON peut être assez long, et nous voulons garder ce guide concis. Cependant, vous pouvez utiliser la commandexref:/reference/kwctl-cli.adoc#_kwctl_scaffold_admission_request[`+kwctl scaffold+`]pour générer ces fichiers. La clé de ce guide est qu'une demande doit être dépourvue de l'étiquette requise, tandis que l'autre doit avoir l'étiquette définie.
+
+Vérifier si les tests e2e passent :
+
+[source,console]
+----
+$ make e2e-tests
+bats e2e.bats
+e2e.bats
+  ✓ accept because required label is present
+  ✓ reject because required label is missing
+----
+
+[IMPORTANT]
+====
+Les paramètres de la politique (par exemple, les étiquettes dans cet exemple) proviennent des paramètres de la politique. Cela vous permet de déployer plusieurs instances de la même politique avec des paramètres/réglages différents, de la même manière que les contraintes fonctionnent dans Gatekeeper.
+====
+
+== Étape 4 : Préparer `+metadata.yml+` pour la distribution
+
+Maintenant que vous disposez d'une politique fonctionnelle, préparez le fichier `+metadata.yml+` en vue de sa diffusion. Ce fichier définit les annotations avec la description de la politique, l'auteur, la licence et d'autres informations essentielles. Il est essentiel de définir le site`+rules+` qui précise les ressources et les verbes que la politique peut valider. Ces informations permettent à la commande `+kwctl scaffold+` de générer le manifeste pour déployer la politique dans votre cluster.
+
+Les CRD de Gatekeeper `+Constraints+`, qui sont des instances de politiques définies dans`+ConstraintTemplates+`, spécifient les ressources qu'une instance de politique évalue.
+Par conséquent, si vous avez des `+Constraints+` existants qui appliquent un `+ConstraintTemplate+`, ils constituent une bonne référence pour les ressources que vous devez définir dans votre fichier`+metadata.yml+`. Par exemple, dans l'exemple de Gatekeeper utilisé plus haut, le`+K8sRequiredLabels+` `+Constraint+` créé à partir du `+k8srequiredlabels+``+ConstraintTemplate+` s'applique au `+Namespaces+`:
+
+[source,yaml]
+----
+apiVersion: constraints.gatekeeper.sh/v1beta
+kind: K8sRequiredLabels
+metadata:
+  name: ns-must-have-gk
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Namespace"]
+  parameters:
+    labels: ["gatekeeper"]
+----
+
+Sur cette base, mettez à jour la section `+rules+` de votre `+metadata.yml+` pour inclure un nouveau`+rule+` pour la validation de `+namespaces+` pendant les opérations `+CREATE+` et `+UPDATE+`:
+
+[source,yaml]
+----
+rules:
+  - apiGroups: ["apps"]
+    apiVersions: ["v1"]
+    resources: ["deployments"]
+    operations: ["CREATE", "UPDATE"]
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["namespaces"]
+    operations: ["CREATE", "UPDATE"]
+mutating: false
+contextAware: false
+executionMode: gatekeeper
+backgroundAudit: true
+annotations:
+  io.artifacthub.displayName: Policy Name
+  io.artifacthub.resources: Pod
+  io.artifacthub.keywords: pod, cool policy, kubewarden
+  io.kubewarden.policy.ociUrl: ghcr.io/yourorg/policies/policy-name
+  io.kubewarden.policy.title: policy-name
+  io.kubewarden.policy.version: 0.0.1-unreleased
+  io.kubewarden.policy.description: Short description
+  io.kubewarden.policy.author: "Author name <author-email@example.com>"
+  io.kubewarden.policy.url: https://github.com/yourorg/policy-name
+  io.kubewarden.policy.source: https://github.com/yourorg/policy-name
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.severity: medium
+  io.kubewarden.policy.category: Resource validation
+----
+
+Votre politique est maintenant prête à être distribuée et déployée. Reportez-vous à la sectionxref:/tutorials/writing-policies/rego/gatekeeper/04-distribute.adoc#_pushing_the_policy[Publier la stratégie du]didacticiel pour savoir comment l'envoyer dans un registre distant.
+
+Vous pouvez échafauder le manifeste de politique à l'aide de `+kwctl+`:
+
+[source,console]
+----
+$ kwctl scaffold manifest --type ClusterAdmissionPolicy annotated-policy.wasm
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Resource validation
+    io.kubewarden.policy.severity: medium
+  name: policy-name
+spec:
+  module: file:///home/jvanz/SUSE/mygatekeeperpolicy/annotated-policy.wasm
+  settings: {}
+  rules:
+  - apiGroups:
+    - apps
+    apiVersions:
+    - v1
+    resources:
+    - deployments
+    operations:
+    - CREATE
+    - UPDATE
+  - apiGroups:
+    - ''
+    apiVersions:
+    - v1
+    resources:
+    - namespaces
+    operations:
+    - CREATE
+    - UPDATE
+  mutating: false
+----
+
+=== Définir les paramètres de la politique
+
+Cette politique a des paramètres que Gatekeeper définit dans le site`+Constraint+`. Vous devez mettre à jour la section `+settings+` dans le manifeste de stratégie {short-project-name}généré pour inclure ces paramètres requis. Dans l'exemple suivant, en plus de définir les paramètres, vous pouvez tester la politique à partir du registre OCI :
+
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  annotations:
+    io.kubewarden.policy.category: Resource validation
+    io.kubewarden.policy.severity: medium
+  name: policy-name
+spec:
+  module: registry://ghcr.io/jvanz/policies/mygatekeeperpolicy:latest
+  settings:
+    labels:
+      - "gatekeeper"
+  rules:
+    - apiGroups:
+        - apps
+      apiVersions:
+        - v1
+      resources:
+        - deployments
+      operations:
+        - CREATE
+        - UPDATE
+    - apiGroups:
+        - ""
+      apiVersions:
+        - v1
+      resources:
+        - namespaces
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+----
+
+Essayez de déployer un espace de noms sans l'étiquette `+gatekeeper+` requise :
+
+[source,console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: your-namespace-name
+  labels:
+    purpose: demo
+EOF
+Error from server: error when creating "STDIN": admission webhook "clusterwide-policy-name.kubewarden.admission" denied the request: you must provide labels: [gatekeeper]
+----
+
+Et un autre espace de noms avec l'étiquette requise :
+
+[source,console]
+----
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: your-namespace-name
+  labels:
+    purpose: demo
+    gatekeeper: test
+EOF
+
+namespace/your-namespace-name created
+----
