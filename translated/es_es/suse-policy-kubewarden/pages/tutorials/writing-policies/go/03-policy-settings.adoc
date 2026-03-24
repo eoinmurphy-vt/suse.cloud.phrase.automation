@@ -1,22 +1,22 @@
 include::partial$variables.adoc[]
-= Definiendo ajustes de la directiva
+= Definición de la configuración de las políticas
 :revdate: 2026-03-18
 :page-revdate: {revdate}
-:description: Modifica el código en el archivo settings.go para definir los ajustes de la directiva, incluyendo la implementación de funciones personalizadas para la serialización y deserialización de expresiones regulares.
+:description: Modificar el código en el archivo settings.go para definir la configuración de políticas, incluyendo la implementación de funciones personalizadas para marshaling y unmarshaling expresiones regulares.
 :doc-persona: ["kubewarden-policy-developer"]
 :doc-topic: ["kubewarden", "writing-policies", "go", "defining-policy-settings"]
 :doc-type: ["tutorial"]
 :keywords: ["kubewarden", "kubernetes", "defining policy settings", "Go"]
-:sidebar_label: Definiendo ajustes de la directiva
+:sidebar_label: Definición de la configuración de las políticas
 :sidebar_position: 24
 :current-version: {page-origin-branch}
 
-Primero, necesitas definir la estructura que contiene los ajustes de la directiva.
+En primer lugar, es necesario definir la estructura que contiene la configuración de la política.
 
-Haces esto modificando el código en el archivo `+settings.go+` (de tu versión local de la plantilla de directiva de Go).
-Necesitas añadir dos líneas extra a la sección `+import+`, cambiar la estructura `+Settings+`, y añadir la estructura `+RegularExpression+`.
+Para ello, modifique el código del archivo `+settings.go+` (de su versión local de la plantilla de política Go).
+Es necesario añadir dos líneas adicionales a la sección `+import+`, cambiar la estructura `+Settings+` y añadir la estructura `+RegularExpression+`.
 
-Debería coincidir con el siguiente código:
+Debe coincidir con el siguiente código:
 
 [,go]
 ----
@@ -42,16 +42,16 @@ type RegularExpression struct {
 
 [NOTE]
 ====
-`+DeniedNames+` ya no es necesario en la estructura `+Settings+` definida en `+settings.go+`.
+`+DeniedNames+` ya no es necesaria en la estructura `+Settings+` definida en `+settings.go+`.
 
-Como `+DeniedNames+` ya no está definido, también deberías eliminar la función `+IsNameDefined+` en `+settings.go+`.
-También deberías eliminar la función que lo referencia en `+settings_test.go+`, `+TestIsNameDenied+`.
+Como `+DeniedNames+` ya no está definida, también debe eliminar la función `+IsNameDefined+` en `+settings.go+`.
+También debe eliminar la función que hace referencia a ella en `+settings_test.go+`, `+TestIsNameDenied+`.
 ====
 
 
-Estás utilizando el paquete `+regexp+` para manejar objetos de expresiones regulares y el tipo https://github.com/deckarep/golang-set[`+mapset.Set+`] para almacenar la lista de etiquetas denegadas.
+Está utilizando el paquete `+regexp+` para manejar objetos de expresión regular y el tipohttps://github.com/deckarep/golang-set[`+mapset.Set+`] para almacenar la lista de etiquetas denegadas.
 
-Dado que `+regexp.Regexp+` no maneja la deserialización, necesitas definir funciones personalizadas para manejar la serialización y deserialización de expresiones regulares:
+Dado que `+regexp.Regexp+` no gestiona la deserialización, es necesario definir funciones personalizadas para gestionar el marshaling y unmarshaling de las expresiones regulares:
 
 [,go]
 ----
@@ -99,16 +99,16 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 }
 ----
 
-== Construyendo instancias de `+Settings+`
+== Creación de instancias `+Settings+` 
 
-Una directiva de {short-project-name} expone dos funciones diferentes que reciben los ajustes de la directiva como entrada:
+Una política {short-project-name} expone dos funciones diferentes que reciben la configuración de la política como entrada:
 
-* `+validate+`: Utiliza esta función cuando el objeto de Kubernetes requiera validación por parte de la directiva.
-Los ajustes son parte de un objeto https://pkg.go.dev/github.com/kubewarden/policy-sdk-go@v0.2.1/protocol#ValidationRequest[`+ValidationRequest+`].
-* `+validate_settings+`: Llama a esta función cuando la directiva se cargue por primera vez en {short-project-name}.
-La función recibe los ajustes de la directiva como entrada y verifica la validez.
+* `+validate+`: Utilice esta función cuando el objeto Kubernetes requiera validación por parte de la política.
+Los ajustes forman parte de unhttps://pkg.go.dev/github.com/kubewarden/policy-sdk-go@v0.2.1/protocol#ValidationRequest[`+ValidationRequest+`]objeto.
+* `+validate_settings+`: Llame a esta función cuando la política se carga por primera vez por {short-project-name}.
+La función recibe la configuración de la política como entrada y comprueba su validez.
 
-Necesitas crear una función auxiliar que cree un objeto `+Settings+` a partir de la carga útil JSON:
+Es necesario crear una función de ayuda que cree un objeto `+Settings+` a partir de la carga útil JSON:
 
 [,go]
 ----
@@ -125,19 +125,19 @@ func NewSettingsFromValidationReq(validationReq *kubewarden_protocol.ValidationR
 
 [NOTE]
 ====
-Todos los `+mapset.Set+` objetos se crean utilizando el https://pkg.go.dev/github.com/deckarep/golang-set?utm_source=godoc#NewThreadUnsafeSet[variante no segura para hilos].
-El código de WebAssembly se ejecuta en un solo hilo, por lo que no hay problemas de concurrencia.
+Todos los objetos de `+mapset.Set+` se crean utilizando lahttps://pkg.go.dev/github.com/deckarep/golang-set?utm_source=godoc#NewThreadUnsafeSet[variante thread-unsafe de].
+El código WebAssembly se ejecuta en un único hilo, por lo que no hay problemas de concurrencia.
 
-El estándar de WebAssembly aún no cubre los hilos.
-Consulta https://github.com/WebAssembly/threads[la propuesta oficial] para más detalles.
+El estándar WebAssembly aún no cubre los hilos.
+Para más detalles, consulte https://github.com/WebAssembly/threads[la propuesta oficial].
 ====
 
 
-== Implementando la validación de `+Settings+`
+== Aplicación de la validación `+Settings+` 
 
-Todas las directivas de {short-project-name} deben implementar la validación de ajustes.
+Todas las políticas de {short-project-name} tienen que aplicar la validación de configuraciones.
 
-Haces esto añadiendo un método de `+Valid+` a las instancias de `+Settings+`:
+Para ello, añada un método `+Valid+` a las instancias de `+Settings+`:
 
 [,go]
 ----
@@ -158,17 +158,17 @@ func (s *Settings) Valid() (bool, error) {
 }
 ----
 
-El método de `+Valid+` asegura que ninguna etiqueta "denegada" sea también parte del mapa "restringido".
-El uso del método `+Intersect+` proporcionado por `+mapset.Set+` simplifica la verificación.
+El método `+Valid+` garantiza que ninguna etiqueta "denegada" forme parte también del mapa "restringido".
+El uso del método `+Intersect+` proporcionado por `+mapset.Set+` simplifica la comprobación.
 
 [NOTE]
 ====
-La invocación del método `+Valid+` se realiza sobre un objeto `+Setting+` ya instanciado.
-Esto significa que la validación de la expresión regular proporcionada por el usuario ya tuvo lugar en el deserializador de `+Settings+`.
+La invocación al método `+Valid+` se realiza sobre un objeto `+Setting+` ya instanciado.
+Esto significa que la validación de la expresión regular proporcionada por el usuario ya ha tenido lugar en `+Settings+` unmarshaler.
 ====
 
 
-Finalmente, necesitas la función `+validateSettings+`, proporcionada por el andamiaje, para que se vea así:
+Por último, es necesario que la función `+validateSettings+`, proporcionada por el andamiaje, cambie para tener este aspecto:
 
 [,go]
 ----
@@ -190,16 +190,16 @@ func validateSettings(payload []byte) ([]byte, error) {
 }
 ----
 
-Puedes ver que la función aprovecha las funciones auxiliares proporcionadas por https://github.com/kubewarden/policy-sdk-go[{short-project-name} del SDK].
+Puede ver que la función aprovecha las funciones de ayuda proporcionadas porhttps://github.com/kubewarden/policy-sdk-go[el SDK de]
 
-== Probando el código de ajustes
+== Prueba del código de configuración
 
 Es importante tener una buena cobertura de pruebas del código que escribes.
-El código que estás utilizando, del andamiaje, viene con una serie de pruebas unitarias definidas en el archivo `+settings_test.go+`.
+El código que está utilizando, procedente del andamiaje, viene con una serie de pruebas unitarias definidas en el archivo `+settings_test.go+`.
 
-Tienes que cambiar el contenido de este archivo para reflejar el nuevo comportamiento de la clase `+Settings+`.
+Debe cambiar el contenido de este archivo para reflejar el nuevo comportamiento de la clase `+Settings+`.
 
-Incluye los paquetes de Go que estás utilizando:
+Incluya los paquetes Go que está utilizando:
 
 [,go]
 ----
@@ -212,7 +212,7 @@ import (
 )
 ----
 
-Puedes empezar escribiendo una prueba unitaria que asegure que puedes asignar una instancia de `+Settings+` desde un objeto `+ValidationRequest+`:
+Puede empezar escribiendo una prueba unitaria que garantice que puede asignar una instancia de `+Settings+`desde un objeto `+ValidationRequest+`:
 
 [,go]
 ----
@@ -251,7 +251,7 @@ func TestParseValidSettings(t *testing.T) {
 }
 ----
 
-A continuación, necesitas una prueba que verifique que no se genera una instancia de `+Settings+` cuando el usuario proporciona una expresión regular rota:
+A continuación, necesita una prueba que compruebe que no se genera una instancia de `+Settings+` cuando el usuario proporciona una expresión regular rota:
 
 [,go]
 ----
@@ -271,9 +271,9 @@ func TestParseSettingsWithInvalidRegexp(t *testing.T) {
 }
 ----
 
-Ahora, puedes definir una prueba que compruebe el comportamiento del punto de entrada `+validate_settings+`.
+Ahora, puede definir una prueba que compruebe el comportamiento del punto de entrada`+validate_settings+`.
 
-Miras el objeto `+SettingsValidationResponse+` devuelto por tu función `+validateSettings+`:
+Usted mira el objeto `+SettingsValidationResponse+` devuelto por su función `+validateSettings+`:
 
 [,go]
 ----
@@ -302,7 +302,7 @@ func TestDetectValidSettings(t *testing.T) {
 }
 ----
 
-Finalmente, escribes dos pruebas más para comprobar que la función `+validateSettings+` rechaza ajustes inválidos con los mensajes correctos:
+Por último, escribe dos pruebas más para comprobar que la función `+validateSettings+` rechaza las configuraciones no válidas con los mensajes correctos:
 
 [,go]
 ----
@@ -363,7 +363,7 @@ func TestDetectNotValidSettingsDueToConflictingLabels(t *testing.T) {
 }
 ----
 
-Ahora puedes ejecutar las pruebas que has definido hasta ahora utilizando el siguiente comando:
+Ahora puede ejecutar las pruebas que ha definido hasta ahora utilizando el siguiente comando:
 
 [subs="+attributes",shell]
 ----
@@ -388,4 +388,4 @@ PASS
 ok      command-line-arguments    0.002s
 ----
 
-Ahora puedes implementar el código de validación real en la siguiente sección.
+Ahora puede implementar el código de validación real en la siguiente sección.
