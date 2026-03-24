@@ -1,0 +1,57 @@
+= 如何从可移动设备包含云配置文件
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} 节点支持从特定块设备加载xref:references/cloud-config-reference.adoc[云配置文件]。
+特别是支持从`+CIDATA+` 作为卷 ID 的 ISO 或任何标有`+CIDATA+` 的 vFAT 格式设备加载云配置文件。如果在早期启动时发现符合这一条件的设备，{elemental-product-name} 客户端将读取该设备，并在其根目录下查找`+user-data+` 文件。
+
+例如，可通过以下步骤在 Linux 主机上创建包含云配置文件的 ISO。
+
+创建`+user-data+` 文件，其中包含云配置数据。在下面的示例中，我们只是设置了一个代理：
+
+.user-data
+[,yaml]
+----
+#cloud-config
+write_files:
+
+* path: /etc/sysconfig/proxy
+append: true
+content: |
+  PROXY_ENABLED="yes"
+  HTTP_PROXY=http://some.domain.org:8080
+  HTTPS_PROXY=https://some.domain.org:8080
+  NO_PROXY="localhost, 127.0.0.1"
+----
+
+`+user-data+` 文件存在后，使用`+mkisofs+` Linux 实用程序创建仅包含该文件的 ISO：
+
+[,bash]
+----
+mkisof -o cidata.iso -V CIDATA -J -r user-data
+----
+
+结果是一个标有`+CIDATA+` 的 ISO，包括`+user-data+` 文件。
+
+启动时，`+user-data+` 文件将被原样复制到`+/oem/user-data+` ，如果其中包含云配置数据，则会添加额外的副本，即`+/oem/user-data.yaml+` 。文件`+/oem/user-data.yaml+` 将在以后的云启动阶段进行解析。
+
+由于数据已复制到`+/oem+` ，因此在后续重启时，可移动设备不再需要存在。如果在后续重启时仍然存在，它只会覆盖任何已经存在的数据。
+
+== 包括非云配置数据
+
+如果`+user-data+` 不包含云配置数据，则{elemental-product-name} 客户端会将其原样复制到`+/oem/user-data+` 。在执行云启动阶段时，只解析`+*.yaml+` 文件，因此在这种情况下，云启动服务将忽略该文件。
+
+如果`+user-data+` 包含脚本，{elemental-product-name} 客户端还会尝试执行该脚本。{elemental-product-name} 客户端判断`+user-data+` 是否为脚本的方法是看第一行是否有_Shebang_。例如，前面的`+user-data+` 文件可以改写为
+
+.user-data
+[,bash]
+----
+#!/bin/bash
+
+cat <<EOF >> /etc/sysconfig/proxy
+PROXY_ENABLED="yes"
+HTTP_PROXY=http://some.domain.org:8080
+HTTPS_PROXY=https://some.domain.org:8080
+NO_PROXY="localhost, 127.0.0.1"
+EOF
+----
