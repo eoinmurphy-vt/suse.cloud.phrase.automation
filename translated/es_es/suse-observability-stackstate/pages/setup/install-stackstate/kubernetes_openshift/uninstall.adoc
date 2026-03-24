@@ -1,0 +1,81 @@
+= Desinstalar SUSE Observability
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability autoalojado
+
+== Visión general
+
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_un_install_the_helm_chart[Desinstalar el carro Helm]
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_remaining_resources[Eliminar los recursos restantes]
+. xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_manually_created_resources[Eliminar recursos creados manualmente]
+
+== Desinstalar la carta Helm
+
+[NOTE]
+====
+La desinstalación de la tabla helm preservará todos los datos porque helm no eliminará las Reclamaciones de Volumen Persistente ni el espacio de nombres. Para eliminar estos también xref:/setup/install-stackstate/kubernetes_openshift/uninstall.adoc#_remove_remaining_resources[eliminar los recursos restantes].
+====
+
+
+Para desinstalar SUSE Observability la primera acción es ejecutar el comando `+helm uninstall+`. Este comando eliminará todos los recursos creados por el comando `+helm upgrade --install+`.
+
+Desinstale la versión `+suse-observability+` del espacio de nombres `+suse-observability+` de esta forma, sustituya el espacio de nombres o el nombre de la versión por cualquier nombre personalizado utilizado durante la instalación:
+
+----
+helm uninstall --namespace suse-observability suse-observability
+----
+
+El comando volverá casi inmediatamente, pero apagar todos los pods y eliminar todos los demás recursos puede llevar un rato. Compruebe si todas las vainas se han ido con:
+
+----
+kubectl get pods --namespace suse-observability
+----
+
+Si desea reinstalar SUSE Observability más tarde y disponer de los datos antiguos, esto es todo, para una desinstalación completa continúe con las 2 secciones siguientes.
+
+== Eliminar los recursos restantes
+
+[CAUTION]
+====
+Si se eliminan las reclamaciones de volumen persistente y/o el espacio de nombres, se perderán todos los datos almacenados en SUSE Observability.
+====
+
+
+Para eliminar el espacio de nombres y con ello las Demandas de Volúmenes Persistentes y sus Volúmenes Persistentes vinculados simplemente elimina todo el espacio de nombres:
+
+----
+kubectl delete namespace suse-observability
+----
+
+Cuando el comando regrese, el espacio de nombres y todos los volúmenes habrán sido eliminados.
+
+Para eliminar únicamente las reclamaciones de volumen persistente (PVC) y mantener la ejecución del espacio de nombres:
+
+----
+kubectl delete pvc --all -n suse-observability
+----
+
+En OpenShift, el gráfico de Helm también creó una restricción de contexto de seguridad (SCC). Helm no lo limpia automáticamente, sino que es necesario eliminarlo manualmente:
+
+----
+# The scc is always named suse-observability-<namespace>
+oc delete scc suse-observability-suse-observability
+----
+
+== Eliminar recursos creados manualmente
+
+[NOTE]
+====
+Incluso si tiene intención de volver a instalar SUSE Observability en el mismo clúster pero en un espacio de nombres diferente, se pueden eliminar. Los recursos contienen referencias al espacio de nombres de SUSE Observability.
+====
+
+
+Como se describe en los xref:/setup/install-stackstate/kubernetes_openshift/required_permissions.adoc#_manually_create_cluster_wide_resources[permisos requeridos] puede haber sido necesario que el administrador de su cluster haya creado algunos recursos manualmente. Estos recursos pueden eliminarse de nuevo, pero también es una tarea manual que requiere permisos de administrador.
+
+Elimine la función de clúster y los enlaces de función de clúster que se han creado de esta forma:
+
+----
+kubectl delete cluster-role suse-observability-authorization
+kubectl delete cluster-role-binding suse-observability-authorization
+kubectl delete cluster-role-binding suse-observability-authentication
+----
