@@ -1,0 +1,119 @@
+include::partial$variables.adoc[]
+= 分发包含以下内容的老年退休金计划政策 {project-name}
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 用相关元数据注释 Rego 策略，然后将其推送到 OCI 注册表，为部署做好准备。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "distribute"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"分发"、"开放策略代理"、"opa"、"rego"]
+:sidebar_label: 分发
+:current-version: {page-origin-branch}
+
+您已经编写、构建并运行了您的 Rego 政策。
+现在是分发政策的时候了。
+
+必须对政策进行注释，这样它们才能在`+policy-server+` 中运行。
+在 Kubernetes 集群中运行时，`+policy-server+` 是执行策略的部分。
+
+== 注释政策
+
+注释政策是一个用相关信息丰富政策元数据的过程。
+作者、许可证、源代码位置、规则等信息，这些信息描述了该政策能理解和评估哪类资源。
+
+要注释政策，您需要编写`+metadata.yaml+` 文件：
+
+[subs="+attributes",yaml]
+----
+rules:
+- apiGroups: [""]
+  apiVersions: ["*"]
+  resources: ["*"]
+  operations: ["CREATE"]
+mutating: false
+contextAware: false
+executionMode: opa
+annotations:
+  io.kubewarden.policy.title: no-default-namespace
+  io.kubewarden.policy.version: 0.1.0 # should match the OCI tag
+  io.kubewarden.policy.description: This policy will reject any resource created inside the default namespace
+  io.kubewarden.policy.author: The {project-name} Authors
+  io.kubewarden.policy.url: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.source: https://github.com/kubewarden/some-policy
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.usage: |
+      This policy is just an example.
+
+      You can write interesting descriptions about the policy here.
+----
+
+您可以看到几个细节：
+
+* 规则
+该政策针对哪些资源。
+* 变异：
+这项政策是否会发生变化。
+在这种情况下，它只是验证。
+* 情境感知：
+该策略是否需要群集的上下文来评估请求。
+* 执行模式：
+由于这是一个 Rego 策略，因此必须指定它所期望的执行模式，即`+opa+` 或`+gatekeeper+` 。
+该策略以`+opa+` 风格编写，返回一个完整的`+AdmissionReview+` 对象。
+* 注释存储在策略本身中的元数据。
+
+请在保单上添加注释：
+
+[subs="+attributes",console]
+----
+$ kwctl annotate policy.wasm --metadata-path metadata.yaml --output-path annotated-policy.wasm
+----
+
+现在，您可以运行`+kwctl inspect annotated-policy.wasm+` 查看策略。
+
+== 推动政策
+
+现在，政策注释已完成，您可以将其推送到 OCI 注册表。
+
+[subs="+attributes",console]
+----
+$ kwctl push annotated-policy.wasm registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+Policy successfully pushed
+----
+
+您的 Rego 策略以 OPA 框架为目标，通过创建`+ClusterAdmissionPolicy+`.NET Framework，已具备在生产中部署所需的一切。
+你也可以准备这个。
+首先，您需要将保单拉入`+kwctl+` 本地商店：
+
+[subs="+attributes",console]
+----
+$ kwctl pull registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1
+pulling policy...
+----
+
+从中创建一个`+ClusterAdmissionPolicy+` 。
+该操作会考虑到它所掌握的有关策略的元数据：
+
+[subs="+attributes",console]
+----
+$ kwctl manifest registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1 --type ClusterAdmissionPolicy
+---
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: ClusterAdmissionPolicy
+metadata:
+  name: generated-policy
+spec:
+  module: "registry://registry.my-company.com/kubewarden/no-default-namespace:v0.0.1"
+  settings: {}
+  rules:
+    - apiGroups:
+        - ""
+      apiVersions:
+        - "*"
+      resources:
+        - "*"
+      operations:
+        - CREATE
+  mutating: false
+----
+
+现在，您可以使用`+ClusterAdmissionPolicy+` 作为基础，瞄准您想要的资源，或按原样部署到 Kubernetes。
