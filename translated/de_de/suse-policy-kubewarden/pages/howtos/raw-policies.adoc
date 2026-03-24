@@ -1,0 +1,303 @@
+include::partial$variables.adoc[]
+= Rohe Politik
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren Sie Raw Policies als generische Policy Evaluation Engine mit {project-name}.
+:doc-persona: ["kubewarden-distributor", "kubewarden-integrator", "kubewarden-operator", "kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "kubernetes", "raw-policies"]
+:doc-type: ["howto"]
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "support", "raw policies"]
+:sidebar_label: Rohe Politik
+:sidebar_position: 60
+:current-version: {page-origin-branch}
+
+Ab `+v1.9.0+` unterstützt {project-name} die Möglichkeit, Richtlinien außerhalb eines Kubernetes-Clusters zu schreiben und auszuführen, und zwar als generische Policy Evaluation Engine.
+Der Policy Server stellt den `+/validate_raw+` Endpunkt zur Verfügung, der verwendet werden kann, um beliebige JSON Dokumente gegen eine {short-project-name} Richtlinie zu validieren.
+
+In diesem Leitfaden werden wir die folgenden Rohdaten verwenden:
+
+* https://github.com/kubewarden/raw-validation-policy[raw-validation-policy]
+* https://github.com/kubewarden/raw-mutation-policy[raw-mutation-policy]
+
+[NOTE]
+====
+Bitte vergewissern Sie sich, dass der Richtlinienautor die Richtlinie in den Metadaten als `+policyType: raw+` gekennzeichnet hat.
+Sie können die Metadaten einsehen, indem Sie `+kwctl+`
+
+[subs="+attributes",bash]
+----
+kwctl inspect ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+----
+====
+
+
+== Ausführen des Richtlinienservers außerhalb von Kubernetes
+
+Der Policy Server kann außerhalb von Kubernetes als eigenständiger Container ausgeführt werden.
+
+Erstellen Sie zunächst eine Datei `+policies.yml+` mit dem folgenden Inhalt:
+
+[subs="+attributes",yaml]
+----
+raw-validation:
+  module: ghcr.io/kubewarden/tests/raw-validation-policy:v0.1.0
+  settings:
+    validUsers:
+      - alice
+      - bob
+    validActions:
+      - read
+      - write
+    validResources:
+      - orders
+      - products
+
+raw-mutation:
+  module: ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+  allowedToMutate: true
+  settings:
+    forbiddenResources:
+      - privateResource
+      - secretResource
+    defaultResource: publicResource
+----
+
+So starten Sie den Richtlinienserver:
+
+[subs="+attributes",bash]
+----
+# Create a docker volume to store the policies
+docker volume create --driver local \
+                --opt type=tmpfs \
+                --opt device=tmpfs \
+                --opt o=ui=65533 \
+                policy-store
+
+# Start the policy server
+docker run --rm -it \
+    -p 3000:3000 \
+    -v $(pwd)/policies.yml:/policies.yml \
+    -v policy-store:/registry \
+    ghcr.io/kubewarden/policy-server:1.9.0 \
+    --ignore-kubernetes-connection-failure=true
+----
+
+NOTE: das Flag `+--ignore-kubernetes-connection-failure=true+` ist erforderlich, um den Richtlinienserver ohne Kubernetes zu starten.
+Es ist jedoch möglich, den Policy Server mit/innerhalb von Kubernetes zu starten und den Rohvalidierungsendpunkt zu verwenden.
+Rohe Richtlinien können wie Standardrichtlinien auf xref:../explanations/context-aware-policies.adoc[kontextabhängige] Funktionen zugreifen.
+
+== Ausführen eines Policy Servers innerhalb von Kubernetes ohne den {short-project-name} Controller
+
+Es ist nicht möglich, eine vom {short-project-name} Controller verwaltete Policy Server-Instanz zum Hosten von Rohrichtlinien zu verwenden.
+Der Controller lässt es nicht zu, dass der Benutzer die Policy Server ConfigMap ändert, um eine rohe Richtlinie hinzuzufügen, da er versuchen wird, sie abzugleichen und die Änderungen rückgängig zu machen.
+Aus diesem Grund muss ein eigener Policy Server gestartet werden.
+
+Erstellen Sie eine Datei `+policy-server.yaml+` mit dem folgenden Inhalt:
+
+[subs="+attributes",yaml]
+----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-server-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: policy-server
+  template:
+    metadata:
+      labels:
+        app: policy-server
+    spec:
+      containers:
+        - name: policy-server
+          image: ghcr.io/kubewarden/policy-server:v1.9.0
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: policy-store
+              mountPath: /registry
+            - name: policies-config
+              mountPath: /policies.yml
+              subPath: policies.yml
+      volumes:
+        - name: policy-store
+          emptyDir: {}
+        - name: policies-config
+          configMap:
+            name: policies-configmap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy-server-service
+spec:
+  selector:
+    app: policy-server
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: policies-configmap
+data:
+  policies.yml: |
+    raw-validation:
+      module: ghcr.io/kubewarden/tests/raw-validation-policy:v0.1.0
+      settings:
+        validUsers:
+          - alice
+          - bob
+        validActions:
+          - read
+          - write
+        validResources:
+          - orders
+          - products
+    raw-mutation:
+      module: ghcr.io/kubewarden/tests/raw-mutation-policy:v0.1.0
+      allowedToMutate: true
+      settings:
+        forbiddenResources:
+          - privateResource
+          - secretResource
+        defaultResource: publicResource
+----
+
+Übernehmen Sie die Konfiguration:
+
+[subs="+attributes",bash]
+----
+kubectl apply -f policy-server.yaml
+----
+
+[IMPORTANT]
+====
+Die eingesetzte Policy Server-Instanz hat Zugriff auf Kubernetes-Ressourcen, die von kontextbezogenen Richtlinien genutzt werden können.
+Die Zugriffsebene auf die Kubernetes-Ressourcen wird durch das Dienstkonto bestimmt, das für die Ausführung des Policy Server-Workloads verwendet wird.
+
+Im vorigen Beispiel ist in der Einsatzspezifikation kein Dienstkonto definiert; daher wird das Dienstkonto `+default+` verwendet.
+====
+
+
+== Verwendung des Endpunkts validate_raw
+
+=== Validierung
+
+Der Endpunkt für die Rohvalidierung ist unter `+/validate_raw+` zu finden und nimmt `+POST+` Anfragen entgegen.
+Da wir einen Dienst bereitgestellt haben, können wir eine Port-Weiterleitung einrichten, um mit`+kubectl port-forward service/policy-server-service 3000:3000 -n default+` auf ihn zuzugreifen.
+
+Versuchen wir nun, ein JSON-Dokument anhand der Richtlinie `+raw-validation+` zu validieren:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-validation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "customers"
+  }
+}'
+----
+
+Die Anfrage wird nicht angenommen, da `+alice+` keinen Zugriff auf die Ressource `+customers+` erhalten hat:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": false,
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+Versuchen wir es noch einmal mit einer gültigen Ressource:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-validation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "orders"
+  }
+}'
+----
+
+Dieses Mal wird der Antrag angenommen:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": true,
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+[NOTE]
+====
+Wenn das Feld `+uid+` in der Nutzlast der Anfrage enthalten ist, wird es als Teil der Antwort zurückgegeben.
+====
+
+
+=== Mutation
+
+Versuchen wir nun, ein JSON-Dokument anhand der Richtlinie `+raw-mutation+` zu verändern:
+
+[subs="+attributes",bash]
+----
+curl -X POST \
+  http://localhost:3000/validate_raw/raw-mutation \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "privateResource"
+  }
+}'
+----
+
+Die Anfrage wird mutiert und die Antwort enthält einen JSONPatch:
+
+[subs="+attributes",json]
+----
+{
+  "response": {
+    "uid": "",
+    "allowed": true,
+    "patchType": "JSONPatch",
+    "patch": "W3sib3AiOiJyZXBsYWNlIiwicGF0aCI6Ii9yZXNvdXJjZSIsInZhbHVlIjoicHVibGljUmVzb3VyY2UifV0=",
+    "auditAnnotations": null,
+    "warnings": null
+  }
+}
+----
+
+== Verfassen von Rohfassungen
+
+Ähnlich wie Richtlinien, die Kubernetes-Ressourcen validieren, werden Rohrichtlinien in WebAssembly mit {short-project-name} SDKs geschrieben.
+Wenn Sie daran interessiert sind, rohe Richtlinien zu schreiben, finden Sie weitere Informationen in der sprachspezifischen Dokumentation:
+
+* xref:../tutorials/writing-policies/go/10-raw-policies.adoc[Weiter]
+* xref:../tutorials/writing-policies/rust/08-raw-policies.adoc[Rost]
+* xref:../tutorials/writing-policies/rego/open-policy-agent/05-raw-policies.adoc[OPA]
+* xref:../tutorials/writing-policies/wasi/02-raw-policies.adoc[WASI]
