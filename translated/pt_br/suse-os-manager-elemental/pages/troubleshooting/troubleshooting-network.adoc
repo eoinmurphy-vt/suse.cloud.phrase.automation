@@ -1,24 +1,24 @@
-= Solução de Problemas de Rede Declarativa
+= Solução de problemas de rede declarativa
 :revdate: 2025-09-08
 :page-revdate: {revdate}
 
-Dado o seguinte registro de exemplo:
+Dado o seguinte exemplo de registro:
 
-.exemplo de Registro de Máquina usando Rede Declarativa
+.exemplo de MachineRegistration usando Declarative Networking
 [,yaml]
 ----
 include::example$network/machineregistration.yaml[]
 ----
 
-Podemos esperar que cada Máquina Elementar seja configurada usando o template definido `+nm-configurator+` `+_all.yaml+`.
+Podemos esperar que cada Elemental Machine seja configurada usando o modelo definido em `+nm-configurator+` `+_all.yaml+`.
 
-No primeiro boot, o `+elemental-register+` tentará contatar a API do Rancher para registrar um novo `+MachineInventory+`.
+Na primeira inicialização, o `+elemental-register+` tentará entrar em contato com a API do Rancher para registrar um novo `+MachineInventory+`.
 
-Neste estágio, a rede da máquina não está configurada e irá usar DHCP por padrão. É um requisito que a máquina consiga contatar a API do Rancher nesta configuração, caso contrário, o registro não poderá ser realizado.
+Nesse estágio, a rede da máquina não está configurada e terá como padrão o DHCP. É necessário que a máquina possa entrar em contato com a API do Rancher nessa configuração, caso contrário, o registro não poderá ser feito.
 
-Uma vez que o `+MachineInventory+` tenha sido registrado, o `+elemental-operator+` irá reivindicar um `+IPAddress+` para cada referência `+IPPool+` definida na configuração da rede.
+Depois que o `+MachineInventory+` tiver sido registrado pela primeira vez, o `+elemental-operator+` reivindicará um `+IPAddress+` para cada referência `+IPPool+` definida na configuração da rede.
 
-No `+MachineInventory+`, isso parecerá o seguinte:
+No site `+MachineInventory+`, isso terá a seguinte aparência:
 
 [,yaml]
 ----
@@ -80,7 +80,7 @@ status:
     type: NetworkConfigReady
 ----
 
-Você notará que o `+MachineInventory+` carrega o mesmo `+network.config+` que o `+MachineRegistration+`, no entanto, em vez de referenciar Pools de Endereços IP, agora temos um mapa de Endereços IP reais:
+Você notará que o `+MachineInventory+` carrega o mesmo `+network.config+` que o `+MachineRegistration+`, porém, em vez de fazer referência a IPAddressPools, agora temos um mapa de IPAddresses reais:
 
 [,yaml]
 ----
@@ -88,17 +88,17 @@ Você notará que o `+MachineInventory+` carrega o mesmo `+network.config+` que 
       inventory-ip: 192.168.122.150
 ----
 
-Este `+inventory-ip+` será então substituído na configuração do `+nm-configurator+` sempre que `+{inventory-ip}+` tiver sido definido.
+Esse `+inventory-ip+` será substituído na configuração do `+nm-configurator+` sempre que o `+{inventory-ip}+` for definido.
 
-Observe também que o `+MachineInventory+` referencia e possui cada `+IPAddressClaim+` associado a ele. Cada reivindicação segue a previsível convenção de nomenclatura `+$MachineInventoryName-$IPPoolRefKey+`: `+m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip+`.
+Observe também que o `+MachineInventory+` faz referência e é proprietário de cada `+IPAddressClaim+` associado a ele. Cada reivindicação segue a convenção de nomenclatura previsível `+$MachineInventoryName-$IPPoolRefKey+`: `+m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip+`.
 
-Essas reivindicações seguirão o ciclo de vida do objeto `+MachineInventory+` e serão deletadas em cascata, por exemplo, durante o fluxo de trabalho xref:node-operational-tasks/reset.adoc[reset workflow].
+Essas reivindicações seguirão o ciclo de vida do objeto `+MachineInventory+` e serão excluídas em cascata, por exemplo, durante o xref:node-operational-tasks/reset.adoc[fluxo de trabalho de redefinição].
 
-Se o `+IPAddresses+` não puder ser reivindicado, a condição do `+NetworkConfigReady+` será `+False+`, impedindo que a máquina complete a instalação. Isso pode ocorrer se o `+IPPool+` não tiver mais `+IPAddresses+` disponíveis.
+Se o `+IPAddresses+` não puder ser reivindicado, a condição `+NetworkConfigReady+` será `+False+`, impedindo que a máquina conclua a instalação. Isso pode ocorrer se o site `+IPPool+` não tiver mais `+IPAddresses+` disponível.
 
-== Do lado da máquina
+== No lado da máquina
 
-Durante a fase de instalação, o processo `+elemental-register+` em execução na máquina receberá o template de configuração `+nm-configurator+` `+_all.yaml+` e a lista de Endereços IP reivindicados com suas chaves. Essas informações serão processadas para uma configuração `+nm-configurator+` aplicável:
+Durante a fase de instalação, o processo `+elemental-register+` em execução na máquina receberá o modelo de configuração `+nm-configurator+` `+_all.yaml+` e a lista de IPAddresses reivindicados com suas chaves. Essas informações serão digeridas em uma configuração `+nm-configurator+` aplicável:
 
 [,yaml]
 ----
@@ -130,13 +130,13 @@ config:
       table-id: 254
 ----
 
-O `+elemental-register+` então invocará `+nmc generate+` e `+nmc apply+` para aplicar essa configuração no sistema em execução.
+Em seguida, o `+elemental-register+` invocará `+nmc generate+` e `+nmc apply+` para aplicar essa configuração ao sistema em execução.
 
-A partir deste momento até a reinicialização, a máquina sempre usará a configuração aplicada.
+A partir desse momento até a reinicialização, a máquina sempre usará a configuração aplicada.
 
-Observe também que fora da instalação e da reinicialização, `+nm-configurator+` não é mais utilizado, uma vez que o `+elemental-register+` persistirá os arquivos `+/etc/NetworkManager/system-connection/*.nmconnection+` gerados por `+nmc+` em vez da própria configuração `+nmc+`.
+Observe também que, fora da instalação e da redefinição, o `+nm-configurator+` não é mais usado, pois o `+elemental-register+` manterá os arquivos `+/etc/NetworkManager/system-connection/*.nmconnection+` gerados pelo `+nmc+` em vez da própria configuração do `+nmc+`.
 
-Por exemplo, em qualquer sistema em execução, você encontrará um arquivo de configuração https://github.com/rancher/yip[yip] (`+/oem/elemental-network.yaml+`) para aplicar o `+nmconnections+` desejado, por exemplo:
+Por exemplo, em qualquer sistema em execução, você encontrará um arquivo de configuração https://github.com/rancher/yip[] yip (`+/oem/elemental-network.yaml+`) para aplicar o `+nmconnections+` desejado, por exemplo:
 
 [,yaml]
 ----
@@ -184,12 +184,12 @@ stages:
 
 === Durante a reinicialização
 
-Sempre que xref:node-operational-tasks/reset.adoc[reset] for acionado, o `+elemental-register+` em execução na máquina limpará qualquer arquivo `+/etc/NetworkManager/system-connection/*.nmconnection+` e reiniciará a pilha de rede. A máquina deve então reverter para DHCP e, após isso, confirmar ao `+elemental-operator+` do lado da gestão que a reinicialização foi bem-sucedida.
+Sempre que xref:node-operational-tasks/reset.adoc[a reinicialização] for acionada, o site `+elemental-register+` em execução na máquina limpará qualquer arquivo `+/etc/NetworkManager/system-connection/*.nmconnection+` e reiniciará a pilha de rede. A máquina deverá então reverter para o DHCP e, depois disso, confirmar para `+elemental-operator+` no lado do gerenciamento que a redefinição foi bem-sucedida.
 
-Observe que isso se aplica apenas quando o valor `+MachineInventory.spec.network.configurator+` é diferente de `+none+`. Caso contrário, nenhuma ação será tomada para reiniciar a rede durante a fase de reinicialização da máquina.
+Observe que isso só se aplica quando o valor de `+MachineInventory.spec.network.configurator+` for diferente de `+none+`. Caso contrário, nenhuma ação será tomada para redefinir a rede durante a fase de redefinição da máquina.
 
-Após a reinicialização da rede, a máquina deve reiniciar em modo de recuperação, realizar a reinicialização real e receber uma nova configuração de rede a ser aplicada. Potencialmente, isso será o mesmo que antes (se o `+MachineRegistration+` não tiver sido atualizado), ou pode ter IPs diferentes, uma vez que os anteriores podem ter sido reivindicados por outras máquinas nesse meio tempo.
+Após a redefinição da rede, a máquina deve ser reinicializada no modo de recuperação, executar a redefinição real e receber uma nova configuração de rede a ser aplicada. Potencialmente, ele será o mesmo de antes (se o `+MachineRegistration+` não tiver sido atualizado) ou poderá ter IPs diferentes, pois os anteriores podem ter sido reivindicados por outras máquinas nesse meio tempo.
 
-Se a reversão para DHCP falhar ou a máquina de alguma forma não conseguir contatar a API do Rancher para confirmação, você notará que o `+MachineInventory+` não será excluído, apesar de ter um carimbo de data/hora de exclusão. Como a máquina agora tem problemas de rede, não será possível corrigi-la remotamente.
+Se a reversão para DHCP falhar ou se a máquina não puder entrar em contato com a API do Rancher para confirmação, você perceberá que o `+MachineInventory+` não será excluído, apesar de ter um registro de data e hora de exclusão. Como a máquina agora tem um problema de rede, não será possível corrigi-lo remotamente.
 
-Você tem a opção de acessar fisicamente a máquina ou, por qualquer meio, corrigir a configuração baseada em DHCP, ou alternativamente, pode remover o finalizador `+machineinventory.elemental.cattle.io+` do `+MachineInventory+`, para permitir a exclusão, se você pretende desativar a máquina.
+Você tem a opção de acessar fisicamente a máquina ou, por qualquer meio, corrigir a configuração de rede orientada por DHCP ou, alternativamente, pode remover o finalizador `+machineinventory.elemental.cattle.io+` do site `+MachineInventory+`, para permitir a exclusão, caso pretenda desativar a máquina.
