@@ -1,0 +1,103 @@
+include::partial$variables.adoc[]
+= コンテキストを意識したポリシー
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 開発者は、実行時にKubernetesクラスタ情報を取得し、AdmissionRequestの受け入れ基準を決定するコンテキスト対応ポリシーを作成できる。
+:doc-persona: ["kubewarden-policy-developer", "kubewarden-integrator"]
+:doc-topic: ["explanations", "context-aware-policies"]
+:doc-type: ["explanation"]
+:keywords: ["{project-name}", "kubewarden", "context-aware policy", "clusteradmissionpolicy", "admissionpolicy", "admissionrequest", "cluster administrator" ]。
+:sidebar_label: コンテキストを意識したポリシー
+:sidebar_position: 20
+:current-version: {page-origin-branch}
+
+開発者は、実行時にKubernetesクラスターから情報をフェッチするポリシーを作成できる。これらはコンテキストを意識したポリシーである。コンテキストを意識したポリシーは、クラスタに配置されたリソースからの情報を使用して、`+AdmissionRequest+` が受け入れられるかどうかを判断できる。
+
+[NOTE]
+====
+コンテキスト認識ポリシーは、{project-name} v1.6.0以上のバージョンでのみ利用可能です。
+====
+
+ポリシーがクラスタ内のどのリソースにアクセスできるかの制御は、ポリシーサーバのhttps://kubernetes.io/docs/concepts/security/service-accounts/[サービスアカウント] によって行われます。クラスタ管理者は、Kubernetes RBACルールによってポリシーがアクセスできる範囲を制御する。コンテキストを意識したポリシーは、要求されたリソースへの*読み取り*アクセスしか持たない。
+
+セキュリティ上の理由から、`+ClusterAdmissionPolicy+` ポリシーだけがKubernetesクラスタから情報をフェッチできる。これは、権限のないユーザーが`+AdmissionPolicy+` 。
+
+非特権ユーザーがコンテキスト・アウェア・ポリシーを`+AdmissionPolicy+` 、システムとして展開する場合：
+
+- Kubernetesリソースへのアクセスをすべてブロックする。
+- クラスタ管理者に報告する。
+
+デフォルトでは、{short-project-name} はすべてのクラスタ・リソースをブロックする。{project-name} 管理者は、各コンテキスト・アウェア・ポリシーがどのKubernetesリソースを読み込めるかを定義する。`+contextAwareResources+` 。
+
+次の例は、`+Deployment+`と`+Pod+` リソースへのアクセスを要求するポリシーを展開します：
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: context-aware-policy
+  namespace: default
+spec:
+  policyServer: default
+  module: "registry://ghcr.io/kubewarden/policies/context-aware-policy:v1.0.0"
+  settings: {}
+  contextAwareResources:
+    - apiVersion: "apps/v1"
+      kind: "deployment"
+    - apiVersion: "v1"
+      kind: "pod"
+  rules:
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployment"]
+      operations:
+        - CREATE
+        - UPDATE
+  mutating: false
+----
+
+展開されると、このポリシーは`+deployment+` と`+pod+` リソースのデータを読むことができる。
+
+ポリシー作成者は、そのコンテキストアウェアポリシーにKubernetesリソースのリストを提供する。{project-name}管理者は、`+kwctl inspect+` コマンドを使用してポリシーのメタデータを表示します。ポリシーがアクセスする必要のあるリソースのリストを得ることができる。管理者はこのリストを使用して、`+ClusterAdmissionPolicy+` 定義を入力する。
+
+[WARNING]
+====
+
+システムの乱用を防ぐため、{project-name} 、管理者はポリシーがアクセスするリソースを確認する必要がある。
+
+例えば、イングレス・オブジェクトを評価するポリシーは、クラスタで定義された`+Ingress+` リソースを読み込む正当な理由がある。同じ方針でも、`+Secret+` 。
+
+ポリシーは、正しく機能するために最低限必要なアクセス権を持つべきである。
+
+====
+
+
+[NOTE]
+====
+
+Kubernetes のリソース識別には`+apiVersion+` と`+kind+` を使用する。
+
+通常、`+apiVersion+` は、`+<api>/<version>+`.`+core+` APIグループ（Pod、Service、その他）のリソースは、グループ名`+<api>+` を定義してはならない。これらは、`+<version>+` （例えば、`+v1+` ）のみを定義すべきである。
+
+核となる資源の場合、前者は機能せず、後者は機能する。
+
+[subs="+attributes",console]
+----
+- apiVersion: "core/v1"
+  kind: "pod"
+----
+
+[subs="+attributes",console]
+----
+- apiVersion: "v1"
+  kind: "pod"
+----
+
+他のすべてのKubernetesリソースには完全な定義が必要です:`+<api>/<version>+` 。
+====
+
+
+== その他の資料
+
+コンテキスト・アウェア・ポリシーの詳細については、リファレンス・ドキュメントのxref:../reference/spec/05-context-aware-policies.adoc[このセクションを]参照してください。
