@@ -1,0 +1,119 @@
+= Cluster-Datenspeicher
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-06-16
+:page-revdate: {revdate}
+
+Die Möglichkeit, Kubernetes mit einem anderen Datenspeicher als etcd zu betreiben, unterscheidet K3s von anderen Kubernetes-Distributionen. Diese Funktion bietet den Kubernetes-Betreibern Flexibilität. Die verfügbaren Datenspeicheroptionen ermöglichen es Ihnen, einen Datenspeicher auszuwählen, der Ihrem Anwendungsfall am besten entspricht. Zum Beispiel:
+
+* Wenn Ihr Team keine Erfahrung mit dem Betrieb von etcd hat, können Sie eine unternehmenstaugliche SQL-Datenbank wie MySQL oder PostgreSQL wählen.
+* Wenn Sie einen einfachen, kurzlebigen Cluster in Ihrer CI/CD-Umgebung betreiben möchten, können Sie die eingebettete SQLite-Datenbank verwenden
+* Wenn Sie Kubernetes am Edge einsetzen möchten und eine hochverfügbare Lösung benötigen, sich aber den betrieblichen Aufwand für die Verwaltung einer Datenbank am Edge nicht leisten können, können Sie den eingebetteten HA-Datenspeicher von K3s verwenden, der auf eingebettetem etcd aufbaut.
+
+K3s unterstützt die folgenden Datenspeicheroptionen:
+
+* *Eingebettet https://www.sqlite.org/index.html[SQLite]* +
+SQLite kann nicht auf Clustern mit mehreren Servern verwendet werden. +
+SQLite ist der Standard-Datenspeicher und wird verwendet, wenn keine andere Datenspeicherkonfiguration vorhanden ist und keine eingebetteten etcd-Datenbankdateien auf der Festplatte vorhanden sind.
+* *Eingebettetes etcd* +
+Weitere Informationen zur Verwendung von eingebettetem xref:datastore/ha-embedded.adoc[etcd] mit mehreren Servern finden Sie in der Dokumentation zu eingebettetem xref:datastore/ha-embedded.adoc[etcd für hohe Verfügbarkeit].
+Eingebettetes etcd wird automatisch ausgewählt, wenn K3s so konfiguriert ist, dass es einen neuen etcd-Cluster initialisiert, einem bestehenden etcd-Cluster beitritt oder wenn etcd-Datenbankdateien während des Starts auf der Festplatte vorhanden sind.
+* *Externe Datenbank* +
+Weitere Informationen zur Verwendung von externen Datenspeichern mit mehreren Servern finden Sie in der Dokumentation xref:datastore/ha.adoc[High Availability External DB]. +
+Die folgenden externen Datenspeicher werden unterstützt:
+ ** https://etcd.io/[etcd] (zertifiziert für Version 3.5.21)
+ ** https://www.mysql.com/[MySQL] (zertifiziert für die Versionen 5.7 und 8.0)
+ ** https://mariadb.org/[MariaDB] (zertifiziert für Version 10.11 und 11.4)
+ ** https://www.postgresql.org/[PostgreSQL] (zertifiziert für die Versionen 15.12, 16.7 und 17.3)
+
+[CAUTION]
+.Vorbereitete Erklärung Unterstützung
+====
+K3s erfordert die Unterstützung vorbereiteter Auszüge durch die DB. Das bedeutet, dass Verbindungspooler wie https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-transaction-pooling[] PgBouncer zusätzliche Konfiguration benötigen, um mit K3s zu arbeiten.
+====
+
+[WARNING]
+.Multimaster-Einrichtungen
+====
+Multi-Master-Datenbanken, die `+auto_increment_increment+` oder `+auto_increment_offset+` größer als 1 einstellen, werden nicht unterstützt. Kine erwartet, dass die Revision bei 0 beginnt und immer genau um 1 weitergeht, wenn ein Schlüssel erfolgreich eingefügt wurde. Dies betrifft Produkte wie Galera für MySQL/MariaDB. 
+====
+
+[#_external_datastore_configuration_parameters]
+== Parameter für die Konfiguration des externen Datenspeichers
+
+Wenn Sie einen externen Datenspeicher wie PostgreSQL, MySQL oder etcd verwenden möchten, müssen Sie den Parameter `+datastore-endpoint+` setzen, damit K3s weiß, wie es sich mit diesem verbinden kann. Sie können auch Parameter angeben, um die Authentifizierung und Verschlüsselung der Verbindung zu konfigurieren. Die folgende Tabelle fasst diese Parameter zusammen, die entweder als CLI-Flags oder als Umgebungsvariablen übergeben werden können.
+
+|===
+| CLI-Flagge | Umgebungsvariable | Beschreibung
+
+| `+--datastore-endpoint+`
+| `+K3S_DATASTORE_ENDPOINT+`
+| Geben Sie eine PostgreSQL-, MySQL- oder etcd-Verbindungszeichenfolge an. Dies ist eine Zeichenkette, die die Verbindung zum Datenspeicher beschreibt. Die Struktur dieser Zeichenfolge ist für jedes Backend spezifisch und wird im Folgenden erläutert.
+
+| `+--datastore-cafile+`
+| `+K3S_DATASTORE_CAFILE+`
+| TLS-Zertifizierungsstellendatei (CA), die zur Sicherung der Kommunikation mit dem Datenspeicher verwendet wird. Wenn Ihr Datenspeicher Anfragen über TLS mit einem von einer benutzerdefinierten Zertifizierungsstelle signierten Zertifikat bedient, können Sie diese Zertifizierungsstelle mit diesem Parameter angeben, damit der K3s-Client das Zertifikat ordnungsgemäß überprüfen kann.
+
+| `+--datastore-certfile+`
+| `+K3S_DATASTORE_CERTFILE+`
+| TLS-Zertifikatsdatei, die für die auf Client-Zertifikaten basierende Authentifizierung bei Ihrem Datenspeicher verwendet wird. Um diese Funktion zu nutzen, muss Ihr Datenspeicher so konfiguriert sein, dass er die auf Client-Zertifikaten basierende Authentifizierung unterstützt. Wenn Sie diesen Parameter angeben, müssen Sie auch den Parameter `+datastore-keyfile+` angeben.
+
+| `+--datastore-keyfile+`
+| `+K3S_DATASTORE_KEYFILE+`
+| TLS-Schlüsseldatei, die für die auf Client-Zertifikaten basierende Authentifizierung bei Ihrem Datenspeicher verwendet wird. Weitere Einzelheiten finden Sie unter dem vorherigen Parameter `+datastore-certfile+`.
+|===
+
+Wir empfehlen, diese Parameter als Umgebungsvariablen und nicht als Befehlszeilenargumente zu setzen, damit Ihre Datenbankanmeldeinformationen oder andere vertrauliche Informationen nicht als Teil der Prozessinformationen offengelegt werden.
+
+[#_datastore_endpoint_format_and_functionality]
+== Format und Funktionalität des Datenspeicher-Endpunkts
+
+Wie bereits erwähnt, hängt das Format des an den Parameter `+datastore-endpoint+` übergebenen Wertes vom Backend des Datenspeichers ab. Im Folgenden werden dieses Format und die Funktionen für jeden unterstützten externen Datenspeicher näher erläutert.
+
+[tabs,sync-group-id=ext-db]
+======
+PostgreSQL::
++
+--
+In seiner gebräuchlichsten Form hat der Parameter datastore-endpoint für PostgreSQL das folgende Format:
+
+`+postgres://username:password@hostname:port/database-name+`
+
+Es sind weitere erweiterte Konfigurationsparameter verfügbar. Weitere Informationen zu diesen Themen finden Sie unter https://godoc.org/github.com/lib/pq.
+
+Wenn Sie einen Datenbanknamen angeben und dieser nicht existiert, wird der Server versuchen, ihn zu erstellen.
+
+Wenn Sie nur `+postgres://+` als Endpunkt angeben, versucht K3s, Folgendes zu tun:
+
+* Verbinden Sie sich mit localhost unter Verwendung von `+postgres+` als Benutzernamen und Passwort
+* Erstellen Sie eine Datenbank mit dem Namen `+kubernetes+`
+--
+
+MySQL / MariaDB::
++
+--
+In seiner gebräuchlichsten Form hat der Parameter `+datastore-endpoint+` für MySQL und MariaDB das folgende Format:
+
+`+mysql://username:password@tcp(hostname:3306)/database-name+`
+
+Es sind weitere erweiterte Konfigurationsparameter verfügbar. Weitere Informationen zu diesen Themen finden Sie unter https://github.com/go-sql-driver/mysql#dsn-data-source-name
+
+Beachten Sie, dass Sie aufgrund eines https://github.com/k3s-io/k3s/issues/1093[bekannten Problems] in K3s den Parameter `+tls+` nicht einstellen können. TLS-Kommunikation wird unterstützt, aber Sie können diesen Parameter beispielsweise nicht auf "skip-verify" setzen, um K3s zu veranlassen, die Zertifikatsüberprüfung zu überspringen.
+
+Wenn Sie einen Datenbanknamen angeben und dieser nicht existiert, wird der Server versuchen, ihn zu erstellen.
+
+Wenn Sie nur `+mysql://+` als Endpunkt angeben, versucht K3s, Folgendes zu tun:
+
+* Verbinden Sie sich mit dem MySQL-Socket unter `+/var/run/mysqld/mysqld.sock+` mit dem Benutzer `+root+` und ohne Passwort
+* Erstellen Sie eine Datenbank mit dem Namen `+kubernetes+`
+--
+
+etcd::
++
+--
+In seiner gebräuchlichsten Form hat der Parameter `+datastore-endpoint+` für etcd das folgende Format:
+
+`+\https://etcd-host-1:2379,https://etcd-host-2:2379,https://etcd-host-3:2379\+`
+
+Die obigen Ausführungen gehen von einem typischen etcd-Cluster mit drei Knoten aus. Der Parameter kann eine oder mehrere durch Kommata getrennte etcd-URLs akzeptieren.
+--
+======
