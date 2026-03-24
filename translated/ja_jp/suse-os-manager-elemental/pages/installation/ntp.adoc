@@ -1,0 +1,100 @@
+= によるNTP設定 {elemental-product-name}
+:revdate: 2025-07-03
+:page-revdate: {revdate}
+
+== 概要
+
+{elemental-product-name} に同梱されているデフォルトの OS チャネルでは、`+systemd-timesyncd+` 経由で NTP をサポートしています。
+
+このページでは、提供されている SLE Micro イメージを使った`+systemd-timesyncd+` の設定について説明します。SLE Micro イメージには、いくつかのデフォルト（フォールバック）NTP サーバーがあらかじめ設定されています：(_[0-3].suse.pool.ntp.org_)。
+
+特定のNTPサーバーを設定する最も簡単な方法は、`+/etc/systemd/timesyncd.conf.d+` ディレクトリに設定ファイルをドロップすることである。
+このディレクトリとコンフィギュレーション・ファイルは、`+systemd-timesync+` ユーザーがアクセスできるものでなければならない。
+
+== 静的NTPサーバーの設定
+
+NTPコンフィギュレーションは、MachineRegistrationコンフィギュレーションに追加されたcloud-configスニペットによって提供できる。
+
+そうする必要がある：
+
+* `+timesyncd.conf.d+` ディレクトリが`+systemd-timesync+` ユーザーによって読み取れることを確認する。
+* `+timesyncd.conf.d+` ディレクトリにカスタム設定ファイルを書き込む。
+* 新しいコンフィギュレーションを使用するため、`+systemd-timesyncd+` サービスを再起動する。
+
+例として、`+ntp.ripe.net+` をプライマリ NTP サーバーとして設定する方法を見てみよう（6-14 行目）：
+
+[,yaml]
+----
+config:
+  cloud-config:
+    users:
+      - name: root
+        passwd: root
+    write_files:
+      - content: |
+          [Time]
+          NTP=ntp.ripe.net
+        path: /etc/systemd/timesyncd.conf.d/custom-ntp.conf
+        permissions: 644
+    runcmd:
+      - chmod 755 /etc/systemd/timesyncd.conf.d
+      - systemctl restart systemd-timesyncd
+  elemental:
+    install:
+      device: /dev/vda
+      reboot: true
+machineInventoryLabels:
+  element: fire
+----
+
+== DHCPからNTPを設定する
+
+NTP DHCPオプションを使用してネットワークからNTPサーバーを取得するには、必要なときに動的に`+systemd-timesync+` サービスを再構成するためのNetworkManagerディスパッチャスクリプトが必要です。
+
+私たちは、以下の両方を行う必要があります：* systemd-timesyncd 設定ファイルの作成と削除を行うディスパッチャスクリプトの提供 * NetworkManager-dispatcher サービスの有効化
+
+次のMachineRegistration構成例の6-34行目を参照：
+
+[,yaml]
+----
+config:
+  cloud-config:
+    users:
+      - name: root
+        passwd: root
+    write_files:
+      - content: |
+          #! /usr/bin/bash
+
+          [ -n "$CONNECTION_UUID" ] || exit
+
+          INTERFACE=$1
+          ACTION=$2
+
+          case $ACTION in
+              up | dhcp4-change | dhcp6-change)
+                  [ -n "$DHCP4_NTP_SERVERS" ] || exit
+                  mkdir -p /etc/systemd/timesyncd.conf.d/
+                  cat<<EOF > /etc/systemd/timesyncd.conf.d/$CONNECTION_UUID.conf
+          [Time]
+          NTP=$DHCP4_NTP_SERVERS
+          RootDistanceMaxSec=15
+          EOF
+                  systemctl restart systemd-timesyncd
+                  ;;
+              down)
+                  rm -f /etc/systemd/timesyncd.conf.d/$CONNECTION_UUID.conf
+                  systemctl restart systemd-timesyncd
+                  ;;
+          esac
+        path: /etc/NetworkManager/dispatcher.d/10-update-timesyncd
+        permissions: 700
+    runcmd:
+      - systemctl enable NetworkManager-dispatcher
+  elemental:
+    install:
+      device: /dev/vda
+      reboot: true
+machineInventoryLabels:
+  element: fire
+----
