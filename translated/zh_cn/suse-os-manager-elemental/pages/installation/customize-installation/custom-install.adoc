@@ -1,0 +1,156 @@
+= 自定义{elemental-product-name} 安装
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+{elemental-product-name} (元素）安装的操作系统图像可以通过不同的方式进行定制。
+
+一种方法是使用 docker 编译来重制容器操作系统镜像。SL Micro 映像是普通的容器映像，因此完全可以使用基于 SLE Micro 的 Dockerfile 创建新映像。更多详情，请参阅 "xref:operator-operational-tasks/custom-images.adoc[构建自定义操作系统映像]"部分，这是首选方案。
+
+另外，也可以在安装介质中提供额外的资源和配置，以便在安装过程中或最终启动时，可以包含额外的二进制文件，如驱动程序或额外的配置文件。
+
+本节主要介绍如何从给定的操作系统映像中自定义安装过程。
+
+== 定制选项
+
+元素装置可以通过三种不同的非排他性方式进行定制。首先，在安装系统中加入额外的云配置文件；其次，在安装介质中加入额外的云配置文件；最后，加入自定义的元素客户端配置文件 (`+/etc/elemental/config.yaml+`)。
+
+. 已安装系统中包含的附加云配置文件可用于在启动时运行自定义操作。请参阅《xref:references/cloud-config-reference.adoc[云配置参考]》。
+
+. 安装介质中的附加云配置文件非常有用，可在安装时运行自定义操作或自定义安装环境，以满足某些特定需求。
+
+. 默认情况下，自定义的 Elemental 客户端配置文件位于`+/etc/elemental/config.yaml+` ，也可以在`+/etc/elemental/config.d+` 目录下分割成多个 yaml 文件。请参阅https://rancher.github.io/elemental-toolkit/docs/customizing/general_configuration/[配置文件参考]。
+
+常见的模式是根据具体需要将上述三种方法结合起来。
+
+=== 在已安装的操作系统中添加额外的云配置文件
+
+要在安装过程中包含额外的云配置文件，需要将它们添加到机器注册资源的安装数据中。最简单的方法是直接添加所需的云配置，作为机器注册xref:references/machineregistration-reference.adoc#_config_cloud_config[专用部分]的一部分。请看下面的例子
+
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  ...
+  config:
+    ...
+    cloud-config:
+      stages:
+        boot:
+        - name: "Adding 'admin' user"
+          users:
+            admin:
+              passwd: mysecretpasswd
+----
+
+另外，云配置文件路径也可以显式引用，因此配置不需要严格存在于机器注册资源中。机器注册的`+config-urls+` 部分正是用于此目的。请参见xref:references/machineregistration-reference.adoc[机器注册参考]页面。
+
+`+config-urls+` 是一个字符串字面量列表，其中每项都是指向云配置文件的 HTTP URL 或本地路径。本地路径会在安装过程中进行评估，因此必须存在于安装介质（通常是 ISO 映像）中。
+
+默认情况下，Elemental Live 系统会将 ISO 根目录挂载到`+/run/initramfs/live+` ，这也是`+MachineRegistrations+` 中为`+config-url+` 设置的默认路径。请参见下面的示例：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  ...
+  config:
+    ...
+    elemental:
+      ...
+      install:
+        ...
+        config-urls:
+        - "/run/initramfs/live/oem/custom_config.yaml"
+----
+
+Elemental Live ISO 启动时，ISO 根目录挂载在`+/run/initramfs/live+` 上。据此，上述示例的 ISO 预计将包括`+/oem/custom_config.yaml+` 文件。
+
+[NOTE]
+====
+`+/run/initramfs/live+` 是一个只读挂载点，对于 ISO 启动时动态生成的内容来说并不合适。
+====
+
+=== 在安装介质中添加额外的云配置文件
+
+可能需要在安装介质中添加额外的云配置文件，以配置安装环境（如设置网络连接以注册）或提供一些xref:references/cloud-config-reference.adoc#_elemental_client_cloud_config_hooks[安装钩子]，以便在安装过程中运行自定义逻辑。
+
+在 Elemental 中，xref:references/seedimage-reference.adoc[SeedImage]资源负责处理安装介质。因此，要在安装介质中加入额外的云配置数据，最简单的方法就是将其添加到xref:references/seedimage-reference.adoc#_seedimagespec_reference[`+cloud-config+` 部分]。这样，给定的云配置就会在安装介质首次启动时进行评估，如果提供了安装钩子，也会在安装阶段进行评估。请看下面的例子：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: custom-seed
+  namespace: fleet-default
+spec:
+  ...
+  cloud-config:
+    stages:
+      post-install:
+      - name: "Run custom script after installation"
+        commands:
+        - |
+          echo "This is a custom script"
+          echo "For instance, this could be used to handle extra drives for an LVM group"
+      boot:
+      - name: "Add proxy setup for the installation media"
+        files:
+        - path: /etc/sysconfig/proxy
+          permissions: 0664
+          content: |
+            PROXY_ENABLED="yes"
+            HTTP_PROXY=http://<MY_PROXY>:<MY_PORT>
+            HTTPS_PROXY=https://<MY_PROXY>:<MY_PORT>
+            NO_PROXY="localhost, 127.0.0.1"
+----
+
+=== 自定义{elemental-product-name} 客户端配置文件
+
+https://github.com/rancher/elemental-toolkit/blob/main/docs/elemental.md[元素客户端] `+install+` 、`+upgrade+` 和`+reset+` 命令可通过https://rancher.github.io/elemental-toolkit/docs/customizing/general_configuration/[自定义配置文件]进行配置，该默认位于`+/etc/elemental/config.yaml+` 。如果有多个 yaml 文件，则需要将它们添加到`+/etc/elemental/config.d+` 目录中。
+
+下面的示例在安装过程中设置了一个额外的分区：
+
+[,yaml]
+----
+install:
+  extra-partitions:
+  - size: 10240
+    fs: ext4
+    label: EXTRA_PARTITION
+----
+
+为使其在安装时可用，可以添加额外文件作为 SeedImage 资源云配置的一部分，如本页上一节所述。请看这个例子：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: custom-seed
+  namespace: fleet-default
+spec:
+  ...
+  cloud-config:
+    stages:
+      boot:
+      - name: "Add Elemental client configuration file"
+        files:
+        - path: /etc/elemental/config.d/extra-partition.yaml
+          permissions: 0664
+          content: |
+            install:
+              extra-partitions:
+              - size: 10240
+                fs: ext4
+                label: EXTRA_PARTITION
+----
