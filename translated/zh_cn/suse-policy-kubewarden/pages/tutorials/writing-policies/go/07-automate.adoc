@@ -1,0 +1,74 @@
+include::partial$variables.adoc[]
+= 与 GitHub 操作集成
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 了解如何将 GitHub Actions 集成到自动化任务、单元测试、端到端测试和 CI/CD 工作流中。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["kubewarden", "writing-policies", "golang", "github-action-integration"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "github", "integration"]
+:sidebar_label: GitHub 操作
+:sidebar_position: 56
+:current-version: {page-origin-branch}
+
+== 自动化
+
+本节将介绍如何使用 GitHub Actions 自动执行任务。
+
+项目脚手架已包含您需要的所有 GitHub 操作。
+您可以在`+.github/workflows/test.yml+` 和`+.github/workflows/release.yml+` 文件中找到这些操作。
+
+您可以调整这些原则，以使用不同的 CI 系统。
+
+== 测试
+
+单元测试和端到端测试的自动化功能开箱即用。
+它使用`+.github/workflows/test.yml+` 中定义的工作。
+
+== 发布
+
+该项目脚手架有一个`+release+` 工作`+.github/workflows/release.yml+` 。
+
+该工作执行以下步骤：
+
+* 结账代码
+* 构建 WebAssembly 策略
+* 将政策推向开放式容器倡议（OCI）登记处
+* 创建新的 GitHub 发布
+
+要启用作业，请调整`+release.yml+` 文件中调用的可重复使用工作流 (`+reusable-release-policy-go.yml+`) 的`+oci-target+` 操作输入。
+
+作业会根据触发其执行的提交采取不同的行动。
+
+定期提交会创建一个名为`+<policy-name>:latest+` 的 OCI 工具。
+GitHub 不会为这些提交创建发布版本。
+
+创建与`+v*+` 模式匹配的标签，结果是
+
+* 创建名为`+<policy-name>:<tag>+` 的 OCI 工具。
+* 创建名为`+Release <full tag name>+` 的 GitHub 版本。
+该版本包括资产、策略源代码和 WebAssembly 二进制文件。
+
+=== 举例说明
+
+假设一份名为`+safe-labels+` 的保单需要发布为`+ghcr.io/kubewarden/policies/safe-labels+` 。
+
+`+ci.yml+` `+jobs.push-to-oci-registry.env+` 部分的内容应该是这样的：
+
+[subs="+attributes",yaml]
+----
+jobs:
+  push-to-oci-registry:
+    runs-on: ubuntu-latest
+    env:
+      WASM_BINARY_NAME: policy.wasm
+      OCI_TARGET: ghcr.io/kubewarden/policies/safe-labels
+----
+
+推送名为`+v0.1.0+` 的标签后，就会创建并发布名为`+ghcr.io/kubewarden/policies/safe-labels:v0.1.0+` 的 OCI 工具。
+
+它会创建一个名为`+Release v0.1.0+` 的 GitHub 版本。
+该版本包括以下资产：
+
+* 源代码压缩为`+zip+` 和 `+tar.gz+`
+* 名为`+policy.wasm+` 的文件；这是实际的 WebAssembly 策略
