@@ -1,0 +1,142 @@
+= 取引要素
+:revdate: 2025-10-27
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+== 概要
+
+このページでは、健全性同期 Transactional Increments 整合性モデルで送信できる正確な JSON メッセージについて説明します。
+
+== JSONプロパティ: "health"
+
+ヘルスは、xref:/configure/health/send-health-data/send-health-data.adoc#_common_json_object[共通 JSON オブジェクトの] `+"health"+` プロパティを使用して SUSE Observability Receiver API に送信できます。
+
+[tabs]
+====
+健康状態の例`+transactional_increments+` JSON::
++
+--
+
+[,javascript]
+----
+   "apiKey":"your api key",
+   "collection_timestamp":1585818978,
+   "internalHostname":"lnx-343242.srv.stackstate.com",
+   "events":{},
+   "metrics":[],
+   "service_checks":[],
+   "health":[
+      {
+        "consistency_model": "TRANSACTIONAL_INCREMENTS",
+        "increment": {
+              "checkpoint": {
+                  "offset": 5,
+                  "batch_index": 102
+              },
+              "previous_checkpoint": {
+                  "offset": 5,
+                  "batch_index": 100
+              }
+        },
+        "stream": {
+          "urn": "urn:health:sourceId:streamId"
+          //"sub_stream_id": "subStreamId" Optional
+        },
+        "check_states": [
+          {
+            "checkStateId": "checkStateId1",
+            "message": "Server Running out of disk space",
+            "health": "Deviating",
+            "topologyElementIdentifier": "server-1",
+            "name": "Disk Usage"
+          },
+          {
+            "checkStateId": "checkStateId2",
+            "message": "Provisioning failed. [Learn more](https://www.any-link.com)",
+            "health": "critical",
+            "topologyElementIdentifier": "server-2",
+            "name": "Health monitor"
+          },
+          {
+            "checkStateId": "checkStateId3",
+            "delete": true
+          }
+        ]
+      }
+   ],
+   "topologies":[]
+----
+
+--
+====
+
+各ヘルス・トランザクション・インクリメント・データ・ペイロードには、以下の詳細がある：
+
+* *increment*- すべてのメッセージにインクリメント・オブジェクトが必要です。これにより、SUSE Observabilityはメッセージの完全な連鎖を追跡し、データの再送や予期せぬデータのギャップが発生した場合にそれを検出することができます。インクリメント・メタデータとして以下のフィールドを持つ：
+ ** *checkpoint*- メッセージに存在する`+check_states+` に属するチェックポイントを提供するオブジェクト：
+  *** *offset*- ストリーミング・パイプラインによってメッセージに割り当てられるオフセット。例えば、カフカのオフセット。
+  *** *batch_index* - Optional.1つのメッセージを使用して複数の`+check_states+` を蓄積する場合、バッチインデックスはメッセージに存在する最新のインデックスを表し、大きなバッチを別々のapiコールで送信することができます。
+ ** *previous_checkpoint*- オプション。以前に通信されたチェックポイントを表し、サブストリームの最初の送信では空であり得る。これにより、SUSE Observabilityは、アップストリームからデータが欠落していないかどうかを追跡できるようになります。
+* *stream*- どのスナップショットと`+check_states+` が一緒になっているかという識別を提供するオブジェクト。以下のフィールドがある：
+ ** *urn*- 以下の規約に一致するSUSE Observabilityxref:/configure/topology/identifiers.adoc[URNとして]エンコードされたデータソースおよびストリームID:`+urn:health:<sourceId>:<streamId>+` `+<sourceId>+` は外部データソースの名前、`+<streamId>+` はヘルスデータストリームの一意の識別子です。
+ ** *sub_stream_id* - Optional.ストリームの健全性データのサブセットの識別子。ストリームデータが分散され、複数のエージェントによって報告される場合、これにより、各エージェントのスナップショットライフサイクルが可能になる。 `+sub_stream_id+`
+* *check_states*- チェック状態のリスト。各チェック状態は以下のフィールドを持つことができる：
+ ** *checkStateId*- 外部システムにおけるチェック状態の識別子。
+ ** *message*- オプション。SUSE Observability UIに表示するメッセージ。データはマークダウンとして解釈され、外部チェック状態を生成した外部システムチェックへのリンクを持つことができる。
+ ** *health*- 以下のSUSE Observability Health状態値のいずれか：`+Clear+`,`+Deviating+`,`+Critical+`.
+ ** *topologyElementIdentifier*- チェック状態をSUSE Observabilityトポロジ要素にバインドするために使用されます。
+ ** *name*- 外部チェック状態の名前。
+ ** *delete*- 関連する`+checkStateId+` の削除要求として解釈されるフラグ。例えば、`+name, health, ...+` 、作成のための残りのフィールドがあっても、削除が優先される。
+
+== ヘルスをSUSE Observabilityに送信する
+
+健康状態は、HTTP POSTを介して1つのJSONメッセージで送信することができます。以下の例では、2つのチェック状態を含むスナップショットが、1つの外部監視システムからSUSE Observabilityに送信されます。
+
+[,bash]
+----
+curl -X POST \
+ '<STACKSTATE_RECEIVER_API_ADDRESS>' \
+ -H 'Content-Type: application/json' \
+ -d '{
+  "collection_timestamp": 1548857167,
+  "internalHostname": "local.test",
+  "health": [
+    {
+      "consistency_model": "TRANSACTIONAL_INCREMENTS",
+      "increment": {
+            "checkpoint": {
+                "offset": 5,
+                "batch_index": 102
+            },
+            "previous_checkpoint": {
+                "offset": 5,
+                "batch_index": 100
+            }
+      },
+      "stream": {
+        "urn": "urn:health:sourceId:streamId"
+      },
+      "check_states": [
+        {
+          "checkStateId": "checkStateId1",
+          "message": "Server Running out of disk space",
+          "health": "Deviating",
+          "topologyElementIdentifier": "server-1",
+          "name": "Disk Usage"
+        },
+        {
+          "checkStateId": "checkStateId2",
+          "message": "Provisioning failed. [Learn more](https://www.any-link.com)",
+          "health": "critical",
+          "topologyElementIdentifier": "server-2",
+          "name": "Health monitor"
+        },
+        {
+          "checkStateId": "checkStateId3",
+          "delete": true
+        }
+      ]
+    }
+  ]
+}'
+----
