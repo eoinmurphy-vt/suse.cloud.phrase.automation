@@ -1,0 +1,91 @@
+include::partial$variables.adoc[]
+= Construire et exécuter une politique Gatekeeper
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Développer et déployer une politique Gatekeeper en utilisant la syntaxe et les outils Rego familiers pour appliquer le contrôle d'admission dans les environnements Kubernetes.
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "gatekeeper", "build-and-run"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden", "kubernetes", "gatekeeper policy", "rego"]
+:sidebar_label: Construire et exécuter
+:current-version: {page-origin-branch}
+
+Vous pouvez élaborer et exécuter la politique exactement de la même manière qu'une politique Rego ciblant Open Policy Agent.
+La structure de votre projet est la suivante :
+
+----
+.
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+└── policy.rego
+
+1 directory, 3 files
+----
+
+== Construire
+
+Créez la politique en exécutant la commande `+opa+`:
+
+[subs="+attributes",shell]
+----
+$ opa build -t wasm -e policy/violation policy.rego
+----
+
+Cela permet d'élaborer la politique d'enregistrement, avec :
+
+* `+target+`: `+wasm+`. Nous voulons élaborer une politique pour l'objectif `+wasm+`.
+* `+entrypoint+`: `+policy/violation+`. Le point d'entrée est la règle `+violation+`à l'intérieur du paquet `+policy+`.
+* `+policy.rego+`: construire et inclure le fichier `+policy.rego+`.
+
+La commande précédente génère un fichier `+bundle.tar.gz+`.
+Vous pouvez en extraire le module Wasm :
+
+[subs="+attributes",shell]
+----
+$ tar -xf bundle.tar.gz /policy.wasm
+----
+
+L'arborescence du projet ressemble à ce qui suit :
+
+----
+.
+├── bundle.tar.gz
+├── data
+│   ├── default-ns.json
+│   └── other-ns.json
+├── policy.rego
+└── policy.wasm
+
+1 directory, 5 files
+----
+
+Vous pouvez maintenant exécuter votre politique.
+
+== Exécuter
+
+Utilisez `+kwctl+` pour exécuter votre politique comme suit :
+
+ $ kwctl run -e gatekeeper --request-path data/other-ns.json policy.wasm | jq
+ {
+   "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+   "allowed": true
+ }
+
+Il s'agit de votre ressource créée dans l'espace de noms appelé `+other+`, elle est acceptée, comme prévu.
+
+Vous pouvez maintenant exécuter une demande qui est rejetée par la politique :
+
+[subs="+attributes",console]
+----
+$ kwctl run -e gatekeeper --request-path data/default-ns.json policy.wasm | jq
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "allowed": false,
+  "status": {
+    "message": "it is forbidden to use the default namespace"
+  }
+}
+----
+
+Vous pouvez voir votre politique Gatekeeper rejetée par cette ressource.
