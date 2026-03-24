@@ -1,0 +1,126 @@
+include::partial$variables.adoc[]
+
+= Sicherung und Wiederherstellung mit Rancher Backup Operator
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren und verwalten Sie Backups und Wiederherstellungen mit dem Rancher-Backup-Operator auf jedem Kubernetes-Cluster.
+:keywords: "{project-name}", kubernetes, kubewarden, rancher backup operator, sicherung, wiederherstellung
+:doc-persona: kubewarden-Bediener, kubewarden-Integrator
+:doc-type: howto
+:doc-topic: Bediener-Handbuch, Rancher-Backup-Bediener
+:current-version: {page-origin-branch}
+
+Der `+rancher-backup+` Operator kann zur Sicherung und Wiederherstellung von Rancher auf jedem Kubernetes-Cluster verwendet werden.
+
+Seit der Version `+v9.0.0+` bietet `+rancher-backup+` Unterstützung für {project-name}. Dazu gehören:
+
+- Der Standard-Rancher-Namensraum `+cattle-kubewarden-system+` (oder `+cattle-kubewarden-*+`) und der Standard-Namensraum {short-project-name} `+kubewarden+` .
+- {short-project-name} Die benötigten Ressourcen werden über die Helm-Charts installiert.
+- {short-project-name} CRDs, die nach der Wiederherstellung durch den {short-project-name} Controller abgeglichen werden.
+- Das `+policy-reporter+` Unterdiagramm des `+kubewarden-controller+` Diagramms, für die Standardwerte. Dies beinhaltet weder die Grafana-Integration noch andere Plugins.
+
+== Benutzer-Geheimnisse
+
+Der Sicherungsprozess umfasst keine vom Benutzer erstellten Geheimnisse, wie z. B. solche, die zurxref:/howtos/policy-servers/02-private-registry.adoc#_creating_the_secret[Konfiguration von PolicyServern für private Registrierungen] verwendet werden, es sei denn, sie sind korrekt gekennzeichnet. Kennzeichnen Sie dazu die Geheimnisse auf eine der folgenden Arten. Entweder:
+
+[source,shell]
+----
+kubectl label secret secret-ghcr-docker app.kubernetes.io/part-of=kubewarden
+----
+
+Oder:
+
+[source,shell]
+----
+kubectl label secret secret-ghcr-docker resources.cattle.io/backup=true
+----
+
+== Installation von Rancher Backup Operator
+
+Folgen Sie dem Link:https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/back-up-restore-and-disaster-recovery.html[Rancher Manager] Dokumentation. Für eine Minikube-Installation unter Verwendung der PersistentVolumes vom Typ `+hostPath+` mit dem Namen `+standard+`, die Minikube von Haus aus unterstützt.
+
+Man muss den Backup Operator anweisen, auch {short-project-name}benutzerdefinierte CRs zu sichern, indem man den Wert `+optionalResources.kubewarden.enabled+` auf`+true+` setzt.
+
+Die Installation würde folgendermaßen ablaufen:
+
+[source,console]
+----
+helm repo add rancher-charts https://charts.rancher.io
+helm repo update
+helm install --wait --create-namespace -n cattle-resources-system \
+    rancher-backup-crd rancher-charts/rancher-backup-crd
+helm install --wait -n cattle-resources-system \
+    rancher-backup rancher-charts/rancher-backup \
+    --set persistence.enabled=true --set persistence.storageClass=standard \
+    --set optionalResources.kubewarden.enabled=true
+----
+
+== Sicherung
+
+Verwenden Sie die `+rancher-resource-set-full+`, um die {short-project-name} Secrets zu sichern.
+Dazu gehören die TLS-Geheimnisse, die bei der Helm-Installation erstellt werden.
+
+Wenn Sie `+rancher-resource-basic+` verwenden möchten, denken Sie bitte daran, die benötigten TLS-Geheimnisse zu sichern oder manuell zu erstellen.
+
+Hier ein Beispiel für die Durchführung einer unverschlüsselten Sicherung am Standardspeicherort mit der `+rancher-resource-set-full+`:
+
+[source,shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: resources.cattle.io/v1
+kind: Backup
+metadata:
+  name: default-location-backup
+spec:
+  resourceSetName: rancher-resource-set-full
+EOF
+backup.resources.cattle.io/default-location-backup created
+----
+
+Die `+rancher-backup+` Logs oder das Backup zeigen die Erstellung der Backup-Datei:
+
+[source,shell]
+----
+kubectl logs -n cattle-resources-system -l app.kubernetes.io/name=rancher-backup -f
+...
+INFO[2025/06/26 10:07:48] Processing backup default-location-backup
+INFO[2025/06/26 10:07:48] For backup CR default-location-backup, filename: default-location-backup-32d64f39-d3c7-4331-9101-8ca493bd9d2e-2025-06-26T10-07-48Z
+...
+INFO[2025/06/26 10:07:49] Done with backup
+----
+
+Sie können den Status auch über die Beschreibung der Ressource einsehen:
+
+[source,shell]
+----
+kubectl get backups
+NAME                      LOCATION   TYPE       LATEST-BACKUP                                                                              RESOURCESET                 AGE    STATUS
+default-location-backup   PV         One-time   default-location-backup-43f3ccb7-5624-4eed-9c3b-1c15d287080e-2025-06-26T15-53-27Z.tar.gz   rancher-resource-set-full   111s   Completed
+----
+
+Weitere finden Sie in der Rancher-Dokumentation unterlink:https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/configuration/examples.html#_backup[Beispiele für Backups].
+
+== Wiederherstellen
+
+Um die unverschlüsselte Sicherung vom Standardspeicherort wiederherzustellen, nehmen Sie den Dateinamen aus der Spalte LATEST-BACKUP, wenn Sie die Sicherungsressource anzeigen, um eine Wiederherstellungsressource zu erstellen:
+
+[source,shell]
+----
+kubectl apply -f - <<EOF
+apiVersion: resources.cattle.io/v1
+kind: Restore
+metadata:
+  name: restore-default
+spec:
+  backupFilename: default-location-backup-32d64f39-d3c7-4331-9101-8ca493bd9d2e-2025-06-26T10-07-48Z.tar.gz
+EOF
+restore.resources.cattle.io/restore-default created
+
+kubectl get restores
+NAME              BACKUP-SOURCE   BACKUP-FILE                                                                                AGE   STATUS
+restore-default   PV              default-location-backup-43f3ccb7-5624-4eed-9c3b-1c15d287080e-2025-06-26T15-53-27Z.tar.gz   6s    Completed
+----
+
+Weitere finden Sie in der Rancher-Dokumentationlink:https://documentation.suse.com/cloudnative/rancher-manager/latest/en/rancher-admin/back-up-restore-and-disaster-recovery/configuration/examples.html#_restore[Beispiele für die Wiederherstellung].
+
+
