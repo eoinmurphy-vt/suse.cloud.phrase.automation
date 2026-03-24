@@ -1,0 +1,160 @@
+= {elemental-product-name} 计划
+:revdate: 2025-10-27
+:page-revdate: {revdate}
+
+{elemental-product-name} 使用https://github.com/rancher/system-agent[系统代理] Rancher（已更名为{elemental-product-name} 系统代理），以简单的计划启动节点。
+
+该计划将采用以下配置：
+
+* 为节点设置一些标签
+* 根据`+MachineInventory+` 值设置适当的主机名
+* 从 Rancher Server 安装默认的 Rancher 系统代理，并安装适当的 Kubernetes 组件
+
+引导服务还接受存储在`+/var/lib/elemental/agent/plans+` 下的本地计划。其中写入的任何计划也将在安装完成后初始节点启动时应用。
+
+[TIP]
+====
+本地计划仅在 Kubernetes 安装到节点*之前*的初始{elemental-product-name} 引导期间运行。
+====
+
+== 计划类型
+
+{elemental-product-name} 可以使用的计划类型有
+
+* 一次性说明：只运行一次
+* 定期指示：它们定期运行
+* 文件：创建文件
+* 探针： http 探针
+
+[TIP]
+====
+一次性指令和周期性指令都可以运行直接命令或 docker 镜像。
+====
+
+== 添加地方计划 {elemental-product-name}
+
+作为`+MachineRegistration+` CRD 的一部分，您可以在`+cloud-config+` 部分向{elemental-product-name} 添加本地计划，如下所示：
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: my-nodes
+  namespace: fleet-default
+spec:
+  config:
+    cloud-config:
+      users:
+        - name: root
+          passwd: root
+      write_files:
+        - path: /var/lib/elemental/agent/plans/mycustomplan.plan
+          permissions: "0600"
+          content: |
+            {"instructions":
+                [
+                  {
+                    "name":"set hostname",
+                    "command":"hostnamectl",
+                    "args": ["set-hostname", "myHostname"]
+                  },
+                  {
+                    "name":"stop sshd service",
+                    "command":"systemctl",
+                    "args": ["stop", "sshd"]
+                  }
+                ]
+            }
+    elemental:
+      install:
+        reboot: true
+        device: /dev/sda
+        debug: true
+  machineName: my-machine
+  machineInventoryLabels:
+    element: fire
+----
+
+== 计划示例
+
+以下计划仅供快速参考，并不保证一定适用于您的环境。要了解有关计划的更多信息，请查看https://github.com/rancher/system-agent[系统代理] Rancher。
+
+[tabs]
+======
+示例 1：一次性指令::
++
+====
+[,json]
+----
+{"instructions":
+    [
+        {
+            "name":"set hostname",
+            "command":"hostnamectl",
+            "args": ["set-hostname", "myHostname"]
+        },
+        {
+            "name":"stop sshd service",
+            "command":"systemctl",
+            "args": ["stop", "sshd"]
+        }
+    ]
+}
+----
+====
+
+例 2：定期指示::
++
+====
+[,json]
+----
+{"periodicInstructions":
+    [
+        {
+            "name":"set hostname",
+            "image":"ghcr.io/rancher-sandbox/elemental-example-plan:main"
+            "command": "run.sh"
+        }
+    ]
+}
+----
+====
+
+示例 3：文件::
++
+====
+[,json]
+----
+{"files":
+    [
+        {
+            "content":"Welcome to the system",
+            "path":"/etc/motd",
+            "permissions": "0644"
+        }
+    ]
+}
+----
+====
+
+示例 4：探针::
++
+====
+[,json]
+----
+{"probes":
+    "probe1": {
+        "name": "Service Up",
+        "httpGet": {
+            "url": "http://10.0.0.1/healthz",
+            "insecure": "false",
+            "clientCert": "....",
+            "clientKey": "....",
+            "caCert": "....."
+        }
+    }
+}
+----
+====
+======
