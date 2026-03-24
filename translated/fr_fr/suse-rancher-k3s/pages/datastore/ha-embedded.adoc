@@ -1,32 +1,32 @@
-= Haute disponibilité d’etcd embarqué
+= etcd embarqué à haute disponibilité
 :page-languages: [en, ja, ko, zh]
 :revdate: 2026-03-03
 :page-revdate: {revdate}
 
 [CAUTION]
 ====
-L'etcd embarqué (HA) peut rencontrer des problèmes de performance sur des disques plus lents tels que les Raspberry Pis fonctionnant avec des cartes SD.
+Embedded etcd (HA) peut avoir des problèmes de performance sur des disques plus lents tels que les Raspberry Pis fonctionnant avec des cartes SD.
 ====
 
-.Pourquoi un nombre impair de nœuds serveurs ?
+.Pourquoi un nombre impair de nœuds de serveur ?
 [%collapsible]
 ======
-Un cluster etcd embarqué HA doit être composé d'un nombre impair de nœuds serveurs pour que etcd maintienne le quorum. Pour un cluster avec n serveurs, le quorum est (n/2)+1. Pour tout cluster de taille impaire, l'ajout d'un nœud augmentera toujours le nombre de nœuds nécessaires pour le quorum. Bien que l'ajout d'un nœud à un cluster de taille impaire semble meilleur car il y a plus de machines, la tolérance aux pannes est moins bonne car exactement le même nombre de nœuds peut échouer sans perdre le quorum, mais il y a plus de nœuds qui peuvent échouer.
+Le cluster etcd intégré à HA doit être composé d'un nombre impair de nœuds de serveurs pour que etcd maintienne le quorum. Pour une grappe de n serveurs, le quorum est de (n/2)+1. Pour toute grappe de taille impaire, l'ajout d'un nœud augmentera toujours le nombre de nœuds nécessaires au quorum. Bien que l'ajout d'un nœud à une grappe de taille impaire semble plus avantageux puisqu'il y a plus de machines, la tolérance aux pannes est moins bonne puisque le même nombre de nœuds peut tomber en panne sans perdre le quorum, mais qu'il y a plus de nœuds susceptibles de tomber en panne.
 ======
 
-Un cluster K3s HA avec etcd embarqué est composé de :
+Un cluster HA K3s avec etcd intégré est composé de :
 
-* Trois ou plus de *nœuds serveurs* qui serviront l'API Kubernetes et exécuteront d'autres services de plan de contrôle, ainsi qu'héberger la base de données etcd embarquée.
-* Facultatives : Zéro ou plus de *nœuds agents* qui sont désignés pour exécuter vos applications et services
-* Facultatives : Une *adresse d'enregistrement fixe* pour que les nœuds agents s'enregistrent auprès du cluster
+* Trois *nœuds de serveur* ou plus qui serviront l'API Kubernetes et exécuteront d'autres services de plan de contrôle, ainsi que l'hébergement du datastore etcd intégré.
+* En option : Zéro ou plusieurs *nœuds d'agent* désignés pour exécuter vos applications et services.
+* En option : Une *adresse d'enregistrement fixe* pour que les nœuds agents s'enregistrent auprès du cluster.
 
 [NOTE]
 ====
-Pour déployer rapidement de grands clusters HA, voir xref:related-projects.adoc[Projets Connexes]
+Pour déployer rapidement de grands clusters HA, voir xref:related-projects.adoc[Projets connexes]
 ====
 
 
-Pour commencer, lancez d'abord un nœud serveur avec le drapeau `+cluster-init+` pour activer le clustering et un token qui sera utilisé comme secret partagé pour rejoindre des serveurs supplémentaires au cluster.
+Pour commencer, lancez d'abord un nœud de serveur avec le drapeau `+cluster-init+` pour activer le clustering et un jeton qui sera utilisé comme secret partagé pour joindre des serveurs supplémentaires au cluster.
 
 [,bash]
 ----
@@ -35,7 +35,7 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3
     --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
 ----
 
-Après avoir lancé le premier serveur, rejoignez les deuxième et troisième serveurs au cluster en utilisant le secret partagé :
+Après avoir lancé le premier serveur, joignez les deuxième et troisième serveurs à la grappe à l'aide du secret partagé :
 
 [,bash]
 ----
@@ -44,9 +44,9 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3
     --tls-san=<FIXED_IP> # Optional, needed if using a fixed registration address
 ----
 
-Où `+INSTALL_K3S_ARTIFACT_URL+` est l'https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL des Artéfacts Principaux]
+Où `+INSTALL_K3S_ARTIFACT_URL+` est l' https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[URL de]
 
-Vérifiez que les deuxième et troisième serveurs font maintenant partie du cluster :
+Vérifiez que les deuxième et troisième serveurs font désormais partie du cluster :
 
 [,bash]
 ----
@@ -57,21 +57,21 @@ server2     Ready    control-plane,etcd,master   13m   vX.Y.Z
 server3     Ready    control-plane,etcd,master   10m   vX.Y.Z
 ----
 
-Vous avez maintenant un plan de contrôle hautement disponible. Tous les serveurs correctement intégrés au cluster peuvent être utilisés dans l'argument `+--server+` pour rejoindre des nœuds serveurs et agents supplémentaires. Rejoindre des nœuds agents supplémentaires au cluster suit la même procédure que pour les serveurs :
+Vous disposez désormais d'un plan de contrôle hautement disponible. Tous les serveurs mis en grappe avec succès peuvent être utilisés dans l'argument `+--server+` pour joindre des nœuds de serveur et d'agent supplémentaires. L'intégration de nœuds d'agents supplémentaires dans le cluster suit la même procédure que pour les serveurs :
 
 [,bash]
 ----
 curl -sfL https://get.k3s.io | INSTALL_K3S_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/k3s K3S_TOKEN=SECRET sh -s - agent --server https://<ip or hostname of server>:6443
 ----
 
-Il existe quelques indicateurs de configuration qui doivent être identiques sur tous les nœuds serveurs :
+Quelques drapeaux de configuration doivent être identiques dans tous les nœuds du serveur :
 
-* Indicateurs liés au réseau : `+--cluster-dns+`, `+--cluster-domain+`, `+--cluster-cidr+`, `+--service-cidr+`
-* Indicateurs contrôlant le déploiement de certains composants : `+--disable-helm-controller+`, `+--disable-kube-proxy+`, `+--disable-network-policy+` et tout composant passé à `+--disable+`
-* Indicateurs liés aux fonctionnalités : `+--secrets-encryption+`
+* Drapeaux liés au réseau : `+--cluster-dns+`, `+--cluster-domain+`, `+--cluster-cidr+`, `+--service-cidr+`
+* Drapeaux contrôlant le déploiement de certains composants : `+--disable-helm-controller+`, `+--disable-kube-proxy+`, `+--disable-network-policy+` et tout composant passé à `+--disable+`
+* Drapeaux liés à la fonctionnalité : `+--secrets-encryption+`
 
 == Clusters à nœud unique existants
 
-Si vous avez un cluster existant utilisant la base de données SQLite intégrée par défaut, vous pouvez le convertir en etcd en redémarrant simplement votre serveur K3s avec l'indicateur `+--cluster-init+`. Une fois cela fait, vous pourrez ajouter des instances supplémentaires comme décrit ci-dessus.
+Si vous avez un cluster existant utilisant la base de données SQLite intégrée par défaut, vous pouvez le convertir à etcd en redémarrant simplement votre serveur K3s avec le drapeau `+--cluster-init+`. Une fois que vous avez fait cela, vous pourrez ajouter des instances supplémentaires comme décrit ci-dessus.
 
-Si un magasin de données etcd est trouvé sur le disque, soit parce que ce nœud a déjà été initialisé, soit parce qu'il a rejoint un cluster, les arguments du magasin de données (`+--cluster-init+`, `+--server+`, `+--datastore-endpoint+`, etc.) sont ignorés.
+Si un datastore etcd est trouvé sur le disque, soit parce que ce nœud a déjà été initialisé, soit parce qu'il a rejoint un cluster, les arguments du datastore (`+--cluster-init+`, `+--server+`, `+--datastore-endpoint+`, etc) sont ignorés.
