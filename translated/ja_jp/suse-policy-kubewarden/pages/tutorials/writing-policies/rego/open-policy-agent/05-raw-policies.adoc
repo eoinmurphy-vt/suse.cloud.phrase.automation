@@ -1,0 +1,90 @@
+include::partial$variables.adoc[]
+= 生のポリシーを書く
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 任意の JSON ドキュメントを評価する raw ポリシーを記述し、システムにアクセス制御ルールを適用する方法を学びます。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "rego", "open-policy-agent", "raw-policies"]
+:doc-type: ["tutorial"]
+:keywords: ["kubewarden"、"kubernetes"、"raw policies"、"open policy agent"、"opa"、"rego"]]。
+:sidebar_label: 生政策
+:current-version: {page-origin-branch}
+
+生ポリシーは、任意のJSONドキュメントを評価できるポリシーである。
+生政策の詳細については、xref:howtos/raw-policies.adoc[生政策の]ページを参照してください。
+
+== 例
+
+以下の例は、このチュートリアルのxref:tutorials/writing-policies/rego/open-policy-agent/02-create-policy.adoc[検証]ページを完了した人なら見覚えがあるはずだ。
+
+[NOTE]
+====
+`+metadata.yml+` 設定の`+policyType+` フィールドを使用して、ポリシーを`+raw+` としてマークすることを忘れないでください。
+詳しくはxref:tutorials/writing-policies//metadata.adoc[メタデータの]仕様を参照されたい。
+====
+
+
+=== バリデーション
+
+次のような形式のリクエストを受け付けるポリシーを書くことになる：
+
+[subs="+attributes",json]
+----
+{
+  "request": {
+    "user": "alice",
+    "action": "read",
+    "resource": "products"
+  }
+}
+----
+
+これは、`+admin+` ユーザーだけがリソースを削除できることを検証します。
+
+https://github.com/kubewarden/opa-policy-template[] OPA使用して、ポリシーの足場を作ることから始めます。
+
+まず、`+policy.rego+` ファイルを次のように変更する必要がある：
+
+[,rego]
+----
+package validation
+
+deny[msg] {
+    input.request.action == "delete"
+    input.request.user != "admin"
+    msg := sprintf("user %v is not allowed to delete resources", [input.request.user])
+}
+----
+
+`+utility/policy.rego+` モジュールは、Kubernetes 固有のコードを削除するために修正が必要である：
+
+[,rego]
+----
+package policy
+
+import data.validation
+
+main = {
+    "response": response,
+}
+
+# OPA policy responses need the uid field to be set.
+# If the request doesn't contain a uid, set it to an empty string.
+default uid = ""
+
+uid = input.request.uid
+
+response = {
+    "uid": uid,
+    "allowed": false,
+    "status": {"message": reason},
+} {
+    reason = concat(", ", validation.deny)
+    reason != ""
+} else = {
+    "uid": uid,
+    "allowed": true,
+} {
+    true
+}
+----
