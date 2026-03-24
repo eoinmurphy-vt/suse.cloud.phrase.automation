@@ -1,0 +1,176 @@
+include::partial$variables.adoc[]
+= Écrire la logique de validation
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Écrire la logique de validation des ressources Kubernetes dans le fichier src/index.ts, en accédant aux données de la requête entrante pour renvoyer une réponse.
+:keywords: "{project-name}", kubewarden, kubernetes, écriture de politiques, typescript
+:doc-type: tutoriel
+:doc-topic: {project-name}kubewarden, écriture-politique, typescript, validation-logique
+:doc-persona: kubewarden-policy-developer
+:current-version: {page-origin-branch}
+
+[WARNING]
+====
+Critique : Ne pas écrire les informations de journalisation sur STDOUT.
+
+L'écriture dans STDOUT rompt les politiques. Au lieu de cela, utilisez STDERR pour la journalisation ou la fonction de journalisation fournie par le SDK {project-name}. La sortie de la politique vers STDOUT ne doit contenir que la réponse de validation.
+====
+
+La logique de validation se trouve dans le fichier `+src/index.ts+`.
+
+Votre logique de validation doit :
+
+* Obtenir les informations pertinentes de la demande de validation entrante.
+* Renvoyer une réponse en fonction des données fournies et des paramètres de la politique.
+
+La requête entrante contient un objet JSON avec la ressource Kubernetes à valider.
+Vous pouvez accéder aux données de cet objet JSON par l'intermédiaire des fonctions d'aide du SDK {short-project-name}.
+
+== La fonction `+validate+` 
+
+La politique fournie par le modèle a déjà une fonction `+validate+` dans `+src/index.ts+`.
+Vous pouvez l'utiliser ici, en ajoutant votre logique pour rejeter les Pods avec des noms d'hôtes refusés.
+
+Voici à quoi devrait ressembler la fonction une fois terminée :
+
+[source,javascript]
+----
+/**
+ * Validates the incoming request against policy settings.
+ * Accepts or rejects the request based on denied hostnames.
+ */
+function validate(): void {
+  try {
+    // NOTE 1
+    // Read the validation request payload
+    const validationRequest = Validation.Validation.readValidationRequest();
+
+    // NOTE 2
+    // Extract policy settings from the validation request
+    const settings: PolicySettings = validationRequest.settings || {};
+
+    // NOTE 3
+    // Extract the Kubernetes object (Pod) from the validation request
+    const resource = getKubernetesResource(validationRequest);
+    if (!resource) {
+      writeOutput(Validation.Validation.rejectRequest('Failed to parse Kubernetes resource.'));
+      return;
+    }
+
+    // Only process Pod resources
+    if (resource.kind !== 'Pod') {
+      writeOutput(Validation.Validation.acceptRequest());
+      return;
+    }
+
+    // NOTE 4
+    // Extract hostname from the Pod spec
+    const hostname = getPodHostname(resource as Pod);
+    const deniedHostnames = settings.denied_hostnames || [];
+
+    // NOTE 5
+    // Validate the hostname against the deny list
+    if (!hostname) {
+      writeOutput(Validation.Validation.acceptRequest());
+      return;
+    }
+
+    if (deniedHostnames.includes(hostname)) {
+      writeOutput(
+        Validation.Validation.rejectRequest(
+          `+Pod hostname '${hostname}' is not allowed. Denied hostnames: [${deniedHostnames.join(', ')}]+`
+        ),
+      );
+    } else {
+      writeOutput(Validation.Validation.acceptRequest());
+    }
+  } catch (err) {
+    console.error('Validation error:', err);
+    writeOutput(Validation.Validation.rejectRequest(`+Validation failed: ${err}+`));
+  }
+}
+----
+
+=== Ce que fait chaque NOTE
+
+* NOTE 1 : Lire la demande de validation entrante à l'aide de `+readValidationRequest()+`.
+* NOTE 2 : Extraire les paramètres définis par l'utilisateur de la demande de validation (par exemple, les noms d'hôtes refusés).
+* NOTE 3 : Analyse l'objet Kubernetes (qui devrait être un pod) à partir de la charge utile de la demande.
+* NOTE 4 : Extraire le champ "hostname" de la section "spec" du pod.
+* NOTE 5 : Compare le nom d'hôte à la liste des noms refusés et renvoie une réponse appropriée.
+
+== Fonctions d'assistance
+
+La politique utilise plusieurs fonctions d'aide pour traiter la demande de validation :
+
+=== getKubernetesResource
+
+Cette fonction extrait la ressource Kubernetes de la demande de validation :
+
+[source,javascript]
+----
+/**
+ * Safely parses and extracts the Kubernetes resource from the validation request.
+ *
+ * @param {ValidationRequest} validationRequest - The validation request object.
+ * @returns {KubernetesResource | undefined} The parsed Kubernetes resource if available.
+ */
+function getKubernetesResource(validationRequest: ValidationRequest): KubernetesResource | undefined {
+  try {
+    let requestObject: string | KubernetesResource | undefined = validationRequest.request?.object;
+    if (typeof requestObject === 'string') {
+      requestObject = JSON.parse(requestObject) as unknown as KubernetesResource;
+    } else if (requestObject === undefined) {
+      return undefined;
+    }
+    return requestObject as KubernetesResource;
+  } catch (error) {
+    console.error('Error parsing Kubernetes resource:', error);
+    return undefined;
+  }
+}
+----
+
+Cette fonction gère le cas où l'objet Kubernetes est une chaîne JSON ou un objet déjà analysé.
+
+=== getPodHostname
+
+Cette fonction extrait le nom d'hôte d'une ressource Pod :
+
+[source,javascript]
+----
+/**
+ * Extracts the hostname from a Pod resource.
+ *
+ * @param {Pod} pod - The Pod resource.
+ * @returns {string | undefined} The hostname if set, otherwise undefined.
+ */
+import type { Pod } from 'kubernetes-types/core/v1';
+function getPodHostname(pod: Pod): string | undefined {
+  return pod.spec?.hostname;
+}
+----
+
+Cette fonction extrait le nom d'hôte de la spécification du pod.
+
+== Point d'entrée de la politique
+
+La politique utilise une instruction de commutation pour gérer différentes actions :
+
+[source,javascript]
+----
+const action = policyAction();
+switch (action) {
+  case 'validate':
+    validate();
+    break;
+  case 'validate-settings':
+    validateSettings();
+    break;
+  default:
+    console.error('Unknown action:', action);
+    writeOutput(new Validation.Validation.ValidationResponse(false, 'Unknown policy action'));
+}
+----
+
+Le plug-in {short-project-name} Javy fournit la fonction `+policyAction()+` qui indique si la politique doit valider une ressource ou valider ses paramètres.
