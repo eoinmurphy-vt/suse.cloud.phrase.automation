@@ -1,0 +1,195 @@
+= Fehlersuche bei deklarativen Netzwerken
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Angesichts der folgenden Musteranmeldung:
+
+.Beispiel MachineRegistration mit deklarativen Netzwerken
+[,yaml]
+----
+include::example$network/machineregistration.yaml[]
+----
+
+Wir können davon ausgehen, dass jede Elemental Machine mit der definierten Vorlage `+nm-configurator+` `+_all.yaml+` konfiguriert wird.
+
+Beim allerersten Start versucht `+elemental-register+`, die Rancher-API zu kontaktieren, um eine neue `+MachineInventory+` zu registrieren.
+
+In diesem Stadium ist das Netzwerk des Rechners nicht konfiguriert und wird standardmäßig auf DHCP eingestellt. Voraussetzung ist, dass der Rechner in diesem Setup die Rancher-API kontaktieren kann, sonst kann die Registrierung nicht stattfinden.
+
+Nach der ersten Registrierung von `+MachineInventory+` beansprucht `+elemental-operator+` ein `+IPAddress+` für jede in der Netzkonfiguration definierte `+IPPool+` -Referenz.
+
+Auf der Website `+MachineInventory+` sieht dies wie folgt aus:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineInventory
+metadata:
+  finalizers:
+  - machineinventory.elemental.cattle.io
+  name: m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c
+  namespace: fleet-default
+spec:
+  ipAddressClaims:
+    inventory-ip:
+      apiVersion: ipam.cluster.x-k8s.io/v1beta1
+      kind: IPAddressClaim
+      name: m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip
+      namespace: fleet-default
+      uid: 78f2d07a-7b6d-4b58-b615-c4108b7964b9
+  ipAddressPools:
+    inventory-ip:
+      apiGroup: ipam.cluster.x-k8s.io
+      kind: InClusterIPPool
+      name: elemental-inventory-pool
+  network:
+    config:
+      dns-resolver:
+        config:
+          search: []
+          server:
+          - 192.168.122.1
+      interfaces:
+      - description: Main-NIC
+        ipv4:
+          address:
+          - ip: "{inventory-ip}"
+            prefix-length: 24
+          dhcp: false
+          enabled: true
+        ipv6:
+          enabled: false
+        name: eth0
+        state: up
+        type: ethernet
+      routes:
+        config:
+        - destination: 0.0.0.0/0
+          metric: 150
+          next-hop-address: 192.168.122.1
+          next-hop-interface: eth0
+          table-id: 254
+    ipAddresses:
+      inventory-ip: 192.168.122.150
+status:
+  conditions:
+  - lastTransitionTime: "2024-07-30T11:50:47Z"
+    message: NetworkConfig is ready
+    reason: ReconcilingNetworkConfig
+    status: "True"
+    type: NetworkConfigReady
+----
+
+Sie werden feststellen, dass die `+MachineInventory+` die gleiche `+network.config+` wie die `+MachineRegistration+` enthält, aber statt auf IPAddressPools zu verweisen, haben wir jetzt eine Karte mit echten IP-Adressen:
+
+[,yaml]
+----
+    ipAddresses:
+      inventory-ip: 192.168.122.150
+----
+
+Dieses `+inventory-ip+` wird dann in der Konfiguration `+nm-configurator+` ersetzt, wenn `+{inventory-ip}+` definiert wurde.
+
+Beachten Sie auch, dass die `+MachineInventory+` auf jede mit ihr verbundene `+IPAddressClaim+` verweist und ihr gehört. Jeder Anspruch folgt der vorhersehbaren `+$MachineInventoryName-$IPPoolRefKey+` Namenskonvention: `+m-e5331e3b-1e1b-4ce7-b080-235ed9a6d07c-inventory-ip+`.
+
+Diese Ansprüche folgen dem Lebenszyklus des Objekts `+MachineInventory+` und werden bei der Kaskade gelöscht, z. B. während des xref:node-operational-tasks/reset.adoc[Reset-Workflows].
+
+Wenn die `+IPAddresses+` nicht beansprucht werden kann, wird die Bedingung `+NetworkConfigReady+` auf `+False+` gesetzt, so dass die Maschine die Installation nicht abschließen kann. Dies kann der Fall sein, wenn auf `+IPPool+` keine `+IPAddresses+` mehr verfügbar ist.
+
+== Auf der Maschinenseite
+
+Während der Installationsphase erhält der auf dem Rechner laufende Prozess `+elemental-register+` die Konfigurationsvorlage `+nm-configurator+` `+_all.yaml+` und die Liste der beanspruchten IP-Adressen mit den zugehörigen Schlüsseln. Diese Informationen werden zu einer geeigneten `+nm-configurator+` Konfiguration verdaut:
+
+[,yaml]
+----
+config:
+  dns-resolver:
+    config:
+      search: []
+      server:
+      - 192.168.122.1
+  interfaces:
+  - description: Main-NIC
+    ipv4:
+      address:
+      - ip: "192.168.122.150"
+        prefix-length: 24
+      dhcp: false
+      enabled: true
+    ipv6:
+      enabled: false
+    name: eth0
+    state: up
+    type: ethernet
+  routes:
+    config:
+    - destination: 0.0.0.0/0
+      metric: 150
+      next-hop-address: 192.168.122.1
+      next-hop-interface: eth0
+      table-id: 254
+----
+
+`+elemental-register+` ruft dann `+nmc generate+` und `+nmc apply+` auf, um diese Konfiguration auf das laufende System anzuwenden.
+
+Von diesem Moment an bis zum Zurücksetzen verwendet das Gerät immer die verwendete Konfiguration.
+
+Beachten Sie auch, dass `+nm-configurator+` außerhalb der Installation und des Zurücksetzens nicht mehr verwendet wird, da `+elemental-register+` die von `+nmc+` erzeugten `+/etc/NetworkManager/system-connection/*.nmconnection+` Dateien beibehält und nicht die `+nmc+` Konfiguration selbst.
+
+Zum Beispiel finden Sie auf jedem laufenden System eine https://github.com/rancher/yip[] yip-Konfigurationsdatei (`+/oem/elemental-network.yaml+`), um die gewünschte `+nmconnections+` anzuwenden:
+
+[,yaml]
+----
+name: Apply network config
+stages:
+    initramfs:
+        - files:
+            - path: /etc/NetworkManager/system-connections/Wired connection 1.nmconnection
+              permissions: 384
+              owner: 0
+              group: 0
+              content: |
+                [connection]
+                id=Wired connection 1
+                uuid=d26b4ae4-d525-3cbf-a557-33feb60343c0
+                type=ethernet
+                autoconnect-priority=-999
+                interface-name=eth0
+                timestamp=1722340245
+
+                [ethernet]
+
+                [ipv4]
+                address1=192.168.122.150/24
+                dhcp-timeout=2147483647
+                dns=192.168.122.1;
+                dns-options=
+                dns-priority=40
+                method=manual
+                route1=0.0.0.0/0,192.168.122.1,150
+                route1_options=table=254
+
+                [ipv6]
+                addr-gen-mode=eui64
+                dhcp-timeout=2147483647
+                method=disabled
+
+                [proxy]
+
+                [user]
+                nm-configurator.interface.description=Main-NIC
+              encoding: ""
+              ownerstring: ""
+----
+
+=== Beim Zurücksetzen
+
+Wenn ein xref:node-operational-tasks/reset.adoc[Reset] ausgelöst wird, löscht die auf dem Rechner laufende `+elemental-register+` alle `+/etc/NetworkManager/system-connection/*.nmconnection+` Dateien und startet den Netzwerk-Stack neu. Das Gerät sollte dann zu DHCP zurückkehren und danach dem `+elemental-operator+` auf der Verwaltungsseite bestätigen, dass das Zurücksetzen erfolgreich war.
+
+Beachten Sie, dass dies nur dann gilt, wenn der Wert `+MachineInventory.spec.network.configurator+` anders ist als `+none+`. Andernfalls wird während der Rücksetzphase der Maschine keine Aktion zum Zurücksetzen des Netzes durchgeführt.
+
+Nach dem Zurücksetzen des Netzwerks sollte das Gerät in den Wiederherstellungsmodus wechseln, das eigentliche Zurücksetzen durchführen und eine neue Netzwerkkonfiguration erhalten, die angewendet werden kann. Möglicherweise handelt es sich dabei um dieselbe wie zuvor (wenn `+MachineRegistration+` nicht aktualisiert wurde), oder sie hat andere IPs, da die vorherigen in der Zwischenzeit von anderen Rechnern beansprucht wurden.
+
+Wenn die Umstellung auf DHCP fehlgeschlagen ist oder der Rechner nicht in der Lage ist, die Rancher-API zur Bestätigung zu kontaktieren, werden Sie feststellen, dass die `+MachineInventory+` nicht gelöscht wird, obwohl sie einen Löschzeitstempel hat. Da das Gerät jetzt ein Netzwerkproblem hat, ist es nicht möglich, es aus der Ferne zu reparieren.
+
+Sie haben die Möglichkeit, das Gerät physisch zu erreichen oder die DHCP-gesteuerte Netzwerkkonfiguration auf irgendeine Weise zu korrigieren, oder Sie können alternativ den `+machineinventory.elemental.cattle.io+` finalizer von der `+MachineInventory+` entfernen, um das Löschen zu ermöglichen, wenn Sie beabsichtigen, das Gerät außer Betrieb zu nehmen.
