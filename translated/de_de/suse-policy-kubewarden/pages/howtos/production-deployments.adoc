@@ -1,0 +1,350 @@
+include::partial$variables.adoc[]
+= Konfigurieren des {project-name} Stacks für die Produktion
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren Sie Toleranzen und Affinitätsregeln für optimales Scheduling und Zuverlässigkeit innerhalb des {project-name} Stacks in einem Kubernetes-Cluster.
+:keywords: ["{project-name}", kubewarden, kubernetes, policyservers, production, poddisruptionbudget, affinity, limits, tolerations, priorityclass]
+:doc-persona: kubewarden-Bediener, kubewarden-Integrator
+:doc-type: howto
+:doc-topic: operator-manual, policy-servers, production, poddisruptionbudget, affinity, limits, tolerations, priorityclass
+
+{project-name} bietet Funktionen für die Zuverlässigkeit und das korrekte Scheduling seiner Komponenten in einem Kubernetes-Cluster. Einige der Hinweise auf dieser Seite stammen von Mitgliedern der{short-project-name} Community, die {short-project-name} in großem Umfang nutzen.
+
+[IMPORTANT]
+====
+Wenn Sie ein echtes Beispiel für die Ausführung von {short-project-name} im großen Maßstab sehen möchten, besuchen Sie die Dokumentationsseite xref:/howtos/deploy-at-scale.adoc[{short-project-name} in a Large-Scale Environment].
+
+====
+
+== Konfigurieren von Toleranzen und Affinität/Anti-Affinität
+
+Mithilfe der Felder `+tolerations+` und `+affinity+` können die Betreiber die Planung und Zuverlässigkeit des {short-project-name}Stacks genau auf ihre spezifischen Einsatzanforderungen und -beschränkungen abstimmen. Weitere Einzelheiten zu den genauen Feldern und ihren Konfigurationen finden Sie in derhttps://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/[Kubernetes-Dokumentation zu Taints und Tolerierungen] undhttps://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity[Affinität und Anti-Affinität].
+
+Ab Version 1.15 des {short-project-name} Stacks werden die{short-project-name} Helmkarten mit zwei neuen Werten ausgeliefert:
+
+* `+.global.tolerations+`
+* `+.global.affinity+`
+
+Mit diesen Helm-Diagrammwerten können Benutzer Kubernetes-Toleranzen und Affinitäts-/Anti-Affinitäts-Einstellungen für den {short-project-name} -Stack definieren, einschließlich der Controller-Bereitstellung, des Audit-Scanner-Cronjobs und der benutzerdefinierten Standardressource`+PolicyServer+`.
+
+=== Toleranzen
+
+Der Wert `+tolerations+` ist ein Array, in dem Benutzer Kubernetes-Toleranzen für die Komponenten von {short-project-name} angeben können. Toleranzen ermöglichen die Einplanung von Pods auf Knoten mit übereinstimmenden Taints. Dies ist nützlich, um zu verwalten, wo Pods eingeplant werden können, insbesondere in Szenarien, in denen es um die Wartung von Knoten, spezielle Arbeitslasten oder spezifische Hardwareanforderungen geht:
+
+[source,yaml]
+----
+global:
+  tolerations:
+    - key: "key1"
+      operator: "Equal"
+      value: "value1"
+      effect: "NoSchedule"
+    - key: "key2"
+      operator: "Equal"
+      value: "value2"
+      effect: "NoExecute"
+----
+
+In diesem Beispiel werden die definierten Toleranzen auf den Controller-Einsatz, den Audit-Scanner-Cronjob und die benutzerdefinierte Standardressource `+PolicyServer+` angewendet.
+
+=== Affinität/Anti-Affinität
+
+Mit dem Wert `+affinity+` können Benutzer Kubernetes-Affinitäts- und Anti-Affinitätsregeln für die Komponenten von {short-project-name} definieren. Affinitätsregeln schränken Pods auf bestimmte Knoten ein, während Anti-Affinitätsregeln verhindern, dass Pods auf bestimmten Knoten oder in unmittelbarer Nähe zu anderen Pods eingeplant werden. Diese Einstellungen sind nützlich, um hohe Verfügbarkeit, Fehlertoleranz und optimierte Ressourcennutzung in einem Cluster zu gewährleisten.
+
+[source,yaml]
+----
+global:
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: security
+                operator: In
+                values:
+                  - S1
+          topologyKey: topology.kubernetes.io/zone
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: security
+                  operator: In
+                  values:
+                    - S2
+            topologyKey: topology.kubernetes.io/zone
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                  - linux
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+              - key: label-1
+                operator: In
+                values:
+                  - key-1
+        - weight: 50
+          preference:
+            matchExpressions:
+              - key: label-2
+                operator: In
+                values:
+                  - key-2
+----
+
+In diesem Beispiel werden die Affinitätsregeln auf den Controller-Einsatz, den Audit-Scanner-Cronjob und die benutzerdefinierte Standardressource `+PolicyServer+` angewendet.
+
+Die frühere Affinitätskonfiguration, die im `+kubewarden-default+`Helm-Diagramm zur Verfügung stand und mit der die Affinitätskonfiguration nur für`+PolicyServer+` definiert werden konnte, wurde zugunsten des globalen Wertes `+affinity+`entfernt. Diese Änderung vereinfacht den Konfigurationsprozess, indem sie einen einzigen Ansatz für die Definition von Affinitäts- und Anti-Affinitätsregeln für alle{short-project-name} Komponenten bietet.
+
+[WARNING]
+====
+Die alte `+affinity+` Konfiguration in der `+kubewarden-default+` Helmkarte wurde entfernt. Benutzer sollten nun das Feld `+.global.affinity+` verwenden, um die Affinitäts- und Anti-Affinitätseinstellungen für den gesamten {short-project-name} Stapel zu konfigurieren.
+====
+
+== Prioritätsklassen konfigurieren
+
+Durch die Verwendung von priorityClasses können Betreiber eine Planungspriorität für die Workload-Pods des {short-project-name} Stacks erzwingen. Dadurch wird sichergestellt, dass die Arbeitslast{short-project-name} vor anderen Arbeitslasten verfügbar ist, was eine Verdrängung verhindert und die Zuverlässigkeit der Dienste gewährleistet. Weitere Informationen finden Sie in derhttps://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/[Kubernetes-Dokumentation zu Prioritätsklassen].
+
+Ab Version 1.25 des {short-project-name} Stacks werden die{short-project-name} Helmkarten mit einem neuen Wert ausgeliefert:
+
+* `+.global.priorityClassName+`
+
+Die durch den Namen in diesem Wert definierte priorityClass wird auf die Controller-Deployment-Pods und die Pods der benutzerdefinierten Standardressource `+PolicyServer+` angewendet.
+
+Der Wert `+.global.priorityClassName+` erwartet den Namen einer bestehenden PriorityClass. Als Beispiel könnten wir verwenden:
+
+[source,yaml]
+----
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: kubewarden-high-priority
+value: 1000000
+globalDefault: false
+description: "This priority class should be used for XYZ service pods only."
+----
+
+Kubernetes wird bereits mit zwei PriorityClasses ausgeliefert, die gute Kandidaten sind: `+system-cluster-critical+` und`+system-node-critical+`. Dies sind gängige Klassen, die fürhttps://kubernetes.io/docs/tasks/administer-cluster/guaranteed-scheduling-critical-addon-pods/ verwendet werden [um sicherzustellen, dass kritische Komponenten immer zuerst eingeplant werden].
+
+[WARNING]
+====
+Wenn Sie eine PriorityClass löschen, bleiben bestehende Pods, die den Namen der gelöschten PriorityClass verwenden, unverändert, aber nachfolgende Pods, die den Namen der gelöschten PriorityClass verwenden, werden von Kubernetes nicht erstellt.
+====
+
+== `+PolicyServer+` Produktionskonfiguration
+
+`+PolicyServers+` sind entscheidend für den Cluster. Ihre Zuverlässigkeit ist wichtig, da sie über die Validierungs- und Mutierungs-Webhooks für die Kubernetes-API bestimmte Zulassungsanfragen verarbeiten.
+
+Wie bei anderen Dynamic Admission Controllern findet dieser Prozess statt, bevor die Anfragen den Kubernetes-API-Server erreichen. Latenzzeiten oder Serviceverzögerungen durch den Dynamic Admission Controller können zu Cluster-Inkonsistenzen, Denial of Service oder Deadlocks führen.
+
+{short-project-name} bietet mehrere Möglichkeiten, die Zuverlässigkeit von`+PolicyServers+` zu erhöhen. Der Einsatz in der Produktion kann sehr unterschiedlich sein, und es ist Sache des Betreibers, den Einsatz für seine Bedürfnisse zu konfigurieren.
+
+=== PodDisruptionBudgets
+
+Der {short-project-name} Controller kann einhttps://kubernetes.io/docs/tasks/run-application/configure-pdb/[PodDisruptionBudget](PDB) für die `+PolicyServer+` Pods erstellen. Dies steuert den Bereich der `+PolicyServer+`Pod-Replikate, die mit dem `+PolicyServer+` verbunden sind, und sorgt für hohe Verfügbarkeit und kontrollierte Räumung im Falle von Knotenwartung, Skalierungsvorgängen oder Cluster-Upgrades.
+
+Dies wird durch die Einstellung `+spec.minAvailable+` oder `+spec.maxUnavailable+`der Ressource `+PolicyServer+` erreicht:
+
+* `+minAvailable+`: gibt die Mindestanzahl der `+PolicyServer+` Pods an, die jederzeit verfügbar sein müssen. Kann eine ganze Zahl oder ein Prozentsatz sein.
+
+  Useful for maintaining the operational integrity of the `+PolicyServer+`,
+  ensuring that policies are continuously enforced without interruption.
+
+* `+maxUnavailable+`: Gibt die maximale Anzahl von `+PolicyServer+` Pods an, die zu einem bestimmten Zeitpunkt nicht verfügbar sein können. Kann eine ganze Zahl oder ein Prozentsatz sein.
+
+  Useful for performing rolling updates or partial maintenance without
+  fully halting the policy enforcement mechanism.
+
+[NOTE]
+====
+Sie können nur eines von `+maxUnavailable+` und `+minAvailable+` angeben.
+====
+
+==== Konfigurieren von minAvailable oder maxUnavailable
+
+.Beispiel: minAvailable einstellen
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  minAvailable: 2 # ensure at least two policy-server Pods are available at all times
+----
+
+.Beispiel: maxUnverfügbar einstellen
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  maxUnavailable: "30%" # ensure no more than 30% of policy-server Pods are unavailable at all times
+----
+
+=== Affinität/Anti-Affinität
+
+Der {short-project-name} Controller kann die Affinität von`+PolicyServer+` Pods einstellen. Dies ermöglicht die Beschränkung von Pods auf bestimmte Knoten oder von Pods gegen andere Pods. Weitere Informationen zu Affinity finden Sie unterhttps://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity[Kubernetes-Dokumente].
+
+Die Kubernetes-Affinitätskonfiguration ermöglicht die Beschränkung von Pods auf Knoten (über`+spec.affinity.nodeAffinity+`) oder die Beschränkung von Pods in Bezug auf andere Pods (über `+spec.affinity.podAffinity+`). Die Affinität kann als weiche (mit `+preferredDuringSchedulingIgnoredDuringExecution+`) oder als harte (mit `+requiredDuringSchedulingIgnoredDuringExecution+`) Einschränkung festgelegt werden.
+
+Affinitäts-/Anti-Affinitätsabgleiche mit bestimmten Kennzeichnungen, sei es mit Knotenkennzeichnungen (z. B.: `+topology.kubernetes.io/zone+` auf `+antarctica-east1+`) oder Pods-Kennzeichnungen. Pods, die aus `+PolicyServer+` -Definitionen erstellt werden, haben ein Label`+kubewarden/policy-server+`, das auf den Namen des `+PolicyServer+` gesetzt ist (z. B.:`+kubewarden/policy-server: default+`).
+
+[NOTE]
+====
+Affinität/Anti-Affinität zwischen den Knoten erfordern einen erheblichen Verarbeitungsaufwand und werden bei Clustern mit mehr als einigen hundert Knoten nicht empfohlen.
+====
+
+Um die Affinität für eine `+PolicyServer+` zu konfigurieren, setzen Sie das Feld `+spec.affinity+`. Dieses Feld akzeptiert ein YAML-Objekt, das dem Inhalt des Pods`+spec.affinity+` entspricht.
+
+==== Affinität/Anti-Affinität konfigurieren
+
+.Beispiel: Verteilen Sie die `+PolicyServer+` Pods auf Zonen und Hostnamen
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: topology.kubernetes.io/zone
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: kubernetes.io/hostname
+----
+
+.Beispiel: Nur `+PolicyServer+` Pods in Control-Plane-Knoten einplanen
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: kubewarden/policy-server
+                operator: In
+                values:
+                  - your-policy-server
+          topologyKey: node-role.kubernetes.io/control-plane
+----
+
+=== Grenzwerte und Anträge
+
+Der {short-project-name} Controller kann die Ressourcengrenzen und -anforderungen von `+PolicyServer+` Pods festlegen. Dies gibt an, wie viel von jeder Ressource jeder der mit den `+PolicyServer+` Pods verbundenen Container benötigt. Für`+PolicyServers+` sind nur die Ressourcen `+cpu+` und `+memory+` relevant. Weitere Informationen zu Ressourceneinheiten finden Sie unterhttps://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#resource-units-in-kubernetes[Kubernetes docs].
+
+Dies wird durch die Einstellung der folgenden `+PolicyServer+` Ressourcenfelder erreicht:
+
+* `+spec.limits+`: Begrenzungen der Ressourcen, die von der Container-Laufzeit erzwungen werden. Verschiedene Laufzeiten können die Einschränkungen auf unterschiedliche Weise umsetzen.
+* `+spec.requests+`: Menge der für jeden Container zu reservierenden Ressourcen. Es ist möglich und erlaubt, dass ein Container mehr Ressourcen verbraucht als sein `+request+`.
+
+  If omitted, it defaults to `+spec.limits+` if that is set (unless
+  `+spec.requests+` of containers is set to some defaults via an admission
+  mechanism).
+
+[NOTE]
+====
+Eine Unterbelegung der Ressourcen von `+PolicyServers+` kann zu Problemen mit der Zuverlässigkeit des Clusters führen.
+====
+
+==== Konfigurieren von Grenzwerten und Anforderungen
+
+.Beispiel: Festlegen von Grenzwerten für jeden `+PolicyServer+` Container
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  limits:
+    cpu: 500m
+    memory: 1Gi
+----
+
+=== PriorityClasses
+
+Der {short-project-name} Controller kann die PriorityClass für die Pods von `+PolicyServers+` festlegen. Das bedeutet, dass die Arbeitslasten von `+PolicyServer+` mit Priorität eingeplant werden, was eine Verdrängung verhindert und die Zuverlässigkeit der Dienste gewährleistet. Siehehttps://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/[Kubernetes-Dokumente für weitere Informationen].
+
+[WARNING]
+====
+Wenn Sie eine PriorityClass löschen, bleiben bestehende Pods, die den Namen der gelöschten PriorityClass verwenden, unverändert, aber nachfolgende Pods, die den Namen der gelöschten PriorityClass verwenden, werden von Kubernetes nicht erstellt.
+====
+
+==== PriorityClasses konfigurieren
+
+.Beispiel: Verwendung der standardmäßigen `+system-cluster-critical+` priorityClass:
+[source,yaml]
+----
+apiVersion: policies.kubewarden.io/v1
+kind: PolicyServer
+metadata:
+  name: your-policy-server
+spec:
+  # Other configuration fields
+  priorityClassName: system-cluster-critical
+----
+
+=== Isolierung von Policy Workloads
+
+Um Stabilität und hohe Leistung bei der Skalierung zu gewährleisten, können Benutzer separate*`+PolicyServer+`* Bereitstellungen ausführen, um verschiedene Arbeitslasten zu isolieren.
+
+* *Widmen Sie eine `+PolicyServer+` den kontextabhängigen Richtlinien:* Diese Richtlinien sind ressourcenintensiver, da sie den Kubernetes-API-Server oder andere externe Dienste wie Sigstore, OCI-Registrierungen und andere abfragen. Durch ihre Isolierung wird verhindert, dass eine langsame Richtlinie einen Engpass für andere, schnellere Richtlinien bildet.
+* *Verwenden Sie eine andere `+PolicyServer+` für alle anderen Policen:* Führen Sie regelmäßige, in sich geschlossene Richtlinien auf einem separaten Server aus, um niedrige Latenzzeiten für die häufigsten Zulassungsanfragen zu gewährleisten.
+
+Sie können auch erwägen, die Arbeitslast noch weiter aufzuteilen. Wenn Sie beispielsweise einige Richtlinien haben, die langsam sind und ein größeres Ausführungs-Timeout erfordern, sollten Sie in Erwägung ziehen, diese in ein spezielles `+PolicyServer+` zu verschieben. Auf diese Weise stellen Sie sicher, dass die Richtlinien die Arbeiter nicht daran hindern, andere Anfragen zu bewerten.
+
+=== Ressourcenzuweisung und Skalierung
+
+Um einen hohen Datenverkehr zu bewältigen und die Verfügbarkeit zu gewährleisten, sollten Sie ausreichend Ressourcen bereitstellen und Ihre Replikate skalieren.
+
+* *Ausreichende Ressourcen zuweisen:* In Umgebungen mit hohem Datenverkehr sollten Sie jedem Replikat großzügige Ressourcen zuweisen. Lassen Sie `+PolicyServers+` nicht verhungern, da unzureichende CPU- oder Speicherkapazität eine der Hauptursachen für Timeouts bei Anfragen ist. Denken Sie daran, dass `+PolicyServers+` Anfragen von der Kontrollebene und dem{short-project-name} Audit-Scanner erhalten wird.
+* *Skalierung für hohe Verfügbarkeit:* Für Bereitstellungen, die Hunderte von Anfragen pro Sekunde verarbeiten, sollten Sie eine hohe Anzahl von Replikaten einsetzen. Dadurch wird die Last effektiv verteilt und sichergestellt, dass der Ausfall einiger Pods den Betrieb des Clusters nicht beeinträchtigt.
+
+Beginnen Sie mit einer Baseline von 3-5 Replikaten und überwachen Sie die CPU- und Speichernutzung. Skalieren Sie die Anzahl der Replikate nach Bedarf.
+
+=== Wirksames Auditing in großem Maßstab
+
+Um Audits auf großen Clustern effizient durchzuführen, sollten Sie den Audit-Scanner auf Leistung und Parallelität abstimmen.
+
+* *Planen Sie regelmäßig Audits:* Eine häufige Überprüfung kann ein gutes Gleichgewicht zwischen dem Erkennen von Konfigurationsabweichungen und der Minimierung der Belastung des API-Servers darstellen.
+* *Parallelität aggressiv abstimmen:* Der Schlüssel zu schnellen Prüfungen ist die Parallelisierung. Mit Hochparallelitätseinstellungen können Sie die Prüfungszeiten auf massiven Clustern auf etwas mehr als eine Stunde reduzieren.
+
+[WARNING]
+====
+Es ist wichtig zu wissen, dass der Audit-Scanner Anfragen an`+PolicyServers+` sendet. Daher kann sich die Parallelität auf die Leistung von `+PolicyServer+`auswirken. Wenn Sie eine aggressive Parallelität wünschen, um die Scanzeiten in großen Clustern zu reduzieren, müssen Sie möglicherweise die verfügbaren Richtlinienserver-Ressourcen erhöhen, um eine Beeinträchtigung der Leistung des Admission Controllers zu vermeiden.
+====
+
+Stellen Sie `+disableStore: true+` ein, um die Last zu verringern, wenn Sie Prüfergebnisse aus Protokollen verwenden und weder die Richtlinie `+Reports+` noch `+ClusterReports+` benutzerdefinierte Ressourcen im Cluster benötigen.
