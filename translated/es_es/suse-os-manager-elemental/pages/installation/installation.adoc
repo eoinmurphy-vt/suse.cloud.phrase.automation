@@ -1,0 +1,188 @@
+= Instalación
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+== Visión general
+
+{elemental-product-name} proporciona gestión de sistemas operativos mediante contenedores OCI y Kubernetes. La instalación de la pila {elemental-product-name}abarca la instalación de {elemental_operator_name} en el clúster de gestión y la creación y uso de medios de instalación para proporcionar el sistema operativo en los nodos del clúster. Consulte la sección xref:rancher-os-management/architecture/architecture.adoc[Arquitectura] para conocer la interacción de los componentes.
+
+La configuración de la instalación se aplica y establece en la mayoría de los casos como parte del proceso de registro.
+El proceso de registro lo realiza `+elemental-register+` (la parte cliente de {elemental_operator_name} ), que es el responsable de registrar los nodos en un clúster de gestión de Rancher y obtener la configuración de la instalación.
+
+Consulte la guía de xref:quickstarts/quickstart-cli.adoc[inicio rápido] para obtener instrucciones sencillas de instalación paso a paso.
+
+== {elemental-product-name} Instalación del operador
+
+El {elemental_operator_name} es responsable de gestionar las versiones de {elemental-product-name} y mantener un inventario de máquinas para ayudar con las instalaciones edge o bare metal. {elemental_operator_name}requiere un cluster que incluya el Rancher Manager y puede ser instalado con un helm chart.
+
+Consulte {elemental_operator_name} xref:references/operatorchart-reference.adoc[helm chart reference] para obtener detalles sobre la instalación, desinstalación, actualización y configuración.
+
+== Preparar los recursos de Kubernetes
+
+Una vez que {elemental_operator_name} está en funcionamiento dentro del clúster de gestión, se necesitan un par de recursos kubernetes para preparar un despliegue de clúster basado en {elemental-product-name}.
+
+* xref:references/machineinventoryselectortemplate-reference.adoc[MachineInventorySelectorTemplate]:
+Este recurso identifica los criterios para cotejar las cajas registradas (listadas como parte del MachineInventory) con los Clusters Rancher 2.6 disponibles. En cuanto hay una coincidencia, el clúster kubernetes seleccionado toma posesión de la caja registrada.
+* xref:references/machineregistration-reference.adoc[Registro de máquina]:
+Este recurso define los detalles de despliegue del sistema operativo para cualquier máquina que intente registrarse. El registro de la máquina es la entrada para los nodos {elemental-product-name} ya que maneja la autenticación (basada en TPM), el despliegue del SO y la inclusión del nodo en el MachineInventory para que pueda ser añadido a un cluster cuando haya una coincidencia basada en un MachineInventorySelectorTemplate. El objeto MachineRegistration incluye la URL de registro de la máquina que los nodos utilizan para registrarse en ella.
+
+También se requiere un recurso Rancher Cluster para desplegar {elemental-product-name}, puede ser creado manualmente como se ejemplifica en la guía de xref:quickstarts/quickstart-cli.adoc[Inicio Rápido] o creado desde la UI de Rancher 2.6.
+
+== Preparar el soporte de instalación
+
+El medio de instalación es el medio que se utilizará para iniciar la implantación de un sistema operativo. Actualmente, los medios compatibles son las ISO activas. La ISO en vivo debe incluir el yaml de configuración de registración, por lo tanto debe ser crafteado una vez que la MachineRegistration es creada. El soporte de instalación se genera mediante la creación de recursos xref:references/seedimage-reference.adoc[Seed Image](véase xref:quickstarts/quickstart-cli.adoc#_preparing_the_installation_seed_image[Inicio rápido] e xref:operator-operational-tasks/custom-images.adoc#_create_a_custom_bootable_installation_iso[imágenes personalizadas]).
+
+La ISO en vivo admite el arranque PXE para la integración directa con https://documentation.suse.com/suma/4.3/en/suse-manager/client-configuration/autoinst-distributions.html#based-on-iso-image[Manager] SUSE.
+
+En MachineRegistration sólo se puede configurar un subconjunto de parámetros de instalación del sistema operativo; todos los parámetros disponibles se enumeran en la página de referencia xref:references/machineregistration-reference.adoc[de MachineRegistration].
+
+Para configurar la instalación más allá de las opciones comunes proporcionadas en la secciónxref:references/machineregistration-reference.adoc#_config_elemental_install[`+elemental.install+`] se puede incluir en la ISO un archivo de configuración `+config.yaml+`(véase xref:installation/customize-installation/custom-install.adoc#_custom_suse_rancher_prime_os_manager_client_configuration_file[Imágenes personalizadas]).
+Tenga en cuenta que cualquier configuración aplicada como parte de la sección `+elemental.install+` del MachineRegistration se aplicará sobre la configuración incluida en cualquier archivo personalizado `+config.yaml+`.
+
+Lo más probable es que la configuración cloud-init sea suficiente para configurar y establecer el nodo desplegado en el arranque, sin embargo, si por alguna razón se requieren acciones o scripts en el primer arranque, es posible incluir también planes de Rancher System Agent en el medio de instalación. Consulte la sección xref:rancher-os-management/plans.adoc[Planos] para más detalles y algunos ejemplos de planos. Los planes podrían incluirse en los rootfs aplastados en la carpeta `+/var/lib/elemental/agent/plans+`y serían vistos por el agente del sistema en el primer arranque.
+
+== Iniciar el proceso de instalación
+
+La instalación comienza arrancando el medio de instalación en un nodo. Una vez que el medio de instalación haya arrancado, intentará ponerse en contacto con el clúster de gestión y registrarse en él llamando al comando `+elemental-register+`.
+Como la configuración yaml de registro ya está incluida en la ISO `+elemental-register+` conoce la URL de registro y cualquier otro dato necesario para el registro.
+
+Si el registro se realiza correctamente, el medio de instalación iniciará la instalación en el host basándose en la configuración ya incluida en el medio y en los parámetros de MachineRegistration. Una vez finalizada la instalación, el nodo estará listo para reiniciarse. El sistema operativo desplegado incluye un plan de agente del sistema para iniciar un proceso de aprovisionamiento regular de Rancher para instalar la versión seleccionada de Kubernetes, una vez arrancado, después de unos minutos la instalación del nodo se finaliza y el nodo se incluye en el clúster y es visible a través de la interfaz de usuario de Rancher.
+
+== Tabla de particiones desplegada
+
+Una vez instalado el sistema operativo la tabla de particiones del SO, según los valores por defecto, tendrá el siguiente aspecto
+
+|===
+| Etiqueta | Tamaño por defecto | Contiene
+
+| COS_GRUB
+| 64 MiB
+| Partición de arranque UEFI
+
+| COS_STATE
+| 8 GiB
+| Imágenes de sistema de archivos de arranque A/B construidas a partir de imágenes OCI
+
+| COS_OEM
+| 64 MiB
+| Archivos OEM de configuración de la nube y otros datos
+
+| COS_RECOVERY
+| 4 GiB
+| Recuperación de la imagen del sistema de archivos si se destruye COS_STATE
+
+| COS_PERSISTENT
+| Espacio restante
+| Todo el contenido de las carpetas persistentes
+|===
+
+Tenga en cuenta que esta es la estructura básica de cualquier sistema operativo construido por {elemental_toolkit_url}[{elemental_toolkit_name}].
+
+== {elemental-product-name} Raíz inmutable
+
+Una de las características de los SO {elemental-product-name} es la configuración de un sistema de archivos raíz inmutable sobre el que se aplican algunas ubicaciones efímeras o persistentes. La estructura de carpetas por defecto se muestra en la siguiente matriz.
+
+[cols=",^,^,^"]
+|===
+| Ruta | Sólo lectura | Ephemeral | Persistente
+
+| /
+| x
+|
+|
+
+| /etc
+|
+| x
+|
+
+| /etc/cni
+|
+|
+| x
+
+| /etc/iscsi
+|
+|
+| x
+
+| /etc/rancher
+|
+|
+| x
+
+| /etc/ssh
+|
+|
+| x
+
+| /etc/systemd
+|
+|
+| x
+
+| /srv
+|
+| x
+|
+
+| /home
+|
+|
+| x
+
+| /opt
+|
+|
+| x
+
+| /root
+|
+|
+| x
+
+| /var
+|
+| x
+|
+
+| /usr/libexec
+|
+|
+| x
+
+| /var/lib/cni
+|
+|
+| x
+
+| /var/lib/kubelet
+|
+|
+| x
+
+| /var/lib/rancher
+|
+|
+| x
+
+| /var/lib/elemental
+|
+|
+| x
+
+| /var/lib/NetworkManager
+|
+|
+| x
+
+| /var/lib/calico
+|
+|
+| x
+
+| /var/log
+|
+|
+| x
+|===
