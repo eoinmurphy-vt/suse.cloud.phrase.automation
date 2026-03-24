@@ -1,0 +1,199 @@
+= Automatisierte Upgrades
+:page-languages: [en, ja, ko, zh]
+:revdate: 2025-09-16
+:page-revdate: {revdate}
+
+== Übersicht
+
+Sie können K3s-Cluster-Upgrades mit dem System-Upgrade-Controller von Rancher verwalten. Dies ist ein Kubernetes-nativer Ansatz für Cluster-Upgrades. Es nutzt eine https://github.com/rancher/system-upgrade-controller/blob/master/doc/plan.md#planspec[`+Plan+`] Benutzerdefinierte Ressource, um deklarativ zu beschreiben, welche Knoten auf welche Version aktualisiert werden sollen.
+
+Der Plan legt die Aufrüstungsrichtlinien und -anforderungen fest. Sie definiert auch, welche Knoten durch einen https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/[Label Selector] aktualisiert werden sollen. Siehe unten für Pläne mit Standardeinstellungen, die für das Upgrade eines K3s-Clusters geeignet sind. Weitere Optionen zur Konfiguration des Plans finden Sie in der oben verlinkten Plan-Dokumentation.
+
+Der System-Upgrade-Controller plant Upgrades, indem er Pläne überwacht und Knoten auswählt, auf denen ausgeführt werden https://kubernetes.io/docs/concepts/workloads/controllers/jobs-run-to-completion/[Upgrade-Jobs]. Wenn ein Auftrag erfolgreich abgeschlossen wurde, kennzeichnet der Controller den Knoten, auf dem er ausgeführt wurde, entsprechend.
+
+[WARNING]
+====
+Wenn der K3s-Cluster von Rancher verwaltet wird, sollten Sie die Rancher-Benutzeroberfläche verwenden, um Upgrades zu verwalten.
+
+* Wenn der K3s-Cluster in Rancher importiert (registriert) wird, verwaltet Rancher standardmäßig die System-Upgrade-Controller-Bereitstellung und Pläne. Führen Sie die Schritte auf dieser Seite nicht aus, wenn Sie die Versionsverwaltung in Rancher nicht deaktiviert haben.
+  Weitere Informationen finden Sie unter https://rancher.github.io/product-docs-playbook/rancher-manager/latest/en/cluster-deployment/register-existing-clusters.html#_configuring_version_management_for_suse_rancher_prime_rke2_and_suse_rancher_prime_k3s_clusters[Konfigurieren der Versionsverwaltung für RKE2 und K3s-Cluster].
+* Wenn der K3s-Cluster von Rancher bereitgestellt wird, verwendet Rancher den Systemagenten, um Versions-Upgrades zu verwalten. Befolgen Sie nicht die Schritte auf dieser Seite.
+* Wenn der K3s-Cluster *nicht* von Rancher verwaltet wird, können Sie die folgenden Schritte ausführen.
+====
+
+== Verwendung des System Upgrade Controllers
+
+Um Upgrades zu automatisieren, müssen Sie Folgendes tun:
+
+. Installieren Sie den system-upgrade-controller in Ihrem Cluster
+. Erstellen Sie Pläne, die beschreiben, welche Gruppen von Knoten auf welche Weise aktualisiert werden sollen.
+
+Weitere Details zum Design und zur Architektur des System-Upgrade-Controllers oder seiner Integration in K3s finden Sie in den folgenden Git-Repositories:
+
+* https://github.com/rancher/system-upgrade-controller[system-upgrade-controller]
+* https://github.com/k3s-io/k3s-upgrade[k3s-Aktualisierung]
+
+[TIP]
+====
+Beim Versuch, auf eine neue Version von K3s zu aktualisieren, gilt die https://kubernetes.io/docs/setup/release/version-skew-policy/[Kubernetes-Versionsversetzungsrichtlinie]. Stellen Sie sicher, dass Ihr Plan beim Upgrade keine Zwischenversionen überspringt. Der system-upgrade-controller selbst bietet keinen Schutz vor nicht unterstützten Änderungen an der Kubernetes-Version.
+====
+
+
+=== Installation
+
+Das system-upgrade-controller-Manifest installiert eine benutzerdefinierte Ressourcendefinition, eine Bereitstellung, ein Dienstkonto, eine Clusterrollenbindung und eine configmap. Um diese Komponenten zu installieren, führen Sie den folgenden Befehl aus:
+
+[,bash]
+----
+kubectl apply -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/crd.yaml -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/system-upgrade-controller.yaml
+----
+
+Die Steuerung kann über die bereits erwähnte Configmap konfiguriert und angepasst werden, aber der Steuerungspod muss gelöscht werden, damit die Änderungen übernommen werden können.
+
+=== Konfiguration
+
+Serverknoten sollten immer vor den Agentenknoten aktualisiert werden. Aus diesem Grund empfiehlt es sich, mindestens zwei Pläne zu erstellen: einen Plan für das Upgrade von Serverknoten (Control-Plane) und einen Plan für das Upgrade von Agentenknoten. Sie können bei Bedarf weitere Pläne erstellen, um den Rollout des Upgrades über die Knoten hinweg zu steuern. Nachdem die Pläne erstellt wurden, übernimmt der Controller sie und beginnt mit dem Upgrade Ihres Clusters. 
+
+Die folgenden zwei Beispielpläne halten Ihren Cluster kontinuierlich auf dem aktuellen Stand der stabilen Version, indem sie auf den stabilen xref:upgrades/manual.adoc#_release_channels[Release-Channel] abzielen:
+
+[,yaml]
+----
+# Server plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: In
+      values:
+      - "true"
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+---
+# Agent plan
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: agent-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: DoesNotExist
+  prepare:
+    args:
+    - prepare
+    - server-plan
+    image: rancher/k3s-upgrade
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  channel: https://update.k3s.io/v1-release/channels/stable
+----
+
+Bei diesen Plänen gibt es einige wichtige Punkte zu beachten:
+
+. Die Pläne müssen in demselben Namespace erstellt werden, in dem der Controller eingesetzt wird.
+. Das Feld `+concurrency+` gibt an, wie viele Knoten gleichzeitig aufgerüstet werden können. 
+. Der Serverplan zielt auf Serverknoten ab, indem er einen Label-Selektor angibt, der Knoten mit dem Label `+node-role.kubernetes.io/control-plane+` auswählt. Der Agentenplan zielt auf Agenten-Knoten, indem er einen Label-Selektor angibt, der Knoten ohne dieses Label auswählt.
+. Der Schritt `+prepare+` im Agentenplan bewirkt, dass Upgrade-Aufträge für diesen Plan auf den Abschluss des Server-Plans warten, bevor sie ausgeführt werden. Diese Logik ist in das für den Vorbereitungsschritt verwendete Bild integriert und ist nicht Teil des system-upgrade-controllers selbst.
+. Bei beiden Plänen ist das Feld `+channel+` auf die URL des Stable-Release-Channels eingestellt. Dadurch wird der Controller veranlasst, diese URL zu überwachen und den Cluster jedes Mal zu aktualisieren, wenn sie auf eine neue Version umgestellt wird. Dies funktioniert gut mit den xref:upgrades/manual.adoc#_release_channels[Freigabekanälen]. Sie können also Ihre Pläne mit dem folgenden Kanal konfigurieren, um sicherzustellen, dass Ihr Cluster immer automatisch auf die neueste stabile Version von K3s aktualisiert wird. Alternativ können Sie das Feld `+channel+` weglassen und das Feld `+version+` auf eine bestimmte Version von K3s setzen:
++
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  version: v1.33.4+k3s1
+----
+
+Das Upgrade beginnt, sobald der Controller erkennt, dass die Zielversion für einen Plan aufgelöst wurde, entweder über das Versionsfeld oder durch Abfrage des Channel-Servers. Die Änderung eines Plans veranlasst den Kontrolleur, den Plan neu zu bewerten und festzustellen, ob eine weitere Aktualisierung erforderlich ist. Wenn ein Kanal konfiguriert wurde, wird die URL auch regelmäßig abgefragt, um nach neuen Versionen zu suchen.
+
+Sie können den Fortschritt eines Upgrades überwachen, indem Sie den Plan und die Aufträge über kubectl anzeigen:
+
+[,bash]
+----
+kubectl -n system-upgrade get plans -o wide
+kubectl -n system-upgrade get jobs
+----
+
+=== Planung von Upgrades
+
+Pläne können auf ein bestimmtes Zeitfenster beschränkt werden, indem das Feld `+window+` in der Planspezifikation gesetzt wird. Die Zeitfensterfelder sind kompatibel mit den https://kured.dev/docs/configuration/#setting-a-schedule[Zeitplanoptionen von] und haben das gleiche Format. Zum Beispiel:
+
+[,yaml]
+----
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+# ...
+spec:
+  # ...
+  window:
+    days:
+      - monday
+      - tuesday
+      - wednesday
+      - thursday
+      - friday
+    startTime: 19:00
+    endTime: 21:00
+    timeZone: UTC
+----
+
+Aufträge zur Ausführung von Upgrades für einen Plan werden nicht außerhalb des Zeitfensters erstellt. Nach der Erstellung von Aufträgen können die Pläne nach dem Schließen des Fensters weiterlaufen.
+
+== Downgrade-Prävention
+
+[IMPORTANT]
+.Version Tor
+====
+Beginnend mit den Versionen 2023-07 (https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.27.4%2Bk3s1[v1.27.4+k3s1], https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.26.7%2Bk3s1[.26.7+k3s1] v1, https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.25.12%2Bk3s1[.25.12+k3s1] v1, https://github.com/k3s-io/k3s-upgrade/releases/tag/v1.24.16%2Bk3s1[.24.16+k3s1] v1)
+====
+
+
+Kubernetes unterstützt keine Downgrades von Control-Plane-Komponenten. Das k3s-upgrade-Image, das von Upgrade-Plänen verwendet wird, verweigert das Downgrade von K3s, wodurch der Plan fehlschlägt. Knoten, die in ihrem Plan `+cordon: true+` konfiguriert sind, bleiben nach dem Ausfall abgesperrt.
+
+Hier ist ein Beispielcluster mit fehlgeschlagenen Upgrade-Pods und abgesperrten Knoten zu sehen:
+
+[,console]
+----
+$ kubectl get pods -n system-upgrade
+NAME                                                              READY   STATUS    RESTARTS   AGE
+apply-k3s-server-on-ip-172-31-0-16-with-7af95590a5af8e8c3-2cdc6   0/1     Error     0          9m25s
+apply-k3s-server-on-ip-172-31-10-23-with-7af95590a5af8e8c-9xvwg   0/1     Error     0          14m
+apply-k3s-server-on-ip-172-31-13-213-with-7af95590a5af8e8-8j72v   0/1     Error     0          18m
+system-upgrade-controller-7c4b84d5d9-kkzr6                        1/1     Running   0          20m
+$ kubectl get nodes
+NAME               STATUS                     ROLES                       AGE   VERSION
+ip-172-31-0-16     Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-10-23    Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-13-213   Ready,SchedulingDisabled   control-plane,etcd,master   19h   v1.27.4+k3s1
+ip-172-31-2-13     Ready                      <none>                      19h   v1.27.4+k3s1
+----
+
+Sie können Ihre gesperrten Knoten mit einer der folgenden Methoden wieder in Betrieb nehmen:
+
+* Ändern Sie die Version oder den Kanal Ihres Plans so, dass er auf eine Version abzielt, die gleich oder neuer ist als die, die derzeit auf dem Cluster läuft, so dass der Plan erfolgreich ist.
+* Löschen Sie den Plan und heben Sie die Abgrenzung der Knoten manuell auf.
+Verwenden Sie `+kubectl get plan -n system-upgrade+`, um den Namen des Plans zu finden, und `+kubectl delete plan -n system-upgrade PLAN_NAME+`, um ihn zu löschen. Sobald der Plan gelöscht wurde, verwenden Sie `+kubectl uncordon NODE_NAME+`, um die einzelnen Knoten zu entkoppeln.
+
+== Sicherheit
+
+Der gestartete Upgrade-Auftrag muss hoch privilegiert sein, um Änderungen an den zugrunde liegenden Knoten vornehmen zu können. Standardmäßig ist sie wie folgt konfiguriert:
+
+* Host `+IPC+`, `+NET+` und `+PID+` Namespaces
+* Die `+CAP_SYS_BOOT+` Fähigkeit
+* Host root gemountet unter `+/host+` mit Lese- und Schreibrechten
