@@ -1,0 +1,254 @@
+= Instalación de {stackstate-product-name} en modo entrehierro
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: {stackstate-product-name}
+
+Este documento proporciona una guía paso a paso para la instalación de {stackstate-product-name} utilizando cartas Helm en un entorno con cámara de aire. El proceso implica preparar las imágenes Docker y las cartas Helm necesarias en un host con acceso a Internet, transferirlas a un host dentro de una red privada, copiar las imágenes Docker a un registro privado y, a continuación, desplegar las cartas Helm.
+
+== Requisitos previos
+
+=== En el host local (acceso a Internet)
+
+* *Sistema operativo*: Linux o MacOS
+* *Herramientas instaladas*:
+ ** https://www.docker.com/products/docker-desktop/[Docker]
+ ** https://helm.sh/docs/intro/install/[Timón cli]
+ ** Scripts para descargar imágenes Docker del registro de fuentes (los enlaces se proporcionarán más adelante en esta guía).
+* *Acceso a Internet*: Necesario para extraer imágenes Docker de Quay.io y gráficos Helm de ChartMuseum.
+
+=== En el host de red privada
+
+* *Acceso*: Acceso SSH al host.
+* *Herramientas instaladas*:
+ ** https://www.docker.com/products/docker-desktop/[Docker]
+ ** https://helm.sh/docs/intro/install/[Timón cli]
+ ** Scripts para descargar imágenes Docker del registro de fuentes (los enlaces se proporcionarán más adelante en esta guía).
+ ** Acceso a la red y credenciales para cargar imágenes en un registro Docker privado.
+ ** Un Kubeconfig configurado para instalar las cartas Helm en los clusters de destino.
+
+== Preparación de las imágenes Docker y las cartas Helm
+
+Ejecute los siguientes comandos en el host local para obtener las imágenes Docker y los gráficos Helm necesarios:
+
+*Añadir repositorios Helm a la caché local de Helm:*
+
+[,bash]
+----
+# Adding the Helm repository for {stackstate-product-name}
+helm repo add suse-observability https://charts.rancher.com/server-charts/prime/suse-observability
+helm repo update
+----
+
+*Obtención de las últimas versiones de los gráficos. Estos comandos descargarán archivos TGZ de los gráficos:*
+
+[,bash]
+----
+# Downloading the chart for {stackstate-product-name}
+# The file will be named suse-observability-k8s-A.B.C.tgz
+helm fetch suse-observability/suse-observability
+
+# Downloading the helper chart that generates values for {stackstate-product-name}
+# The file will be named suse-observability-values-L.M.N.tgz
+helm fetch suse-observability/suse-observability-values
+----
+
+*Descarga de los scripts Bash para guardar imágenes Docker:*
+
+[,bash]
+----
+# o11y-get-images.sh
+curl -LO https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-get-images.sh
+# o11y-save-images.sh
+curl -LO https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-save-images.sh
+
+# Make the scripts executable
+chmod a+x o11y-get-images.sh o11y-save-images.sh
+----
+
+*Extracción y almacenamiento de imágenes Docker:*
+
+[,bash]
+----
+# Extract the list of images from the Helm chart and save it to a file.
+./o11y-get-images.sh -f suse-observability-A.B.C.tgz > o11y-images.txt
+----
+
+[NOTE]
+====
+Sustituya `+suse-observability-A.B.C.tgz+` por el nombre real del archivo de gráficos descargado anteriormente.*
+====
+
+
+[,bash]
+----
+# Save Docker images to an archive.
+# The script expects the file o11y-images.txt to contain the list of images used by {stackstate-product-name}.
+# The Docker images will be saved to o11y-images.tar.gz.
+./o11y-save-images.sh -i o11y-images.txt -f o11y-images.tar.gz
+----
+
+== Copia de los archivos necesarios en el host remoto
+
+Copie los siguientes archivos del host local al host de la red privada:
+
+* o11y-images.txt (Lista de imágenes requeridas por el gráfico {stackstate-product-name} )
+* o11y-images.tar.gz (archivo con las imágenes Docker de {stackstate-product-name})
+* https://raw.githubusercontent.com/StackVista/helm-charts/master/stable/suse-observability/installation/o11y-load-images.sh[o11y-load-images.sh] (secuencia de comandos Bash para cargar imágenes Docker en un registro)
+* Cartas de timón descargadas anteriormente:
+ ** suse-observability-A.B.C.tgz
+ ** suse-observability-values-L.M.N.tgz
+
+== Restauración de imágenes Docker del archivo al registro privado
+
+*Sube las imágenes al registro privado:*
+
+[,bash]
+----
+# Load Docker images from the archive and push them to the private registry.
+# Replace <private-registry> with your private registry's URL.
+export DST_REGISTRY_USERNAME="..."
+export DST_REGISTRY_PASSWORD="..."
+./o11y-load-images.sh -d registry.example.com:5043 -i o11y-images.txt -f o11y-images.tar.gz
+----
+
+[NOTE]
+====
+Si el registro de destino no utiliza autenticación, las variables de entorno `+DST_REGISTRY_USERNAME+` y `+DST_REGISTRY_PASSWORD+` no deben estar configuradas o deben tener valores vacíos.*
+====
+
+
+== Instalación de {stackstate-product-name}
+
+La instalación de los gráficos de {stackstate-product-name} Helm en un entorno air-gapped requiere anular los registros utilizados en las URL de las imágenes Docker. Esta guía sigue la configuración de xref:/k8s-suse-rancher-prime#_installation[Instalación], pero utiliza archivos Helm pre-descargados y registros Docker privados.
+
+[tabs]
+====
+Método recomendado::
++
+--
+[NOTE]
+=====
+El método de configuración `+global.suseObservability+` está disponible a partir de la versión `+2.8.0+`. Para versiones anteriores, utilice el método heredado.
+=====
+
+Cree un archivo `+values.yaml+` con su configuración, incluido el registro privado:
+
+[source,yaml]
+----
+global:
+  # Required: Your private registry URL
+  imageRegistry: "registry.example.com:5043"
+
+  suseObservability:
+    # Required: Your {stackstate-product-name} license key
+    license: "YOUR-LICENSE-KEY"
+
+    # Required: Base URL for {stackstate-product-name}
+    baseUrl: "https://observability.example.com"
+
+    # Required: Sizing profile
+    sizing:
+      profile: "150-ha"
+
+    # Required: Plain text Admin password
+    adminPassword: "your-password"
+    # Instead of adminPassword you can provide a bcrypt hashed password with adminPasswordBcrypt
+    # Generate with: htpasswd -bnBC 10 "" "your-password" | tr -d ':\n'
+    # adminPasswordBcrypt: "$2a$10$..."
+
+    # Optional: Pull secret for private registry authentication
+    pullSecret:
+      username: "registry-user"
+      password: "registry-pass"
+----
+
+Despliegue utilizando el archivo de gráficos descargado:
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values values.yaml \
+    suse-observability \
+    suse-observability-A.B.C.tgz
+----
+
+[NOTE]
+=====
+Con el método recomendado, sólo tiene que descargar el gráfico `+suse-observability+` (no `+suse-observability-values+`). La lista de imágenes se extrae del gráfico principal.
+=====
+--
+Método heredado (obsoleto)::
++
+--
+[WARNING]
+=====
+Este método está obsoleto. Para instalaciones nuevas, utilice el método recomendado anteriormente. Para las instalaciones existentes que utilizan este método, consulte la xref:/setup/upgrade-stackstate/migrate-to-global-mode.adoc[guía de migración] para pasar al nuevo formato de configuración.
+=====
+
+Cree un archivo private-registry.yaml con el siguiente contenido:
+
+[,yaml]
+----
+global:
+  imageRegistry: registry.example.com:5043
+----
+
+*Comando para Generar el Archivo de Valores del Cuadro de Mando:*
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+    --set license='<licenseKey>' \
+    --set baseUrl='<baseURL>' \
+    --set rancherUrl='<rancherURL>' \
+    --set sizing.profile='<sizing.profile>' \
+    suse-observability-values suse-observability-values-L.M.N.tgz \
+    --output-dir $VALUES_DIR
+----
+
+Si el registro privado requiere autenticación, incluya el nombre de usuario y la contraseña pull secret:
+
+.helm_template.sh
+[,text]
+----
+export VALUES_DIR=.
+helm template \
+    --set license='<licenseKey>' \
+    --set baseUrl='<baseURL>' \
+    --set rancherUrl='<rancherURL>' \
+    --set sizing.profile='<sizing.profile>' \
+    --set pullSecret.username='registry-user' \
+    --set pullSecret.password='registry-pass' \
+    suse-observability-values suse-observability-values-L.M.N.tgz \
+    --output-dir $VALUES_DIR
+----
+
+*Despliegue del cuadro de mando {stackstate-product-name}:*
+
+.helm_deploy.sh
+[,text]
+----
+helm upgrade --install \
+    --namespace suse-observability \
+    --create-namespace \
+    --values $VALUES_DIR/suse-observability-values/templates/baseConfig_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/sizing_values.yaml \
+    --values $VALUES_DIR/suse-observability-values/templates/affinity_values.yaml \
+    --values private-registry.yaml \
+    suse-observability \
+    suse-observability-A.B.C.tgz
+----
+--
+====
+
+*Validación de la implantación:*
+
+[,bash]
+----
+kubectl get pod -n suse-observability
+----
