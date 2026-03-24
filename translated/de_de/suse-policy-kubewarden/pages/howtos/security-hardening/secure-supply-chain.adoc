@@ -1,0 +1,625 @@
+include::partial$variables.adoc[]
+= Sichere Lieferkette
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Konfigurieren Sie {project-name}, um die Integrität von Artefaktsignaturen und Zulassungsrichtlinien zu überprüfen.
+:doc-persona: ["kubewarden-user", "kubewarden-operator", "kubewarden-distributor", "kubewarden-integrator"]
+:doc-topic: ["distributing-policies", "secure-supply-chain"]
+:doc-type: ["howto"]
+:doctype: book
+:keywords: ["{project-name}", "kubewarden", "kubernetes", "sichere Lieferkette", "Infrastruktur"]
+:sidebar_label: Sichere Lieferkette
+:sidebar_position: 40
+:current-version: {page-origin-branch}
+
+Eine sichere Infrastruktur für die Lieferkette kann die Gültigkeit ihrer Teile bzw. Verbindungen überprüfen. Es ermöglicht Benutzern und Entwicklern, die Überwachungskette ihrer Softwarekomponenten oder Artefakte zu zeigen. Es ist ein aktiver Ansatz zur Abschwächung von Sicherheitsproblemen.
+
+Das Projekt https://sigstore.dev/[Sigstore] bietet hierfür Werkzeuge und Infrastruktur. Sie dient der Überprüfung der Integrität der Lieferkette von Artefakten.
+
+{short-project-name} verwendet https://github.com/sigstore/cosign[`+cosign+`] zusammen mit der vom Sigstore-Projekt angebotenen Infrastruktur https://github.com/SigStore/fulcio[fulcio] undhttps://github.com/sigstore/rekor[rekor].
+
+Cluster-Betreiber können {project-name} so konfigurieren, dass nur Richtlinien ausgeführt werden, die von vertrauenswürdigen Stellen signiert wurden. Richtlinienentwickler können ihre Richtlinien signieren und sie in einem Register veröffentlichen.
+
+== Voraussetzungen
+
+In den folgenden Abschnitten müssen Sie ein paar Tools installieren. Damit können Benutzer die Signaturen von OCI-Artefakten unterschreiben und überprüfen. Die Beispiele zeigen die Verwendung vonhttps://docs.sigstore.dev/quickstart/quickstart-cosign/[`+cosign+`] undhttps://github.com/kubewarden/kwctl[`+kwctl+`] zum Signieren und Prüfen von Richtlinien.
+
+Um GitHub zum Signieren von Richtlinien zu verwenden, müssen Siehttps://docs.sigstore.dev/cosign/system_config/installation/#github-actions[GitHub-Aktionen] installieren.
+
+Das schlüssellose Signieren verwendet die Standardinstanzen https://github.com/SigStore/fulcio[fulcio] undhttps://github.com/sigstore/rekor[rekor], die vom Sigstore-Projekt bereitgestellt werden. Lesen Sie in der Sigstore-Dokumentation nach, wie Sie bei Bedarf Ihre eigene Infrastruktur dafür nutzen können.
+
+== Unterzeichnungsrichtlinien
+
+{short-project-name} empfiehlt die Verwendung des Dienstprogrammshttps://github.com/sigstore/cosign[Mitunterzeichnung] von Sigstore zur von Policen. Dieser Abschnitt zeigt eine schlüsselbasierte Methode zum Signieren von Richtlinien. Dazu müssen Sie ein privat-öffentliches Schlüsselpaar erzeugen. Anhand der generierten Schlüssel lässt sich überprüfen, ob die signierten Artefakte vom erwarteten Benutzer stammen. Um dieses Schlüsselpaar zu erzeugen, verwenden Sie den Befehl `+cosign generate-key-pair+`:
+
+[subs="+attributes",bash]
+----
+cosign generate-key-pair
+----
+
+Daraufhin werden Sie aufgefordert, ein Passwort einzugeben und zu bestätigen:
+
+[subs="+attributes",console]
+----
+Enter password for private key: ●●●●●●●●
+Enter password for private key again: ●●●●●●●●
+Private key written to cosign.key
+Public key written to cosign.pub
+----
+
+Jetzt können Sie diesen Schlüssel zum Unterzeichnen von Policen verwenden.
+
+Geben Sie die Datei mit dem privaten Schlüssel nicht weiter, `+cosign.key+`. Dies ist eine geheime Datei, die nur vom Eigentümer des Schlüssels zum Signieren von Richtlinien verwendet werden darf.
+
+Um eine Richtlinie zu signieren, können Sie `+cosign sign+` verwenden und das Befehlszeilenargument `+--key+` mit Ihrer privaten Schlüsseldatei übergeben:
+
+[subs="+attributes",bash]
+----
+cosign sign --key cosign.key ghcr.io/kubewarden/policies/user-group-psp:latest
+----
+
+Das Ergebnis ist eine Aufforderung zur Eingabe des Passworts für den angegebenen privaten Schlüssel:
+
+[subs="+attributes",console]
+----
+an error occurred: no provider found for that key reference, will try to load key from disk...
+Enter password for private key: ●●●●●●●●
+Pushing signature to: ghcr.io/kubewarden/policies/user-group-psp
+----
+
+Dieser Befehl signiert die Richtlinie, indem er ein neues Signaturobjekt erstellt. Das Signaturobjekt wird dann zusammen mit der Richtlinie in die Registrierung hochgeladen. Jetzt ist die Richtlinie bereit für die Verwendung in einer {short-project-name} -Installation mit Signaturprüfung.
+
+Dieselbe Richtlinie kann mehrfach signiert werden, von demselben oder von verschiedenen Benutzern. Diese Signaturen werden dem Signaturobjekt zusammen mit der ursprünglichen Signatur hinzugefügt.
+
+Weitere Informationen zur Funktionsweise des Signiervorgangs finden Sie in derhttps://docs.sigstore.dev/[Projektdokumentation].
+
+=== Schlüssellose Unterzeichnung
+
+Häufig werden Richtlinien automatisch über CI/CD-Pipelines erstellt. Dies erschwert den Prozess der Schlüsselerzeugung. Dieser schlüssellose Arbeitsablauf von Sigstore ist für diese Situationen gedacht. Anstelle von langlebigen singenden Schlüsseln verwendet der schlüssellose Arbeitsablauf Zertifizierungsstellen (CAs) und Zertifikatsketten.
+
+Sie binden den generierten, kurzlebigen Zertifikatsschlüssel in eine Vertrauenskette ein. Dies geschieht durch eine Identitätsprüfung, um die Identität des Unterzeichners zu bestätigen. Die Lebensdauer des Zertifikatsschlüssels ist lang genug, um die Signierung zu ermöglichen. Die Identitätsprüfung erfolgt durch Authentifizierung gegenüber einem OpenID Connect (OIDC)-Anbieter. Die öffentliche Fulcio-Infrastruktur von Sigstore bildet die Vertrauenskette.
+
+Zum Signieren wird das Sigstore-Dienstprogramm für Mitsignieren verwendet.
+
+[subs="+attributes",bash]
+----
+$ cosign sign ghcr.io/kubewarden/policies/user-group-psp:latest
+----
+
+.Gegenzeichnungsleistung
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+Generating ephemeral keys...
+Retrieving signed certificate...
+Your browser will now be opened to:
+https://oauth2.sigstore.dev/auth/auth?access_type=online&client_id=sigstore&code_challenge=<REDACTED>&code_challenge_method=S256&nonce=<REDACTED>&redirect_uri=http%3A%2F%2Flocalhost%3A34021%2Fauth%2Fcallback&response_type=code&scope=openid+email&state=<REDACTED>
+client.go:196: root pinning is not supported in Spec 1.0.19
+Successfully verified SCT...
+tlog entry created with index: 1819248
+Pushing signature to: ghcr.io/kubewarden/policies/user-group-psp
+----
+
+======
+
+Dadurch wird die Richtlinie signiert und in das Repository übertragen. Es werden keine Schlüssel als Nebenprodukt erzeugt.
+
+=== Wie man Artefakte in GitHub-Workflows signiert
+
+Bei der Verwendung des schlüssellosen Signierens in einer GitHub-Aktion muss sich der Benutzer auf `+cosign+` nicht bei einem OIDC-Anbieter anmelden. Ein GitHub-Token ist während der Ausführung des GitHub-Workflows verfügbar. Er wird zur Authentifizierung des Benutzers und zur Erzeugung der ephemeren Schlüssel verwendet. Der Signiervorgang ist der gleiche wie im schlüssellosen Modus. Dies ist ein Beispiel dafür, wie das Projekt {short-project-name} seine Richtlinien unterzeichnet:
+
+.YAML zur Beschreibung von {short-project-name} policy signing
+[%collapsible]
+======
+
+[,yaml]
+----
+# ... beginning of the workflow file ...
+jobs:
+  build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    steps:
+      # ... other steps building the container image ...
+      -
+      name: Login to GitHub Container Registry
+      uses: docker/login-action@v1
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ inputs.GITHUB_TOKEN }}
+      -
+      name: Publish Wasm policy artifact to OCI registry with the 'latest' tag
+      shell: bash
+      if: ${{ startsWith(github.ref, 'refs/heads/') }}
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        set -ex
+        echo Pushing policy to OCI container registry
+        IMMUTABLE_REF=$(kwctl push -o json ${{ PATH_TO_BUILT_WASM_FILE }} ghcr.io/myorg/policies/my-great-policy:latest | jq -r .immutable_ref)
+        echo Keyless signing of policy using cosign
+        cosign sign ${IMMUTABLE_REF}
+      # ... other build steps ...
+
+# ... remainder of the workflow file ...
+----
+
+======
+
+[NOTE]
+====
+
+Richtlinienentwickler können die {short-project-name} Richtlinienvorlagen verwenden. Sie verfügen über GitHub-Aktionen zur Erstellung, Prüfung, Unterzeichnung und Veröffentlichung von Richtlinien.
+
+====
+
+
+== Unterschriften der Listing-Politik
+
+Sie können die Unterschrift in einer veröffentlichten Richtlinie mit `+kwctl inspect+` überprüfen. Hier werden die Informationen über die Police und ihre Unterschriften wie unten dargestellt angezeigt:
+
+.kwctl inspect registry://ghcr.io/kubewarden/policies/us....
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kwctl inspect registry://ghcr.io/kubewarden/policies/user-group-psp:v0.2.0
+Details
+title:              psp-user-group
+description:        Short description
+author:             José Guilherme Vanz <jguilhermevanz@suse.com>
+url:                https://github.com/kubewarden/user-group-psp-policy
+source:             https://github.com/kubewarden/user-group-psp-policy
+license:            Apache-2.0
+mutating:           true
+context aware:      false
+execution mode:     kubewarden-wapc
+protocol version:   1
+
+Annotations
+io.kubewarden.kwctl 0.2.5-rc2
+
+Rules
+────────────────────
+---
+- apiGroups:
+    - ""
+  apiVersions:
+    - v1
+  resources:
+    - pods
+  operations:
+    - CREATE
+────────────────────
+
+Usage
+This policy enforce the user and group used in the container.
+
+Sigstore signatures
+
+Digest:                            sha256:026af67682a85d424e7d95db460171635f5c3957d67b53499bece912cc0413cc
+Media type:                        application/vnd.dev.cosign.simplesigning.v1+json
+Size:                              258
+Annotations
+dev.sigstore.cosign/certificate    -----BEGIN CERTIFICATE-----
+                                   MIIDRzCCAsygAwIBAgITbPUZlUFkkAHtbzc3rzC/3zXj1DAKBggqhkjOPQQDAzAq
+                                   MRUwEwYDVQQKEwxzaWdzdG9yZS5kZXYxETAPBgNVBAMTCHNpZ3N0b3JlMB4XDTIy
+                                   MDIyNTE2MzAwMloXDTIyMDIyNTE2NDAwMVowEzERMA8GA1UEChMIc2lnc3RvcmUw
+                                   WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR/O5c6ZI5BzBweoEIam4uWu5fqzHx0
+                                   3PTCgfXyyvIjorz9wX08bsndkHdWfFObU+PztbxX78An43Yw9/fHtO93o4IB5jCC
+                                   AeIwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMAwGA1UdEwEB
+                                   /wQCMAAwHQYDVR0OBBYEFCP/v7NEJQglbDmyC5VMgnvhiuBUMB8GA1UdIwQYMBaA
+                                   FFjAHl+RRaVmqXrMkKGTItAqxcX6MHgGA1UdEQRxMG+GbWh0dHBzOi8vZ2l0aHVi
+                                   LmNvbS9rdWJld2FyZGVuL2dpdGh1Yi1hY3Rpb25zLy5naXRodWIvd29ya2Zsb3dz
+                                   L3JldXNhYmxlLXJlbGVhc2UtcG9saWN5LXJ1c3QueW1sQHJlZnMvaGVhZHMvdjEw
+                                   NgYKKwYBBAGDvzABAwQoMmJiMGQ4NjZjMzFmOGMyZTQ3NDMxMDI4M2ExNmFkMWFi
+                                   NjBlZjA1YjAuBgorBgEEAYO/MAEFBCBrdWJld2FyZGVuL3VzZXItZ3JvdXAtcHNw
+                                   LXBvbGljeTAcBgorBgEEAYO/MAEEBA5SZWxlYXNlIHBvbGljeTASBgorBgEEAYO/
+                                   MAECBARwdXNoMDkGCisGAQQBg78wAQEEK2h0dHBzOi8vdG9rZW4uYWN0aW9ucy5n
+                                   aXRodWJ1c2VyY29udGVudC5jb20wHgYKKwYBBAGDvzABBgQQcmVmcy90YWdzL3Yw
+                                   LjIuMDAKBggqhkjOPQQDAwNpADBmAjEAyGQbNCkOifStO7yCCfF8yXyc144ANn2x
+                                   Ty92WYC0pTaVhviOED47fgD6TncKf+92AjEAjBfjLmCG/Mwrh8t+gfHJEAWWEc9Q
+                                   +j9NR4wF66uABS/TTh5CYlrnIuqSD+GBHGwV
+                                   -----END CERTIFICATE-----
+dev.sigstore.cosign/timestamp      {"signatures":[{"keyid":"b6710623a30c010738e64c5209d367df1c0a18cf90e6ab5292fb01680f83453d","sig":"3046022100f666a7f4b3d85d8003f2c166e27827dfa0c4ab9282e9dab19485f4e702c61700022100dfe826e0edab5f80a40f08cc87b87777a4db30775d85684fe4950e797f2f565c"}],"signed":{"_type":"timestamp","spec_version":"1.0","version":15,"expires":"2022-03-08T19:14:05Z","meta":{"snapshot.json":{"length":1655,"hashes":{"sha256":"36cf063d0717f6dc03e23027721adcd69b684d293956d3a1a7db7b0848f711d7","sha512":"f90946d0a2dc58dae4505cfb91517a40299adf9e8719f52af187e2025aad69fcdeaeded271ec25db24869841c16fbe24f3fc56f56af8fdbb8808dccec4636b64"},"version":15}}}}
+dev.sigstore.cosign/bundle         {"SignedEntryTimestamp":"MEUCIEfu4qR+HsexSDk5h2QXMduvoRCX10J+4CLQWtYw5VD6AiEAyYCEjvJdv2Sr5tZ4LApnddH/4v+CoV1QkuvbCQ3iIUM=","Payload":{"body":"eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJraW5kIjoiaGFzaGVkcmVrb3JkIiwic3BlYyI6eyJkYXRhIjp7Imhhc2giOnsiYWxnb3JpdGhtIjoic2hhMjU2IiwidmFsdWUiOiIwMjZhZjY3NjgyYTg1ZDQyNGU3ZDk1ZGI0NjAxNzE2MzVmNWMzOTU3ZDY3YjUzNDk5YmVjZTkxMmNjMDQxM2NjIn19LCJzaWduYXR1cmUiOnsiY29udGVudCI6Ik1FWUNJUUNXNWZRZ1BUUTdaTlNuRkhzbHJOTlFrS2dTSVFpOGNSMTU5UEExc0s4VGlRSWhBSndMOWJPcUJKbVduN1lLZG9Tem80c2xPZ2s4SkJCanFYZHNydDNyeVF0QiIsInB1YmxpY0tleSI6eyJjb250ZW50IjoiTFMwdExTMUNSVWRKVGlCRFJWSlVTVVpKUTBGVVJTMHRMUzB0Q2sxSlNVUlNla05EUVhONVowRjNTVUpCWjBsVVlsQlZXbXhWUm10clFVaDBZbnBqTTNKNlF5OHplbGhxTVVSQlMwSm5aM0ZvYTJwUFVGRlJSRUY2UVhFS1RWSlZkMFYzV1VSV1VWRkxSWGQ0ZW1GWFpIcGtSemw1V2xNMWExcFlXWGhGVkVGUVFtZE9Wa0pCVFZSRFNFNXdXak5PTUdJelNteE5RalJZUkZSSmVRcE5SRWw1VGxSRk1rMTZRWGROYkc5WVJGUkplVTFFU1hsT1ZFVXlUa1JCZDAxV2IzZEZla1ZTVFVFNFIwRXhWVVZEYUUxSll6SnNibU16VW5aamJWVjNDbGRVUVZSQ1oyTnhhR3RxVDFCUlNVSkNaMmR4YUd0cVQxQlJUVUpDZDA1RFFVRlNMMDgxWXpaYVNUVkNla0ozWlc5RlNXRnROSFZYZFRWbWNYcEllREFLTTFCVVEyZG1XSGw1ZGtscWIzSjZPWGRZTURoaWMyNWthMGhrVjJaR1QySlZLMUI2ZEdKNFdEYzRRVzQwTTFsM09TOW1TSFJQT1ROdk5FbENOV3BEUXdwQlpVbDNSR2RaUkZaU01GQkJVVWd2UWtGUlJFRm5aVUZOUWsxSFFURlZaRXBSVVUxTlFXOUhRME56UjBGUlZVWkNkMDFFVFVGM1IwRXhWV1JGZDBWQ0NpOTNVVU5OUVVGM1NGRlpSRlpTTUU5Q1FsbEZSa05RTDNZM1RrVktVV2RzWWtSdGVVTTFWazFuYm5ab2FYVkNWVTFDT0VkQk1WVmtTWGRSV1UxQ1lVRUtSa1pxUVVoc0sxSlNZVlp0Y1ZoeVRXdExSMVJKZEVGeGVHTllOazFJWjBkQk1WVmtSVkZTZUUxSEswZGlWMmd3WkVoQ2VrOXBPSFphTW13d1lVaFdhUXBNYlU1MllsTTVjbVJYU214a01rWjVXa2RXZFV3eVpIQmtSMmd4V1dreGFGa3pVbkJpTWpWNlRIazFibUZZVW05a1YwbDJaREk1ZVdFeVduTmlNMlI2Q2t3elNteGtXRTVvV1cxNGJFeFlTbXhpUjFab1l6SlZkR05IT1hOaFYwNDFURmhLTVdNelVYVmxWekZ6VVVoS2JGcHVUWFpoUjFab1draE5kbVJxUlhjS1RtZFpTMHQzV1VKQ1FVZEVkbnBCUWtGM1VXOU5iVXBwVFVkUk5FNXFXbXBOZWtadFQwZE5lVnBVVVROT1JFMTRUVVJKTkUweVJYaE9iVVpyVFZkR2FRcE9ha0pzV21wQk1WbHFRWFZDWjI5eVFtZEZSVUZaVHk5TlFVVkdRa05DY21SWFNteGtNa1o1V2tkV2RVd3pWbnBhV0VsMFdqTktkbVJZUVhSalNFNTNDa3hZUW5aaVIyeHFaVlJCWTBKbmIzSkNaMFZGUVZsUEwwMUJSVVZDUVRWVFdsZDRiRmxZVG14SlNFSjJZa2RzYW1WVVFWTkNaMjl5UW1kRlJVRlpUeThLVFVGRlEwSkJVbmRrV0U1dlRVUnJSME5wYzBkQlVWRkNaemM0ZDBGUlJVVkxNbWd3WkVoQ2VrOXBPSFprUnpseVdsYzBkVmxYVGpCaFZ6bDFZM2sxYmdwaFdGSnZaRmRLTVdNeVZubFpNamwxWkVkV2RXUkROV3BpTWpCM1NHZFpTMHQzV1VKQ1FVZEVkbnBCUWtKblVWRmpiVlp0WTNrNU1GbFhaSHBNTTFsM0NreHFTWFZOUkVGTFFtZG5jV2hyYWs5UVVWRkVRWGRPY0VGRVFtMUJha1ZCZVVkUllrNURhMDlwWmxOMFR6ZDVRME5tUmpoNVdIbGpNVFEwUVU1dU1uZ0tWSGs1TWxkWlF6QndWR0ZXYUhacFQwVkVORGRtWjBRMlZHNWpTMllyT1RKQmFrVkJha0ptYWt4dFEwY3ZUWGR5YURoMEsyZG1TRXBGUVZkWFJXTTVVUW9yYWpsT1VqUjNSalkyZFVGQ1V5OVVWR2cxUTFsc2NtNUpkWEZUUkN0SFFraEhkMVlLTFMwdExTMUZUa1FnUTBWU1ZFbEdTVU5CVkVVdExTMHRMUW89In19fX0=","integratedTime":1645806604,"logIndex":1506651,"logID":"c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d"}}
+dev.sigstore.cosign/chain          -----BEGIN CERTIFICATE-----
+                                   MIIB9zCCAXygAwIBAgIUALZNAPFdxHPwjeDloDwyYChAO/4wCgYIKoZIzj0EAwMw
+                                   KjEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MREwDwYDVQQDEwhzaWdzdG9yZTAeFw0y
+                                   MTEwMDcxMzU2NTlaFw0zMTEwMDUxMzU2NThaMCoxFTATBgNVBAoTDHNpZ3N0b3Jl
+                                   LmRldjERMA8GA1UEAxMIc2lnc3RvcmUwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAT7
+                                   XeFT4rb3PQGwS4IajtLk3/OlnpgangaBclYpsYBr5i+4ynB07ceb3LP0OIOZdxex
+                                   X69c5iVuyJRQ+Hz05yi+UF3uBWAlHpiS5sh0+H2GHE7SXrk1EC5m1Tr19L9gg92j
+                                   YzBhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBRY
+                                   wB5fkUWlZql6zJChkyLQKsXF+jAfBgNVHSMEGDAWgBRYwB5fkUWlZql6zJChkyLQ
+                                   KsXF+jAKBggqhkjOPQQDAwNpADBmAjEAj1nHeXZp+13NWBNa+EDsDP8G1WWg1tCM
+                                   WP/WHPqpaVo0jhsweNFZgSs0eE7wYI4qAjEA2WB9ot98sIkoF3vZYdd3/VtWB5b9
+                                   TNMea7Ix/stJ5TfcLLeABLE4BNJOsQ4vnBHJ
+                                   -----END CERTIFICATE-----
+dev.cosignproject.cosign/signature MEYCIQCW5fQgPTQ7ZNSnFHslrNNQkKgSIQi8cR159PA1sK8TiQIhAJwL9bOqBJmWn7YKdoSzo4slOgk8JBBjqXdsrt3ryQtB
+----
+
+======
+
+== Überprüfung von Richtlinien
+
+Ob eine Police korrekt signiert ist, können Sie mit `+cosign+` oder `+kwctl+` überprüfen. Sie verfügen über ähnliche Befehlszeilenoptionen zur Überprüfung von Richtliniensignaturen. Um die Binärsignatur mit einem Schlüssel zu prüfen, verwenden Sie `+kwctl+` wie folgt:
+
+[subs="+attributes",console]
+----
+$ kwctl verify -k cosign.pub ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T14:49:31.878180Z  INFO kwctl::verify: Policy successfully verified
+----
+
+Oder `+cosign+`:
+
+[subs="+attributes",console]
+----
+$ cosign verify --key cosign.pub ghcr.io/kubewarden/policies/user-group-psp:latest
+
+Verification for ghcr.io/kubewarden/policies/user-group-psp:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+  - Any certificates were verified against the Fulcio roots.
+
+[{"critical":{"identity":{"docker-reference":"ghcr.io/kubewarden/policies/user-group-psp"},"image":{"docker-manifest-digest":"sha256:af520a8ccee03811d426c48634b7007f1220c121cc23e14962bb64510585ce97"},"type":"cosign container image signature"},"optional":null}]
+----
+
+== Konfigurieren des Richtlinienservers zur Prüfung von Richtliniensignaturen
+
+Sie können {short-project-name} mit einer `+ConfigMap+` so konfigurieren, dass nur vertrauenswürdige Richtlinien ausgeführt werden. Die Struktur von `+ConfigMap+` ist in derxref:reference/verification-config.adoc#_signature_configuration_reference[Signaturkonfigurationsreferenz] beschrieben. Es wird verwendet, um eine Richtlinie mit `+kwctl+` zu überprüfen. Die`+ConfigMap+` sollte unter dem Feld`+verification-config+` die zulässigen Konfigurationen festlegen.
+
+Sie möchten beispielsweise Richtlinien ausführen, die von der Organisation {short-project-name} GitHub signiert wurden. Ein Beispiel `+ConfigMap+` für dieses Szenario wäre dann:
+
+.$ cat kubewarden_signatures.yaml
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ cat kubewarden_signatures.yaml
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+
+# note that the data is stored under verification-config field
+$ kubectl  create configmap my-signatures-configuration --from-file=verification-config=kubewarden_signatures.yaml
+
+$ kubectl get configmap -o yaml my-signatures-configuration
+apiVersion: v1
+data:
+  verification-config: |
+    apiVersion: v1
+    allOf:
+      - kind: githubAction
+        owner: kubewarden
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2022-03-29T18:27:20Z"
+  name: my-signatures-configuration
+  namespace: default
+  resourceVersion: "10279"
+  uid: d53e1c56-1fee-45de-92f5-9bd73b8cead4
+----
+
+======
+
+Sie können `+kwctl scaffold verification-config+` verwenden, um eine Standardkonfigurationsdatei für die Überprüfung von `+ConfigMap+` zu erstellen:
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold verification-config > verification_config.yaml
+----
+
+.$ cat verification_config.yaml
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kwctl scaffold verification-config > verification_config.yaml
+$ cat verification_config.yaml
+# Default {short-project-name} verification config
+#
+# With this config, the only valid policies are those signed by {short-project-name}
+# infrastructure.
+#
+# This config can be saved to its default location (for this OS) with:
+#   kwctl scaffold verification-config > /home/kubewarden/.config/kubewarden/verification-config.yml
+#
+# Providing a config in the default location enables Sigstore verification.
+# See https://docs.kubewarden.io for more Sigstore verification options.
+---
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+    repo: ~
+    annotations: ~
+anyOf: ~
+----
+
+======
+
+Sie können diese `+verification_config.yml+` verwenden, um die `+ConfigMap+` zu erstellen.
+
+[subs="+attributes",console]
+----
+$ kubectl create configmap my-signatures-configuration --from-file==verification_config.yaml
+configmap/my-signatures-configuration created
+----
+
+Dann können wir mit `+get configmap+` prüfen.
+
+.kubectl get configmap
+[%collapsible]
+======
+
+[subs="+attributes",console]
+----
+$ kubectl get configmap -o yaml my-signatures-configuration
+apiVersion: v1
+data:
+  verification-config: |+
+    # Default {short-project-name} verification config
+    #
+    # With this config, the only valid policies are those signed by {short-project-name}
+    # infrastructure.
+    #
+    # This config can be saved to its default location (for this OS) with:
+    #   kwctl scaffold verification-config > /home/kubewarden/.config/kubewarden/verification-config.yml
+    #
+    # Providing a config in the default location enables Sigstore verification.
+    # See https://docs.kubewarden.io for more Sigstore verification options.
+    ---
+    apiVersion: v1
+    allOf:
+      - kind: githubAction
+        owner: kubewarden
+        repo: ~
+        annotations: ~
+    anyOf: ~
+
+kind: ConfigMap
+metadata:
+  creationTimestamp: "2022-04-07T11:54:27Z"
+  name: my-signatures-configuration
+  namespace: default
+  resourceVersion: "1317"
+  uid: 74dec846-7fcd-4b4b-8184-700c816f685a
+----
+
+======
+
+Nachdem Sie die `+ConfigMap+` erstellt haben, um die Signaturanforderungen zu speichern, können Sie einen Policy Server konfigurieren. Um mit der Validierung von Policy-Signaturen zu beginnen, setzen Sie den Namen`+ConfigMap+` in das Feld `+verificationConfig+` (markiert mit ➀).
+
+[subs="+attributes",yaml]
+----
+apiVersion: policies.kubewarden.io/v1alpha2
+kind: PolicyServer
+metadata:
+  name: default
+  finalizers:
+    - kubewarden
+spec:
+  image: ghcr.io/kubewarden/policy-server:v0.2.7
+  serviceAccountName: policy-server
+  replicas: 1
+//highlight-next-l
+  # name of the confimap with the signatures requirements
+  verificationConfig: your_configmap <1>
+  env:
+    - name: KUBEWARDEN_ENABLE_METRICS
+      value: "1"
+    - name: KUBEWARDEN_LOG_FMT
+      value: otlp
+    - name: "KUBEWARDEN_LOG_LEVEL"
+      value: "info"
+----
+<1> `+verificationConfig+`
+
+Wenn Sie den Standard-Richtlinienserver über das `+kubewarden-defaults+` Helm-Diagramm bereitstellen, konfigurieren Sie dieses Feld, indem Sie den Namen `+ConfigMap+` im Wert`+policyServer.verificationConfig+` festlegen.
+
+Jetzt lehnt der PolicyServer nicht vertrauenswürdige AdmissionPolicies und ClusterAdmissionPolicies ab, indem er sich weigert, zu starten. Sie müssen die nicht vertrauenswürdige Richtlinie entfernen oder die Signaturanforderungen für einen laufenden PolicyServer ändern.
+
+== Referenz der Signaturkonfiguration
+
+Sie können die in einer Datei enthaltenen Signaturanforderungen validieren. Hier ist ein Beispiel:
+
+.Eine Datei mit Unterschriftsanforderungen
+[%collapsible]
+======
+[subs="+attributes",yaml]
+----
+apiVersion: v1
+
+allOf: <1>
+  - kind: githubAction
+    owner: kubewarden   # mandatory
+    annotations:
+      env: prod
+
+anyOf: # at least `+anyOf.minimumMatches+` are required to match <2>
+  minimumMatches: 2 # default is 1
+  signatures:
+  - kind: pubKey
+    owner: flavio # optional
+    key: .... # mandatory
+    annotations:  # optional
+      env: prod
+      foo: bar
+  - kind: pubKey
+    owner: victor # optional
+    key: .... # mandatory
+  - kind: genericIssuer
+    issuer: https://github.com/login/oauth
+    subject:
+      equal: alice@example.com
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      equal: https://github.com/flavio/policy-secure-pod-images/.github/workflows/release.yml@refs/heads/main
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/flavio/
+  - kind: genericIssuer
+    issuer: https://token.actions.githubusercontent.com
+    subject:
+      urlPrefix: https://github.com/kubewarden # <- it will be post-fixed with `+/+` for security reasons
+  - kind: githubAction
+    owner: flavio   # mandatory
+    repo: policy1 # optional
+  - kind: pubKey
+    owner: alice # optional
+    key: .... # mandatory
+----
+<1> `+allOf+`
+<2> `+anyOf+`
+======
+
+=== Validierung der Unterschrift
+
+Die obige Konfiguration enthält die beiden hervorgehobenen Abschnitte, `+allOf+` und`+anyOf+`:
+
+* `+allOf+`: Der Richtlinie wird nur dann vertraut, wenn alle hier aufgeführten Signaturanforderungen erfüllt sind.
+* `+anyOf+`: Die Richtlinie ist vertrauenswürdig, wenn das Kriterium `+minimumMatches+` erfüllt ist.
+
+Oben ist das Feld `+minimumMatches+` 2. Es müssen also mindestens zwei der Unterschriftenanforderungen erfüllt sein. Der Standardwert für das Feld `+minimumMatches+` ist `+1+`.
+
+Alle erforderlichen Unterschriften von `+allOf+` *und* die Mindestanzahl von`+anyOf+` müssen erfüllt sein.
+
+=== Validierung des öffentlichen Schlüssels
+
+Um zu prüfen, ob eine Richtlinie mit dem richtigen öffentlichen Schlüssel signiert ist, geben Sie die Schlüsseldaten und den Eigentümer des Schlüssels an. In diesem Beispiel setzen Sie `+kind+`, auf `+pubKey+` und `+key+` hat den öffentlichen Schlüssel. Das Eigentümerfeld ist optional, kann aber nützlich sein, um zu klären, wer der Eigentümer des Schlüssels ist.
+
+[subs="+attributes",yaml]
+----
+  - kind: pubKey
+    owner: bob # optional
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+      BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+      -----END PUBLIC KEY-----
+----
+
+=== Schlüssellose Signaturvalidierung
+
+Eine im Keyless-Modus signierte Richtlinie hat keinen öffentlichen Schlüssel, der verifiziert werden muss. Sie können die Richtlinie weiterhin mit den OIDC-Daten überprüfen, die während des Signiervorgangs verwendet wurden. Dazu ist es notwendig, die Signaturvalidierung als `+genericIssuer+` zu definieren.
+
+Es ist möglich, Informationen anhand der Unterschrift zu überprüfen:
+
+* `+issuer+`(obligatorisch): Dies entspricht dem Attribut `+Issuer+` in dem von Fulcio erstellten Zertifikat. Hier wird der OIDC angezeigt, der zur Unterzeichnung der Police verwendet wird.
+* `+subject+`: Feld, das verwendet wird, um das Attribut `+Subject+` im Zertifikat von Fulcio abzugleichen. Das Feld `+Subject+` (Fulcio) enthält den Benutzer, der für die Authentifizierung gegenüber dem OIDC-Anbieter verwendet wird. Das Verifizierungsfeld, `+subject+`, kann eines von zwei Unterfeldern haben:
+ ** `+equal+`: Die `+Subject+` (Fulcio) aus dem Zertifikat muss mit dem Wert in der Signaturvalidierung übereinstimmen;
+ ** `+urlPrefix+`: Dem Wert des Feldes `+Subject+` (Fulcio) des Zertifikats muss der in der Signaturvalidierung definierte Wert vorangestellt werden.
+
+[NOTE]
+====
+
+Sowohl auf `+cosign verify+` als auch auf `+kwctl inspect+` können Informationen über schlüssellose Signaturen angezeigt werden.
+
+====
+
+
+Diese Konfiguration bedeutet zum Beispiel, dass die Richtlinie eine schlüssellose Signatur von Alice unter Verwendung des GitHub OIDC haben muss:
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://github.com/login/oauth
+  subject:
+    equal: alice@example.com
+----
+
+Bei dieser Konfiguration muss die Richtlinie in GitHub-Aktionen signiert werden, und zwar von einem Repository, das dem GitHub-Benutzer `+flavio+` gehört:
+
+[subs="+attributes",yaml]
+----
+- kind: genericIssuer
+  issuer: https://token.actions.githubusercontent.com
+  subject:
+    urlPrefix: https://github.com/flavio
+----
+
+=== GitHub-Aktionen Signaturprüfung
+
+Die "Art" `+githubAction+` dient dazu, in GitHub-Aktionen signierte Richtlinien zu validieren.
+Sie können dies auch mit der Art `+genericIssuer+` tun. Um den Prozess der Unterschriftsanforderung zu vereinfachen, verwenden Sie zwei zusätzliche Felder für `+githubAction+`:
+
+* `+owner+` (obligatorisch): GitHub-ID des Benutzers oder der Organisation, dem/der vertraut werden soll
+* `+repo+`: der Name des zu vertrauenden Repository
+
+Zum Beispiel könnte der letzte Ausschnitt unter Verwendung von `+genericIssuer+` wie folgt umgeschrieben werden:
+
+[subs="+attributes",yaml]
+----
+- kind: githubAction
+  owner: flavio
+----
+
+=== Validierung von Unterschriftenvermerken
+
+Alle Signaturtypen können weitere optionale Validierungsfelder haben, `+annotations+`.
+Bei diesen Feldern handelt es sich um Schlüssel/Wert-Daten, die während des Signiervorgangs hinzugefügt werden.
+
+Mit {short-project-name} können Sie überprüfen, ob die Richtliniensignatur von vertrauenswürdigen Benutzern stammt *und* ob diese bestimmte Anmerkungen haben.
+
+Bei der nächsten Validierung werden 2 Bedingungen für die Police geprüft:
+
+* dass sie mit einem bestimmten Schlüssel signiert ist
+* er hat eine Anmerkung zur Produktionsumgebung
+
+[subs="+attributes",yaml]
+----
+- kind: pubKey
+  key: |
+    -----BEGIN PUBLIC KEY-----
+    MBFKHFDGHKIJH0CAQYIKoZIzj0DAQcDQgAEX0HFTtCfTtPmkx5p1RbDE6HJSGAVD
+    BVDF6SKFSF87AASUspkQsN3FO4iyWodCy5j3o0CdIJD/KJHDJFHDFIu6sA==
+    -----END PUBLIC KEY-----
+  annotations:
+    environment: production
+----
+
+=== Verwendung einer Signaturprüfungs-Konfigurationsdatei zur Prüfung eines OCI-Artefakts für Richtlinien
+
+Sie können testen, ob eine Richtlinie die Überprüfung besteht, indem Sie die Konfigurationsdatei zur Überprüfung verwenden.
+Verwenden Sie das Flag `+--verification-config-path+` des Befehls `+kwctl verify+` 
+
+[subs="+attributes",console]
+----
+$ cat signatures_requirements.yaml
+apiVersion: v1
+allOf:
+  - kind: pubKey
+    key: |
+      -----BEGIN PUBLIC KEY-----
+      MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5Q+cN1Jj2S7N05J4AXnqwP2DyzSg
+      Mc+raYce2Wthrd30MSgFtoh5ADAkCd/nML2Nx8UD9KBuASRb0gG5jXqgMQ==
+      -----END PUBLIC KEY-----
+
+$ kwctl verify --verification-config-path signatures_requirements.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T17:34:37.847169Z  INFO kwctl::verify: Policy successfully verified
+----
+
+In diesem letzten Beispiel wird geprüft, ob eine bestimmte Richtlinie von der Organisation {short-project-name} stammt:
+
+[subs="+attributes",console]
+----
+$ cat kubewarden_signatures.yaml
+apiVersion: v1
+allOf:
+  - kind: githubAction
+    owner: kubewarden
+
+$ kwctl verify --verification-config-path kubewarden_signatures.yaml ghcr.io/kubewarden/policies/user-group-psp:latest
+2022-03-29T18:07:39.062292Z  INFO kwctl::verify: Policy successfully verified
+----
