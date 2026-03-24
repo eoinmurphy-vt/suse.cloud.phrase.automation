@@ -1,72 +1,72 @@
-= Rastreamento de requisições
+= Rastreamento de solicitações
 :revdate: 2025-07-10
 :page-revdate: {revdate}
-:description: SUSE Observability
+:description: Observabilidade do SUSE
 
-== Observabilidade através de balanceadores de carga, malhas de serviço e entre clusters
+== Observabilidade por meio de balanceadores de carga, malhas de serviço e entre clusters
 
-O SUSE Observability pode observar conexões entre serviços e pods em diferentes clusters, ou quando as conexões passam por uma malha de serviço ou balanceador de carga. A observação dessas conexões é feita através de `request tracing`. Requisições rastreadas resultarão em conexões na xref:/use/views/k8s-topology-perspective.adoc[perspectiva de topologia], para fornecer insights sobre as dependências em um aplicativo e ajudar a encontrar a causa raiz de um incidente.
+O SUSE Observability pode observar conexões entre serviços e pods em diferentes clusters, ou quando as conexões passam por um Service Mesh ou Load Balancer. A observação dessas conexões é feita pelo site `request tracing`. As solicitações rastreadas resultarão em conexões na xref:/use/views/k8s-topology-perspective.adoc[perspectiva da topologia], para fornecer informações sobre as dependências em um aplicativo e ajudar a encontrar a causa raiz de um incidente.
 
 == Como funciona
 
-O rastreamento de requisições é feito injetando um cabeçalho único (o cabeçalho `X-Request-ID`) em todo o tráfego HTTP. Esse cabeçalho único é observado tanto no cliente quanto no servidor através de uma sonda eBPF instalada com o SUSE Observability Agent. Essas observações são enviadas para o SUSE Observability, que utiliza as observações para entender quais clientes e servidores estão conectados.
+O rastreamento de solicitações é feito com a injeção de um cabeçalho exclusivo (o cabeçalho `X-Request-ID` ) em todo o tráfego HTTP. Esse cabeçalho exclusivo é observado tanto no cliente quanto no servidor por meio de uma sonda eBPF instalada com o SUSE Observability Agent. Essas observações são enviadas ao SUSE Observability, que as utiliza para entender quais clientes e servidores estão conectados.
 
-Os cabeçalhos `X-Request-Id` são <<_enabling_the_trace_header_injection_sidecar,injetados>> por um proxy sidecar que pode ser injetado automaticamente pelo SUSE Observability Agent. O sidecar é injetado por um https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#_mutatingadmissionwebhook[webhook mutável], que injeta o sidecar em cada pod para o qual a anotação `http-header-injector.stackstate.io/inject: enabled` está definida. A injeção de sidecar não é suportada no OpenShift.
+Os cabeçalhos `X-Request-Id` são <<_enabling_the_trace_header_injection_sidecar,injetados>> por um proxy sidecar que pode ser injetado automaticamente pelo SUSE Observability Agent. O sidecar é injetado por um https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#_mutatingadmissionwebhook[webhook mutante], que injeta o sidecar em cada pod para o qual a anotação `http-header-injector.stackstate.io/inject: enabled` está definida. A injeção de sidecar não é compatível com o OpenShift.
 
-Também é possível adicionar o cabeçalho `X-Request-Id` se sua aplicação <<_add_the_trace_header_id_to_an_existing_proxy,já tiver um proxy ou LoadBalancer>>, estiver implantada em um cluster Kubernetes habilitado para <<_add_the_trace_header_id_with_envoy_filter,malha de serviço Istio>> ou através de <<_instrument_your_application,instrumentação do seu próprio código>>. A vantagem disso é que o proxy sidecar extra não é necessário.
+Também é possível adicionar o cabeçalho `X-Request-Id` se o seu aplicativo <<_add_the_trace_header_id_to_an_existing_proxy,já tiver um proxy ou LoadBalancer>>, se for implantado em um cluster Kubernetes habilitado para <<_add_the_trace_header_id_with_envoy_filter,malha de serviço Istio>> ou por meio da <<_instrument_your_application,instrumentação do seu próprio código>>. A vantagem disso é que o proxy sidecar extra não é necessário.
 
-== Habilitando a injeção do cabeçalho de rastreamento sidecar
+== Ativação do sidecar de injeção de cabeçalho de rastreamento
 
-Habilitar a injeção do cabeçalho de rastreamento é um processo em duas etapas:
+A ativação da injeção do cabeçalho de rastreamento é um processo de duas etapas:
 
-. Instale o webhook mutável no cluster adicionando `--set httpHeaderInjectorWebhook.enabled=true` à invocação do helm upgrade ao instalar o agente SUSE Observability. Por padrão, o injetor de sidecar gera seu próprio certificado autoassinado, exigindo funções de cluster para instalar esses certificados no cluster. Também é possível xref:/setup/agent/k8sTs-agent-request-tracing-certificates.adoc[gerenciar seus próprios certificados] em um ambiente mais restrito.
-. Para cada pod que possui um endpoint que processa requisições http(s), coloque a anotação `http-header-injector.stackstate.io/inject: enabled` para que o sidecar seja injetado.
+. Instale o webhook mutante no cluster adicionando `--set httpHeaderInjectorWebhook.enabled=true` à invocação do helm upgrade ao instalar o agente do SUSE Observability. Por padrão, o injetor sidecar gera seu próprio certificado autoassinado, exigindo que as funções do cluster o instalem no cluster. Também é possível xref:/setup/agent/k8sTs-agent-request-tracing-certificates.adoc[gerenciar seus próprios certificados] em um ambiente mais restrito.
+. Para cada pod que tenha um ponto de extremidade que processe solicitações http(s), coloque a anotação `http-header-injector.stackstate.io/inject: enabled` para que o sidecar seja injetado.
 
 [CAUTION]
 ====
-*Habilitar o webhook mutável só terá efeito após a reinicialização do pod*
+*A ativação do webhook de mutação só terá efeito após a reinicialização do pod*
 
-Se a anotação for colocada antes que o webhook seja instalado. Instalar o webhook não tem efeito até que os pods sejam reiniciados.
+Se a anotação for colocada antes da instalação do webhook. A instalação do webhook não tem efeito até que os pods sejam reiniciados.
 ====
 
 
-=== Desabilitando a injeção do cabeçalho de rastreamento
+=== Desativação da injeção de cabeçalho de rastreamento
 
-Desabilitar a injeção do cabeçalho de rastreamento pode ser feito com o processo reverso:
+A desativação da injeção do cabeçalho de rastreamento pode ser feita com o processo inverso:
 
 . Remova a anotação `http-header-injector.stackstate.io/inject: enabled` de todos os pods.
-. Reimplante o Agente de Observabilidade SUSE sem a configuração `--set httpHeaderInjectorWebhook.enabled=true`.
+. Reimplante o SUSE Observability Agent sem a configuração `--set httpHeaderInjectorWebhook.enabled=true`.
 
 [CAUTION]
 ====
-*Desabilitar o webhook mutável só terá efeito após a reinicialização do pod*
+*A desativação do webhook de mutação só terá efeito após a reinicialização do pod*
 
-Se o passo 1 for pulado e apenas o webhook mutável for desabilitado, todos os pods precisam ser reiniciados para que o sidecar seja removido.
+Se a etapa 1 for ignorada e somente o webhook de mutação for desativado, todos os pods precisarão ser reiniciados para que o sidecar seja removido.
 ====
 
 
 === Sobrecarga
 
-O rastreamento de requisições adiciona uma pequena quantidade fixa de sobrecarga de CPU para cada cabeçalho de requisição HTTP que é injetado e observado. A quantidade exata depende do sistema em que é executado, portanto, é aconselhável habilitar esse recurso primeiro em um ambiente de aceitação para observar o impacto antes de mover para a produção. O proxy sidecar utiliza um mínimo de 25Mb de memória por pod com o qual é implantado, até um máximo de 40Mb.
+O rastreamento de solicitações adiciona uma quantidade pequena e fixa de sobrecarga de CPU para cada cabeçalho de solicitação HTTP que é injetado e observado. O valor exato depende do sistema em que ele é executado, portanto, é aconselhável ativar esse recurso primeiro em um ambiente de aceitação para observar o impacto antes de passar para a produção. O proxy sidecar ocupa um mínimo de 25 Mb de memória por pod com o qual é implantado, até um máximo de 40 Mb.
 
-== Adicione o id do cabeçalho de rastreamento a um proxy existente
+== Adicionar o ID do cabeçalho de rastreamento a um proxy existente
 
 Para adicionar o cabeçalho `X-Request-Id` de um proxy existente, duas propriedades são importantes:
 
-. Cada par de requisição/resposta deve receber um ID único.
-. O cabeçalho `X-Request-Id` deve ser adicionado tanto à requisição quanto à resposta, para ser observado tanto no cliente quanto no servidor.
+. Cada par de solicitação/resposta deve ter um ID exclusivo.
+. O cabeçalho `X-Request-Id` deve ser adicionado à solicitação e à resposta, para ser observado no cliente e no servidor.
 
-=== Adicione o id do cabeçalho de rastreamento no envoy
+=== Adicionar o ID do cabeçalho de rastreamento no envoy
 
-No envoy, o cabeçalho `X-Request-Id` pode ser habilitado configurando `generate_request_id: true` e `always_set_request_id_in_response: true` para https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto[conexões HTTP]
+No envoy, o cabeçalho `X-Request-Id` pode ser ativado com a configuração de `generate_request_id: true` e `always_set_request_id_in_response: true` para https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto[conexões http]
 
 == Istio
 
-Um https://istio.io/latest/docs/reference/config/networking/envoy-filter/[Filtro Envoy] pode ser usado para definir o cabeçalho de rastreamento para o Envoy.
+Um https://istio.io/latest/docs/reference/config/networking/envoy-filter/[filtro] pode ser usado para definir o cabeçalho do rastreamento para o Envoy.
 
-=== Adicione o id do cabeçalho de rastreamento com o filtro envoy
+=== Adicione o ID do cabeçalho de rastreamento com o filtro envoy
 
-Use `kubectl` para aplicar a seguinte definição ao cluster Kubernetes,
+Use `kubectl` para aplicar a seguinte definição ao cluster do Kubernetes,
 
 [,yaml]
 ----
@@ -96,37 +96,37 @@ spec:
   priority: 0
 ----
 
-== Instrumente sua aplicação
+== Instrumentar seu aplicativo
 
-Também é possível adicionar o cabeçalho `X-Request-Id` tanto do lado do cliente a cada solicitação, quanto do lado do servidor a cada resposta. É importante garantir que cada solicitação/resposta receba um valor `X-Request-Id` único. Além disso, o `X-Request-Id` requer que, se um ID já estiver presente em uma solicitação, a resposta deve conter esse mesmo ID.
+Também é possível adicionar o cabeçalho `X-Request-Id` do lado do cliente a cada solicitação ou do lado do servidor a cada resposta. É importante garantir que cada solicitação/resposta receba um valor exclusivo `X-Request-Id`. Além disso, o site `X-Request-Id` exige que, se uma ID já estiver presente em uma solicitação, a resposta deverá conter essa mesma ID.
 
 == Sistemas/tecnologias suportados
 
 * HTTP/1.0 e HTTP/1.1 com keepAlive
 * Injeção de cabeçalho de rastreamento e observação de rastreamento em tráfego não criptografado
-* Observação de rastreamento para tráfego criptografado com OpenSSL
-* Injeção de cabeçalho de rastreamento ao lado do LinkerD
+* Observação do rastreamento do tráfego criptografado OpenSSL
+* Injeção de cabeçalho de rastreamento junto com o LinkerD
 * Qualquer LoadBalancer que encaminhe o cabeçalho `X-Request-Id` em solicitações e respostas
 * Qualquer solução de rede entre clusters que encaminhe o cabeçalho `X-Request-Id` em solicitações e respostas
 
 == Problemas conhecidos
 
-=== Nenhum sidecar é injetado para meus pods
+=== Nenhum sidecar é injetado em meus pods
 
-Para garantir que sua configuração esteja correta, primeiro valide se os seguintes passos foram realizados:
+Para ter certeza de que sua configuração está correta, primeiro valide se as etapas a seguir foram executadas:
 
-* A flag `--set httpHeaderInjectorWebhook.enabled=true` foi definida durante a instalação do agente
-* O pod tem `http-header-injector.stackstate.io/inject: enabled` definido
+* O sinalizador `--set httpHeaderInjectorWebhook.enabled=true` foi definido durante a instalação do agente
+* O pod tem `http-header-injector.stackstate.io/inject: enabled` set
 * O pod foi reiniciado
 
-Se isso não resolver o problema, o seguinte pode ser a causa:
+Se isso não resolver o problema, o problema pode ser o seguinte:
 
 ==== Políticas de rede do cluster
 
-O cluster pode ter políticas de rede configuradas, impedindo que o apiserver do plano de controle do Kubernetes contate o mutatingvalidationwebhook que injeta o sidecar. Para validar isso, verifique os logs do kube-apiserver, que estão no namespace kube-system ou podem ser gerenciados pelo seu provedor de nuvem. Um erro como o seguinte deve ser encontrado nesses logs:
+O cluster pode ter políticas de rede configuradas, impedindo que o apiserver do plano de controle do kubernetes entre em contato com o mutatingvalidationwebhook que injeta o sidecar. Para validar isso, examine os logs do kube-apiserver, que está no namespace kube-system ou pode ser gerenciado pelo seu provedor de nuvem. Um erro como o seguinte deve ser encontrado nesses registros:
 
 ----
 Failed calling webhook, failing open stackstate-agent-http-header-injector-webhook.stackstate.io: failed calling webhook "stackstate-agent-http-header-injector-webhook.stackstate.io": failed to call webhook: Post "https://stackstate-agent-http-header-injector.monitoring.svc:8443/mutate?timeout=10s": context deadline exceeded
 ----
 
-Se isso acontecer, certifique-se de adaptar suas políticas de rede do cluster para que o apiserver possa alcançar o mutatingvalidationwebhook.
+Se isso acontecer, certifique-se de adaptar as políticas de rede do cluster de modo que o apiserver possa acessar o mutatingvalidationwebhook.
