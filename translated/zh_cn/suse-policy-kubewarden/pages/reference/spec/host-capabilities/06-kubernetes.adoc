@@ -1,0 +1,145 @@
+include::partial$variables.adoc[]
+= Kubernetes 功能
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: 使用{project-name} 的上下文感知策略和 waPC 协议访问集群资源，探索 Kubernetes 的功能。
+:doc-persona: ["kubewarden-policy-developer"]
+:doc-topic: ["writing-policies", "specification", "host-capabilities", "kubernetes-capabilities"]
+:doc-type: ["reference"]
+:keywords: ["kubewarden"、"kubernetes"、"策略规范"、"kubernetes 能力"]
+:sidebar_label: Kubernetes 功能
+:current-version: {page-origin-branch}
+
+{project-name} 上下文感知策略需要从运行这些策略的 Kubernetes 集群访问资源。
+为此，{short-project-name} SDK 提供了使用 waPC 通信协议与主机系统对话的函数，以获取有关集群的数据。
+
+== waPC 协议合同
+
+在内部，SDK 依赖于策略主机环境所提供的这些功能：
+
+* `+list_resources_by_namespace+` :给定一个资源类型和一个命名空间，列出其中定义的该类型的所有资源。
+它不能用于列出整个集群的资源，如`+Namespace+` 。
+* `+list_resources_all+`:给定一个资源类型，列出整个集群中定义的该类型的所有资源。
+可用于列出整个集群的资源，如`+Namespace+` 。
+* `+get_resource+`:查找由给定资源类型、给定名称和可选命名空间标识符标识的准确资源。
+
+这种来宾主机通信使用标准的 waPC 主机调用机制。
+任何执行 waPC 通信机制的客户机都能向主机索取这些信息。
+
+在执行从客户机到主机的调用时，waPC 有以下函数参数：
+
+* 装订 `+kubewarden+`
+* 命名空间 `+kubernetes+`
+* 操作 -`+list_resources_all+`,`+list_resources_by_namespace+`, 或 `+get_resource+`
+* 有效载荷 - 输入有效载荷 - 见下文
+
+并返回：
+
+* 有效载荷 - 输出有效载荷 - 见下文
+
+根据合同或惯例，策略可以通过以下方式调用主机来检索 Kubernetes 集群信息：
+
+=== 操作 `+list_resources_all+`
+
+==== 输入
+
+[,hcl]
+----
+# API Group version. Use `+v1+` for the `+core+` group and
+  # `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Resource kind
+  "kind": string,
+  # Label selector to filter the resources
+  "label_selector": string,
+  # Field selector to filter the resources
+  "field_selector": string,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+----
+
+==== 输出
+
+返回一个 Kuberneteshttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#types-kinds[`+List+`]是相同类型的 Kubernetes 对象的集合。
+
+[IMPORTANT]
+====
+使用此 API 函数获取整个集群的资源（如命名空间）
+====
+
+
+=== 操作 `+list_resources_by_namespace+`
+
+==== 输入
+
+[,hcl]
+----
+{
+  # API Group version. Use `+v1+` for the `+core+` group and
+  # `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Resource kind
+  "kind": string,
+  # Namespace where the requested resource lives in
+  "namespace": string,
+  # Label selector to filter the resources
+  "label_selector": string,
+  # Field selector to filter the resources
+  "field_selector": string,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+}
+----
+
+==== 输出
+
+返回一个 Kuberneteshttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#types-kinds[`+List+`]是相同类型的 Kubernetes 对象的集合。
+
+[CAUTION]
+====
+当该 API 函数用于获取全集群资源（如命名空间）时，会返回错误信息。
+在处理整个集群的资源时，请使用`+list_resources_all+` 。
+====
+
+
+=== 操作 `+get_resource+`
+
+==== 缓存
+
+`+get_resource+` 操作的结果默认缓存 5 秒钟，以提高性能并减少 Kubernetes API 服务器上不必要的负载。
+
+当需要新数据时，使用`+disable_cache+` 字段绕过缓存。
+
+==== 输入
+
+[,hcl]
+----
+{
+  # API Group version. Use `+v1+` for the `+core+` group
+  # and `+groupName/groupVersion+` for all other groups
+  "api_version": string,
+  # Singular PascalCase name of the resource
+  "kind": string,
+  # Namespace scoping the search
+  "namespace": string,
+  # The name of the resource
+  "name": string,
+  # Disable caching of results obtained from Kubernetes API Server
+  "disable_cache": bool,
+  # Field masks: A list of fields to include in the response.
+  #
+  # If strictly defined, the host will prune the Kubernetes resource to contain *only*
+  # the specified fields, reducing memory usage and serialization overhead.
+  "field_masks": [string]
+}
+----
+
+==== 输出
+
+结果 `+GET /apis/$api_version/namespaces/$namespace/$kind/$name+`
