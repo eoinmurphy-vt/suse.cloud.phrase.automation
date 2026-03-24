@@ -1,44 +1,44 @@
-= Erste Schritte mit Open Telemetrie auf Kubernetes
+= Erste Schritte mit Open Telemetry auf Kubernetes
 :revdate: 2025-07-10
 :page-revdate: {revdate}
 :description: {stackstate-product-name}
 
-Dieser Leitfaden bietet Anweisungen zur Überwachung einer Anwendung.
+Dieser Leitfaden enthält Anweisungen zur Überwachung einer Anwendung.
 
-* Die überwachte Anwendung/Last, die in Cluster A läuft.
-* Der Open Telemetrie-Collector, der in der Nähe der beobachteten Anwendung(en) läuft, also in Cluster A, und die Daten an {stackstate-product-name} sendet.
-* {stackstate-product-name}, das in Cluster B läuft, oder SUSE Cloud Observability.
+* Die überwachte Anwendung/Workload, die in Cluster A läuft.
+* Der Open Telemetry Collector läuft in der Nähe der beobachteten Anwendung(en), also in Cluster A, und sendet die Daten an {stackstate-product-name}.
+* {stackstate-product-name} die in Cluster B ausgeführt wird, oder SUSE Cloud Observability.
 
-image::otel/open-telemetry-collector-kubernetes.png[Container-Instrumentierung mit Open Telemetrie über den Collector, der als Kubernetes-Deployment läuft]
+image::otel/open-telemetry-collector-kubernetes.png[Container-Instrumentierung mit Open Telemetry über einen Kollektor, der als Kubernetes-Bereitstellung läuft]
 
-== Der Open Telemetrie-Collector
+== Der offene Telemetriesammler
 
 [NOTE]
 ====
-Für eine Produktionsumgebung wird dringend empfohlen, den Collector zu installieren, da er es Ihrem Service ermöglicht, Daten schnell auszulagern, und der Collector sich um weitere Aufgaben wie Wiederholungsversuche, Batch-Verarbeitung, Verschlüsselung oder sogar die Filterung sensibler Daten kümmern kann.
+Für eine Produktionseinrichtung wird dringend empfohlen, den Collector zu installieren, da er es Ihrem Dienst ermöglicht, Daten schnell zu entladen, und der Collector zusätzliche Aufgaben wie Wiederholungsversuche, Stapelverarbeitung, Verschlüsselung oder sogar die Filterung sensibler Daten übernehmen kann.
 ====
 
-Installieren Sie den OTel (Open Telemetrie) Collector in Cluster A und konfigurieren Sie ihn, um:
+Installieren Sie den OTel-Kollektor (Open Telemetry) in Cluster A und konfigurieren Sie ihn so:
 
-* Daten von potenziell vielen instrumentierten Anwendungen zu empfangen.
-* Gesammelte Daten mit Kubernetes-Attributen anzureichern.
-* Metriken für Traces zu generieren.
-* Die Daten an {stackstate-product-name} weiterzuleiten, einschließlich der Authentifizierung mit dem API-Schlüssel.
+* Empfang von Daten aus möglicherweise vielen instrumentierten Anwendungen.
+* Anreicherung der gesammelten Daten mit Kubernetes-Attributen.
+* Erzeugen Sie Metriken für Traces.
+* Leiten Sie die Daten an {stackstate-product-name} weiter, einschließlich der Authentifizierung mit dem API-Schlüssel.
 
-NOTE: {stackstate-product-name} versucht auch, die Daten erneut zu senden, wenn es Verbindungsprobleme gibt.
+NOTE: {stackstate-product-name} versucht auch, bei Verbindungsproblemen erneut Daten zu senden.
 
-=== Erstellen Sie ein Service-Token
+=== Erstellen eines Service-Tokens
 
 Es gibt zwei Möglichkeiten, ein Service-Token zu erstellen:
 
-* **{stackstate-product-name} UI** - Öffnen Sie das Hauptmenü, indem Sie oben links auf dem Bildschirm klicken, und gehen Sie zu `+StackPacks+` > `+Open Telemetry+`.  Wenn Sie dies noch nicht getan haben, klicken Sie auf die `+INSTALL+`-Schaltfläche. Klicken Sie auf die `+CREATE NEW SERVICE TOKEN+`-Schaltfläche und kopieren Sie den Wert in Ihre Zwischenablage.
-* **{stackstate-product-name} CLI** - siehe xref:/use/security/k8s-service-tokens.adoc#_manage_service_tokens[Service-Token verwalten]
+* **{stackstate-product-name} UI** - öffnen Sie das Hauptmenü, indem Sie oben links auf den Bildschirm klicken und zu `+StackPacks+` > `+Open Telemetry+` gehen.  Falls Sie dies noch nicht getan haben, klicken Sie auf die Schaltfläche `+INSTALL+`. Klicken Sie auf die Schaltfläche `+CREATE NEW SERVICE TOKEN+` und kopieren Sie den Wert in Ihre Zwischenablage.
+* **{stackstate-product-name} CLI** - siehe xref:/use/security/k8s-service-tokens.adoc#_manage_service_tokens[Verwaltung von Dienst-Tokens]
 
-Der Wert des Service-Tokens muss dort verwendet werden, wo die folgenden Anweisungen `+<SERVICE_TOKEN>+` erwähnen.
+Der Wert des Service-Tokens muss verwendet werden, wenn in den nachstehenden Anweisungen `+<SERVICE_TOKEN>+` erwähnt wird.
 
-=== Erstellen Sie den Namespace und ein Secret für das Service-Token.
+=== Erstellen Sie den Namensraum und ein Geheimnis für das Service-Token
 
-Installieren Sie im `+open-telemetry+` Namespace und verwenden Sie das Service-Token:
+Installieren Sie im Namespace `+open-telemetry+` und verwenden Sie das Service-Token:
 
 [,bash]
 ----
@@ -48,16 +48,16 @@ kubectl create secret generic open-telemetry-collector \
     --from-literal=API_KEY='<SERVICE_TOKEN>'
 ----
 
-=== Konfigurieren und installieren Sie den Collector.
+=== Konfigurieren und installieren Sie den Kollektor
 
-Wir installieren den Collector mit einem Helm-Chart, das vom Open Telemetrie-Projekt bereitgestellt wird. Stellen Sie sicher, dass Sie das Helm-Chart-Repository von Open Telemetrie konfiguriert haben:
+Wir installieren den Kollektor mit einer Helm-Karte, die vom Open Telemetry-Projekt zur Verfügung gestellt wird. Vergewissern Sie sich, dass Sie das Open Telemetry Helmkarten-Repository konfiguriert haben:
 
 [,bash]
 ----
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
 ----
 
-Erstellen Sie eine `+otel-collector.yaml+` Werte-Datei für das Helm-Chart. Hier ist ein guter Ausgangspunkt für die Verwendung mit {stackstate-product-name}, ersetzen Sie `+<otlp-suse-observability-endpoint:port>+` durch Ihren OTLP-Endpunkt (siehe xref:/setup/otel/otlp-apis.adoc[OTLP API] für Ihren Endpunkt) und fügen Sie den Namen Ihres Kubernetes-Clusters anstelle von `+<your-cluster-name>+` ein:
+Erstellen Sie eine `+otel-collector.yaml+` Wertedatei für das Helm-Diagramm. Hier ist ein guter Ausgangspunkt für die Verwendung mit {stackstate-product-name}, ersetzen Sie `+<otlp-suse-observability-endpoint:port>+` mit Ihrem OTLP-Endpunkt (siehe xref:/setup/otel/otlp-apis.adoc[OTLP-API] für Ihren Endpunkt) und fügen Sie den Namen für Ihren Kubernetes-Cluster anstelle von `+<your-cluster-name>+` ein:
 
 .otel-collector.yaml
 [,yaml]
@@ -156,10 +156,10 @@ config:
 
 [CAUTION]
 ====
-*Verwenden Sie denselben Clusternamen wie für die Installation des {stackstate-product-name} Agenten*, wenn Sie auch den {stackstate-product-name} Agenten mit dem Kubernetes Stackpack verwenden. Die Verwendung eines anderen Clusternamens führt zu einer leeren Trace-Perspektive für Kubernetes-Komponenten und macht es insgesamt viel schwieriger, Informationen für {stackstate-product-name} und Ihre Benutzer zu korrelieren.
+*Verwenden Sie denselben Clusternamen wie bei der Installation des {stackstate-product-name} Agenten*, wenn Sie auch den {stackstate-product-name} Agenten mit dem Kubernetes-Stackpack verwenden. Die Verwendung eines anderen Clusternamens führt zu einer leeren Trace-Perspektive für Kubernetes-Komponenten und erschwert insgesamt die Korrelation von Informationen für {stackstate-product-name} und Ihre Benutzer.
 ====
 
-Installieren Sie den Collector mit der Konfigurationsdatei:
+Installieren Sie den Kollektor mit Hilfe der Konfigurationsdatei:
 
 [,bash]
 ----
@@ -168,48 +168,48 @@ helm upgrade --install opentelemetry-collector open-telemetry/opentelemetry-coll
   --namespace open-telemetry
 ----
 
-Der Collector bietet viele weitere Konfigurationsmöglichkeiten für Receiver, Prozessoren und Exporter. Für weitere Details siehe unsere xref:/setup/otel/collector.adoc[Collector-Seite]. Im Produktivbetrieb werden häufig große Mengen an Spans generiert. Richten Sie daher xref:/setup/otel/sampling.adoc[Sampling] ein.
+Der Collector bietet eine Menge weiterer Konfigurationsempfänger, -verarbeiter und -exporteure, weitere Details finden Sie auf unserer xref:/setup/otel/collector.adoc[Collector-Seite]. Bei der Verwendung in der Produktion werden oft große Mengen an Spans erzeugt. Richten Sie daher eine xref:/setup/otel/sampling.adoc[Stichprobe] ein.
 
-== Sammeln Sie Telemetriedaten von Ihrer Anwendung.
+== Sammeln Sie Telemetriedaten von Ihrer Anwendung
 
-Der gängige Weg, Telemetriedaten zu sammeln, besteht darin, Ihre Anwendung mit den Open Telemetrie SDKs zu instrumentieren.
+Die übliche Methode zur Erfassung von Telemetriedaten ist die Instrumentierung Ihrer Anwendung mit den Open Telemetry SDKs.
 
 * xref:/setup/otel/instrumentation/java.adoc[Java]
 * xref:/setup/otel/instrumentation/dot-net.adoc[.NET]
 * xref:/setup/otel/instrumentation/node.js.adoc[Node.js]
 
-Für andere Sprachen folgen Sie der Dokumentation auf https://opentelemetry.io/docs/languages/[opentelemetry.io] und stellen Sie sicher, dass Sie den SDK-Exporter konfigurieren, um Daten an den Collector zu senden, den Sie gerade installiert haben, indem Sie xref:/setup/otel/instrumentation/sdk-exporter-config.adoc[diese Anweisungen] befolgen.
+Für andere Sprachen folgen Sie der Dokumentation auf https://opentelemetry.io/docs/languages/[opentelemetry.io] und stellen Sie sicher, dass Sie den SDK-Exporter so konfigurieren, dass er Daten an den soeben installierten Collector sendet, indem Sie xref:/setup/otel/instrumentation/sdk-exporter-config.adoc[diesen Anweisungen] folgen.
 
-== Ergebnisse anzeigen
+== Die Ergebnisse anzeigen
 
-Gehen Sie zu {stackstate-product-name} und stellen Sie sicher, dass das Open Telemetrie Stackpack installiert ist (über das Hauptmenü \-> Stackpacks).
+Gehen Sie auf {stackstate-product-name} und stellen Sie sicher, dass der Open Telemetry Stackpack installiert ist (über das Hauptmenü \-> Stackpacks).
 
-Wenn Ihre Pods Verkehr erhalten, sollten Sie sie unter ihrem Dienstnamen in den Übersichten von Open Telemetry \-> Dienste und Dienstinstanzen finden können. Traces erscheinen im xref:/use/traces/k8sTs-explore-traces.adoc[Trace-Explorer] und in der xref:/use/views/k8s-traces-perspective.adoc[Trace-Perspektive] für die Komponenten Dienst und Dienstinstanz. Span-Metriken und sprachspezifische Metriken (sofern verfügbar) sind in der xref:/use/views/k8s-metrics-perspective.adoc[Metrik-Perspektive] für die Komponenten verfügbar.
+Wenn Ihre Pods Datenverkehr erhalten, sollten Sie sie unter ihrem Dienstnamen in den Übersichten Open Telemetry \-> Dienste und Dienstinstanzen finden können. Traces erscheinen im xref:/use/traces/k8sTs-explore-traces.adoc[Trace-Explorer] und in der xref:/use/views/k8s-traces-perspective.adoc[Trace-Perspektive] für die Komponenten Service und Service-Instanz. Bereichsmetriken und sprachspezifische Metriken (falls vorhanden) werden in der xref:/use/views/k8s-metrics-perspective.adoc[Metrikperspektive] für die Komponenten verfügbar.
 
-Wenn Sie auch das Kubernetes-Stackpack installiert haben, sind die instrumentierten Pods ebenfalls in der xref:/use/views/k8s-traces-perspective.adoc[Trace-Perspektive] verfügbar.
+Wenn Sie auch das Kubernetes-Stackpack installiert haben, werden die instrumentierten Pods auch in der xref:/use/views/k8s-traces-perspective.adoc[Trace-Perspektive] verfügbar sein.
 
 == Rancher RBAC
 
-Damit xref:/setup/security/rbac/rbac_rancher.adoc[Rancher RBAC] funktioniert, müssen die Telemetriedaten die folgenden Ressourcenattribute enthalten:
+Damit xref:/setup/security/rbac/rbac_rancher.adoc[Rancher RBAC] funktioniert, müssen die Telemetriedaten die folgenden Ressourcenattribute aufweisen:
 
-* `+k8s.cluster.name+` - der *Cluster* Name, wie er vom Kubernetes-Stackpack verwendet wird
-* `+k8s.namespace.name+` - ein *Namespace*, der von einem Rancher *Projekt* verwaltet wird
+* `+k8s.cluster.name+` - der *Cluster-Name*, wie er vom Kubernetes-Stackpack verwendet wird
+* `+k8s.namespace.name+` - ein *Namensraum*, der von einem *Rancher-Projekt* verwaltet wird
 
-Dies kann durch eine Konfiguration wie oben erreicht werden.  Dort injiziert das `+kubernetesAttributes+` Preset des `+opentelemetry-collector+` Helm-Charts einen `+k8sattributes+` Prozessor in jede Pipeline.
+Dies kann durch eine Konfiguration wie die oben beschriebene erreicht werden.  Die Voreinstellung `+kubernetesAttributes+` des `+opentelemetry-collector+` Helm-Diagramms fügt einen `+k8sattributes+` Prozessor in jede Pipeline ein.
 
 == Nächste Schritte
 
 ifdef::ss-ff-stackpacks2_enabled[]
-Sie können neue Charts zu Komponenten hinzufügen, zum Beispiel zum Dienst oder zur Dienstinstanz, für Ihre Anwendung, indem Sie xref:/setup/custom-integrations/metric-bindings/index.adoc[unserem Leitfaden] folgen. Es ist auch möglich, xref:use/alerting/k8s-add-monitors-cli.adoc[neue Monitore] zu erstellen, Metriken zu verwenden und xref:/use/alerting/notifications/configure.adoc[Benachrichtigungen] einzurichten, sodass Sie benachrichtigt werden, wenn Ihre Anwendung nicht verfügbar ist oder Leistungsprobleme auftreten.
+Sie können neue Diagramme zu Komponenten, z. B. dem Dienst oder der Dienstinstanz, für Ihre Anwendung hinzufügen, indem Sie xref:/setup/custom-integrations/metric-bindings/index.adoc[unserer Anleitung] folgen. Es ist auch möglich, unter Verwendung der Metriken xref:use/alerting/k8s-add-monitors-cli.adoc[neue Monitore] zu erstellen und xref:/use/alerting/notifications/configure.adoc[Benachrichtigungen] einzurichten, um benachrichtigt zu werden, wenn Ihre Anwendung nicht verfügbar ist oder Leistungsprobleme hat.
 endif::[]
 
 ifndef::ss-ff-stackpacks2_enabled[]
-Sie können neue Charts zu Komponenten hinzufügen, zum Beispiel zum Dienst oder zur Dienstinstanz, für Ihre Anwendung, indem Sie xref:/use/metrics/k8s-add-charts.adoc[unserem Leitfaden] folgen. Es ist auch möglich, xref:/use/alerting/k8s-monitors.adoc[neue Monitore] zu erstellen, Metriken zu verwenden und xref:/use/alerting/notifications/configure.adoc[Benachrichtigungen] einzurichten, sodass Sie benachrichtigt werden, wenn Ihre Anwendung nicht verfügbar ist oder Leistungsprobleme auftreten.
+Sie können neue Diagramme zu Komponenten, z. B. dem Dienst oder der Dienstinstanz, für Ihre Anwendung hinzufügen, indem Sie xref:/use/metrics/k8s-add-charts.adoc[unserer Anleitung] folgen. Es ist auch möglich, unter Verwendung der Metriken xref:/use/alerting/k8s-monitors.adoc[neue Monitore] zu erstellen und xref:/use/alerting/notifications/configure.adoc[Benachrichtigungen] einzurichten, um benachrichtigt zu werden, wenn Ihre Anwendung nicht verfügbar ist oder Leistungsprobleme hat.
 endif::[]
 
-== Weitere Informationen
+== Mehr Infos
 
-* xref:/use/security/k8s-service-tokens.adoc[Service-Token]
-* xref:/setup/otel/otlp-apis.adoc[Open Telemetrie API]
-* xref:/setup/otel/collector.adoc[Anpassen der Open Telemetrie Collector-Konfiguration]
-* xref:/setup/otel/instrumentation/README.adoc[Open Telemetrie SDKs]
+* xref:/use/security/k8s-service-tokens.adoc[Dienstmünzen]
+* xref:/setup/otel/otlp-apis.adoc[Telemetrie-API öffnen]
+* xref:/setup/otel/collector.adoc[Konfiguration des offenen Telemetriekollektors anpassen]
+* xref:/setup/otel/instrumentation/README.adoc[Offene Telemetrie-SDKs]
