@@ -1,0 +1,196 @@
+= SUSE Observability-Abfragesprache (STQL)
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observabilität
+
+== Übersicht
+
+Auf dieser Seite wird beschrieben, wie Sie die integrierte SUSE Observability Query Language (STQL) verwenden, um erweiterte Topologiekomponentenfilter zu schreiben. STQL-Abfragen werden in SUSE Observability verwendet, um xref:/use/views/k8s-filters.adoc#_advanced_topology_filters[erweiterte Topologiefilter] zu schreiben.
+
+Eine STQL-Abfrage besteht aus <<_component_filters,einzelnen Filtern>> und <<_functions,Funktionen>>. Die Abfrageausgabe ist eine Komponente oder ein Satz von Komponenten, die aus der vollständigen Topologie gefiltert wurden.
+
+== Komponenten-Filter
+
+Komponentenfilter werden in STQL auf zwei Arten verwendet:
+
+* Definieren Sie die Menge der Komponenten, die in die Abfrageausgabe aufgenommen werden sollen.
+* Geben Sie die Menge der Komponenten an, die von einer eingebauten STQL-Funktion verarbeitet werden sollen.
+
+=== Filter
+
+Die unten beschriebenen Filter können mit den verfügbaren <<_operators,Operatoren>> kombiniert werden, um eine komplexe Auswahl von Komponenten zu erreichen.
+
+|===
+| Filter | Standard | Beschreibung
+
+| `+healthstate+`
+| "alle"
+| Komponenten mit dem genannten Gesundheitszustand.
+
+| `+label+`
+| "alle"
+| Komponenten mit den genannten Bezeichnungen.
+
+| `+name+`
+| "alle"
+| Komponenten mit dem angegebenen Namen.
+
+| `+type+`
+| "alle"
+| Komponenten des angegebenen Typs.
+
+| `+identifier+`
+| "alle"
+| Komponenten mit dem angegebenen URN-Bezeichner. Der Bezeichner-Filter ist nur dann mit der grundlegenden Filterung kompatibel, wenn er mit `+identifier IN (...)+` angegeben und mit anderen Filtern unter Verwendung eines `+OR+` -Operators kombiniert wird. Wenn der eingestellte Filter mit der Basisfilterung kompatibel ist, wird die Anzahl der abgefragten Komponentenbezeichner im xref:/use/views/k8s-filters.adoc#_other_filters[Feld*Andere Filter*] angezeigt.
+
+| `+layer+`
+| "alle"
+| Komponenten in der genannten Ebene.
+
+| `+domain+`
+| "alle"
+| Komponenten in dem/den angegebenen Bereich(en).
+
+| `+environment+`
+| "alle"
+| Komponenten in der genannten Umgebung.
+|===
+
+=== Betreiber
+
+Die unten beschriebenen Operatoren können in STQL-Abfragen verwendet werden. Beachten Sie, dass boolesche Operatoren in der Standardreihenfolge ausgeführt werden: NOT, OR, AND.
+
+|===
+| Operator | Beschreibung | Beispiel
+
+| =
+| Gleichheitsabgleich
+| `+name = "cert-manager"+`
+
+| !=
+| Anpassung an die Ungleichheit
+| `+name != "coredns"+`
+
+| IN
+| Wert ist in Teilmenge
+| `+name in ("cert-manager", "cluster_autoscaler")+`
+
+| NOT
+| Negation
+| `+name NOT in ("cert-manager", "cluster_autoscaler")+`
+
+| UND und ODER
+| Filter basierend auf mehr als einer Bedingung oder Unterabfrage
+| `+name = "cert-manager" OR type = "deployment"+`
+
+| ()
+| Verwenden Sie Klammern, um Ergebnisse zu gruppieren
+| `+(name = … AND type = …) OR (…)+`
+|===
+
+Zum Beispiel:
+
+[,yaml]
+----
+# Return all components named cert-manager or coredns regardless of type:
+  name = "cert-manager" OR name = "coredns"
+
+# Return only deployments named coredns and configmaps named kube-root-ca.crt:
+  (name = "coredns" AND type = "deployment") OR (name = "kube-root-ca.crt" AND type = "configmap")
+----
+
+=== Wildcard
+
+Sie können `+*+` als vollständigen Platzhalter in einem Komponentenfilter verwenden. Es ist nicht möglich, nach teilweisen Übereinstimmungen mit einem Platzhalterzeichen zu filtern.
+
+=== Beispiele
+
+[,text]
+----
+# Select all components
+name = "*"
+
+# Select all components with name "etcd-manager"
+name = "etcd-manager"
+
+# Select all components in the "Containers" layer:
+layer = "Containers"
+
+# Select all components named either "etcd-manager" or "coredns" that don't have a label "cluster-name:prod.stackstate.io"
+name IN ("etcd-manager","coredns") NOT label = "cluster-name:prod.stackstate.io"
+
+# Select all components named "coredns" that don't have a label "bck" or "test"
+name = "cert-manager" NOT label in ("image_name:cert-manager/cert-manager-controller:testA", "image_name:cert-manager/cert-manager-controller:testB")
+----
+
+== Funktionen
+
+=== withNeighborsOf
+
+Die Funktion withNeighborsOf erweitert die STQL-Abfrageausgabe, indem sie verbundene Komponenten in der/den angegebenen Richtung(en) hinzufügt. Die Anzahl der einbezogenen Topologieebenen kann auf bis zu 15 eingestellt werden.
+
+`+withNeighborsOf(components=(), levels=, direction=)+`
+
+Um mit der grundlegenden Filterung kompatibel zu sein, kann die Funktion nur mit anderen Filtern unter Verwendung eines `+OR+` -Operators kombiniert werden. Wenn ein erweiterter Filter eine Funktion `+withNeighborsOf+` enthält, die mit der Basisfilterung kompatibel ist, wird die Anzahl der Komponenten, deren Nachbarn abgefragt werden, im xref:/use/views/k8s-filters.adoc#_other_filters[Feld*Andere Filter*] angezeigt.
+
+==== Parameter / Felder
+
+|===
+| Parameter | Standard | Erlaubte Werte | Beschreibung
+
+| `+components+`
+| "alle"
+| Ein Komponentenfilter
+| Die Komponente(n), für die die Nachbarn zurückgegeben werden sollen, siehe <<_component_filters,Komponentenfilter>>.
+
+| `+levels+`
+| 1
+| "all", [1:14]
+| Die Anzahl der Ebenen, die in die Ausgabe einbezogen werden sollen. Verwenden Sie "all", um alle verfügbaren Ebenen anzuzeigen (maximal 15)
+
+| `+direction+`
+| "beide"
+| "oben", "unten", "beides"
+| *up*: nur Komponenten, die von der/den benannten Komponente(n) abhängen, werden hinzugefügt *down*: nur Abhängigkeiten der benannten Komponente(n) werden hinzugefügt *both*: Komponenten, die von der/den benannten Komponente(n) abhängen, und Abhängigkeiten der benannten Komponente(n) werden hinzugefügt.
+|===
+
+==== Beispiel
+
+Das folgende Beispiel gibt alle Komponenten in der Anwendungsschicht zurück, die entweder den Status `+DEVIATING+` oder `+CRITICAL+` haben. Komponenten mit den Namen "appA" oder "appB" und ihre Nachbarn werden ebenfalls einbezogen.
+
+[,text]
+----
+layer = "Containers"
+  AND (healthstate = "CRITICAL" OR healthstate = "DEVIATING")
+  OR withNeighborsOf(components = (name in ("cert-manager","coredns")))
+----
+
+== Kompatibilität der einfachen und erweiterten Filter
+
+=== Einfache bis erweiterte Filterung
+
+Sie können von der einfachen zur erweiterten Filterung wechseln, indem Sie im Fenster *Ansichtsfilter* unter *Filtertopologie* die Option *Erweitert* wählen.
+
+Es ist jederzeit möglich, von der einfachen zur erweiterten Filterung zu wechseln. Die ausgewählten Basisfilter werden direkt in eine STQL-Abfrage umgewandelt.
+
+=== Erweiterte bis einfache Filterung
+
+Sie können von der erweiterten auf die einfache Filterung umschalten, indem Sie im Bereich *Filter anzeigen* unter *Filtertopologie* die Option *Basis* auswählen.
+
+Es ist nicht immer möglich, von der erweiterten Filterung zur einfachen Filterung zu wechseln. Einfache Mpst-Abfragen können in einfache Filter umgewandelt werden, einige erweiterte Abfragen sind jedoch nicht mit einfachen Filtern kompatibel.
+
+* Einfache Filter können keine Ungleichheit enthalten.
+* Einfache Filter verwenden nicht `+=+`, sie werden immer mit dem Operator `+IN+` formatiert. Zum Beispiel `+name IN ("cert-manager”)+` und nicht `+name = "cert-manager”+`.
+* Grundlegende Filter verwenden AND/OR auf eine bestimmte Weise:
+ ** Alle Elemente in jeder Basisfilterbox sind mit einem *ODER* verbunden: `+layer IN ("Containers", "Services", "Storage")+`
+ ** Die verschiedenen Basisfilterboxen sind mit einem *UND* verknüpft: `+layer IN ("Containers") AND domain IN ("cluster.test.stackstate.io”)+`
+ ** Eine Ausnahme bildet das Basisfilterfeld *"Komponenten einbeziehen"* (`+name+`), das mit den anderen Filterfeldern durch ein ODER verknüpft ist: `+layer IN ("Containers") AND domain IN ("cluster.test.stackstate.io") OR name IN ("cert-manager”)+`
+ ** Um mit der grundlegenden Filterung kompatibel zu sein, müssen die *withNeighborsOf-Funktion* und der *Bezeichnerfilter* mit anderen Filtern durch ein *ODER* verbunden werden: `+layer in ("Containers") OR identifier IN ("urn:kubernetes:/cluster.test.stackstate.io:kube-system:pod/cert-manager-7749f44bb4-vspjj:container/cert-manager")+`
+
+Wenn Sie versuchen, von einem erweiterten Filter zu einem einfachen Filter zu wechseln und die Abfrage nicht kompatibel ist, fragt SUSE Observability nach einer Bestätigung, bevor die inkompatiblen Filter entfernt werden. Wenn Sie die Filter beibehalten möchten, können Sie sich für die erweiterte Filterung entscheiden.
+
+== Siehe auch
+
+* xref:/use/views/k8s-filters.adoc#_basic_topology_filters[Grundlegende Topologiefilter]
+* xref:/use/views/k8s-filters.adoc#_topology_filtering_limits[Grenzen der Topologiefilter]
+* xref:/use/views/k8s-filters.adoc[So filtern Sie die Topologie in der SUSE Observability-Benutzeroberfläche]
