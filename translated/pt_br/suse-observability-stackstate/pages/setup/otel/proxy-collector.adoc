@@ -1,0 +1,178 @@
+= Abra o Telemetry Collector como um proxy
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: Observabilidade do SUSE
+
+A configuração normal do Opentelemetry Collector para traços de amostragem de cauda pode ser encontrada xref:/setup/otel/collector.adoc[aqui]
+
+A configuração abaixo descreve uma implementação que só faz lotes e nenhum processamento adicional de rastreamentos, métricas ou registros.  Ele foi concebido como um proxy de segurança que existe fora do cluster do SUSE Observability, mas dentro da infraestrutura de rede confiável.  As credenciais de segurança para o proxy e o SUSE Observability podem ser configuradas separadamente, adicionando uma camada de autenticação que não reside no chamador, mas no host.
+
+image::otel/aws_nodejs_otel_proxy_collector_configuration.svg[Instrumentação do AWS Lambda com Opentelemetry via coletor de proxy]
+
+[tabs]
+====
+Traefik (Padrão)::
++
+--
+
+.otel-collector.yaml
+[,yaml]
+----
+mode: deployment
+presets:
+   kubernetesAttributes:
+      enabled: true
+      # You can also configure the preset to add all the associated pod's labels and annotations to you telemetry.
+      # The label/annotation name will become the resource attribute's key.
+      extractAllPodLabels: true
+extraEnvsFrom:
+   - secretRef:
+        name: open-telemetry-collector
+image:
+   repository: "otel/opentelemetry-collector-k8s"
+
+config:
+   receivers:
+      otlp:
+         protocols:
+            grpc:
+               endpoint: 0.0.0.0:4317
+            http:
+               endpoint: 0.0.0.0:4318
+
+   exporters:
+      # Exporter for traces to traffic mirror (used by the common config)
+      otlp:
+         endpoint: <url for opentelemetry ingestion by suse observability>
+         auth:
+            authenticator: bearertokenauth
+
+   extensions:
+      bearertokenauth:
+         scheme: SUSEObservability
+         token: "${env:API_KEY}"
+
+   service:
+      extensions: [health_check, bearertokenauth]
+      pipelines:
+         traces:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+         metrics:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+         logs:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: ingress-traefik-external
+    traefik.ingress.kubernetes.io/ingress.class: ingress-traefik-external
+    traefik.ingress.kubernetes.io/backend-protocol: GRPC
+    # "12.34.56.78/32" IP address of NatGateway in the VPC where the otel data is originating from
+    #  traefik.ingress.kubernetes.io/whitelist-source-range: "12.34.56.78/32"
+  hosts:
+    - host: "otlp-collector-proxy.${CLUSTER_NAME}"
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+          port: 4317
+  tls:
+    - secretName: ${CLUSTER_NODOT}-ecc-tls
+      hosts:
+        - "otlp-collector-proxy.${CLUSTER_NAME}"
+----
+--
+
+Nginx::
++
+--
+[NOTE]
+=====
+O projeto Ingress Nginx está https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/[sendo retirado]. Os usuários são aconselhados a considerar alternativas como o Traefik.
+=====
+
+.otel-collector.yaml
+[,yaml]
+----
+mode: deployment
+presets:
+   kubernetesAttributes:
+      enabled: true
+      # You can also configure the preset to add all the associated pod's labels and annotations to you telemetry.
+      # The label/annotation name will become the resource attribute's key.
+      extractAllPodLabels: true
+extraEnvsFrom:
+   - secretRef:
+        name: open-telemetry-collector
+image:
+   repository: "otel/opentelemetry-collector-k8s"
+
+config:
+   receivers:
+      otlp:
+         protocols:
+            grpc:
+               endpoint: 0.0.0.0:4317
+            http:
+               endpoint: 0.0.0.0:4318
+
+   exporters:
+      # Exporter for traces to traffic mirror (used by the common config)
+      otlp:
+         endpoint: <url for opentelemetry ingestion by suse observability>
+         auth:
+            authenticator: bearertokenauth
+
+   extensions:
+      bearertokenauth:
+         scheme: SUSEObservability
+         token: "${env:API_KEY}"
+
+   service:
+      extensions: [health_check, bearertokenauth]
+      pipelines:
+         traces:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+         metrics:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+         logs:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [otlp]
+
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: ingress-nginx-external
+    nginx.ingress.kubernetes.io/ingress.class: ingress-nginx-external
+    nginx.ingress.kubernetes.io/backend-protocol: GRPC
+    # "12.34.56.78/32" IP address of NatGateway in the VPC where the otel data is originating from
+    #  nginx.ingress.kubernetes.io/whitelist-source-range: "12.34.56.78/32"
+  hosts:
+    - host: "otlp-collector-proxy.${CLUSTER_NAME}"
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+          port: 4317
+  tls:
+    - secretName: ${CLUSTER_NODOT}-ecc-tls
+      hosts:
+        - "otlp-collector-proxy.${CLUSTER_NAME}"
+----
+--
+====
+
+[discrete]
+=== Whitelisting de intervalo de origem de entrada
+
+Para enfatizar a função do coletor de proxy como uma medida de segurança, é recomendável usar uma lista de permissões de intervalo de origem para filtrar dados de fontes não confiáveis e/ou desconhecidas. Por outro lado, o coletor de ingestão do SUSE Observability pode ter que aceitar dados de várias fontes, e a manutenção de uma lista de permissões nesse nível não é bem dimensionada.
