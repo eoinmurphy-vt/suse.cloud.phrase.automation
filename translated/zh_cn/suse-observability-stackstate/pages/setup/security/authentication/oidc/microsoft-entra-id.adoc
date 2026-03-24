@@ -1,0 +1,59 @@
+= Microsoft Entra ID
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability 自助托管
+:experimental:
+
+== 在 Entra ID 中创建应用程序
+
+. 按照https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app?tabs=client-secret[本指南]在 Entra ID 中注册应用程序
+ .. 例如，您可以使用"\...\... "作为显示名称、 `+SUSE Observability+`
+ .. 选择`+Web+` 平台并指定重定向 URL： `+https://<your-stackstate-installation>/loginCallback?client_name=StsOidcClient+`
+ .. 添加凭据时，请使用`+client secret+` 凭据，并确保存储了密文
+. `+Prepare for development+` 中的其他部分不是必需的，但对于生产安装，您应按照这些部分设置所有者，并在可能的情况下预先批准某些范围（请参阅下一节了解 SUSE Observability 将请求的范围）。
+. 最后，使用https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims?tabs=appui#_configure_groups_optional_claims[本指南]在应用程序注册中添加组声明，确保 SUSE Observability 将接收用户的组（授权所需）。选择您要公开的组类型，本文其余部分假设您没有自定义令牌属性，并且 SUSE Observability 接收到了组标识。
+
+== 配置 SUSE Observability
+
+使用应用程序注册信息为 SUSE Observability 创建一个新的`+authentication.yaml+` 文件：
+
+----
+stackstate:
+  authentication:
+    oidc:
+      # The client id is in the list of essentials on the overview page of the App registration
+      clientId: "<Application (client) ID>"
+      secret: "<Application (client) secret>"
+      # The Directory (Tenant) ID is in the list of essentials on the overview page of the App registration
+      discoveryUri: "https://login.microsoftonline.com/<Directory (tenant) ID>/v2.0/.well-known/openid-configuration"
+      jwsAlgorithm: RS256
+      scope: ["openid", "email", "profile", "offline_access"]
+      jwtClaims:
+        usernameField: "email"
+        groupsField: groups
+    roles:
+      guest: []
+      powerUser: []
+      admin: [ "aaaaaaaa-bbbb-1111-2222-aabbccddeeff", "eeeeeeeeee-bbbb-1111-2222-aabbccddeeff" ]
+      k8sTroubleshooter: []
+----
+
+获取以下值
+
+* 应用程序（客户端）ID：在应用程序注册 "概述 "页面的 "要点 "部分
+* 应用程序（客户端）密文：在上一节步骤 1 中创建，并保存在某处
+* 目录（租户）ID：在应用程序注册 "概述 "页面的 "要点 "部分
+* 不同角色的组 ID：在 Entra ID 管理器中浏览menu:IdentityAll[Groups]。组 ID 位于标有`+Object Id+` 的第二列。决定哪些 Entra ID 组应具有哪一级权限，并将它们分配给上述 yaml 示例中各自的角色（删除 2 个示例组 id）。
+
+现在使用安装时使用的 helm 命令重新部署 SUSE Observability，但现在要包含新的`+authentication.yaml+` 文件，`+helm upgrade ... --values authentication.yaml+` 。确保升级时始终包含该文件。
+
+=== 二手瞄准镜
+
+SUSE Observability 配置为请求 4 个作用域：
+
+* openid，进行身份验证
+* 电子邮件，以识别用户
+* 配置文件，以便能够请求包含用户组的用户配置文件
+* offline_access，以延长用户登录时间而无需重新认证，并允许用户使用 SUSE Observabilities API 标记。
+
+有关详细信息，请参阅https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-permissions-and-consent[Microsoft 身份平台中的权限和同意 (learn.microsoft.com)]。
