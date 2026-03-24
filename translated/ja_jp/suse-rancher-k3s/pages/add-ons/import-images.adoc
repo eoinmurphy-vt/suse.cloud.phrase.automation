@@ -1,0 +1,80 @@
+= 画像のインポート
+:page-languages: [en、ja、ko、zh]。
+:revdate: 2026-01-05
+:page-revdate: {revdate}
+:page-aliases: import-images.adoc
+
+コンテナイメージは、containerd イメージストアによって各ノードのローカルにキャッシュされる。イメージは、ポッドが必要に応じてレジストリからプルしたり、イメージプルを使ってプリロードしたり、イメージのtarボールからインポートしたりできます。
+
+== オンデマンド画像プル
+
+Kubernetesはデフォルトで、Podがイメージを必要とするとき、そのイメージがノードにまだ存在しなければ、自動的にイメージをプルする。この動作は、Podのhttps://kubernetes.io/docs/concepts/containers/images/#image-pull-policy[image pull policy]フィールドを使用して変更できます。デフォルトの`+IfNotPresent+` ポリシーを使用する場合、containerd はアップストリーム（デフォルト）またはxref:installation/private-registry.adoc[プライベートレジストリから]イメージを取得し、イメージストアに保存します。ユーザーは、オンデマンド・イメージ・プルーを機能させるために、追加設定を適用する必要はありません。
+
+
+== インポート前の画像
+
+[IMPORTANT]
+.バージョン・ゲート
+====
+K3s実行中の画像の事前インポート機能は、2025年1月のリリースで利用可能です：v1.32.0+k3s1、v1.31.5+k3s1、v1.30.9+k3s1、v1.29.13+k3s1。それ以前は、K3は起動時にのみイメージを事前インポートしていた。
+====
+
+Kubernetes の`+imagePullPolicy+` を`+Never+` のように構成する場合、ノードへのイメージの事前インポートは不可欠である。これは、セキュリティ上の理由や、K3sノードのスピンアップにかかる時間を短縮するためです。
+
+K3sには、containerdイメージストアにイメージを事前にインポートするための2つのメカニズムがあります：
+
+[tabs,sync-group-id=import-images]
+======
+オンライン画像インポート::
++
+--
+
+ユーザーは、イメージ名を1行に1つずつ含むテキストファイルを`+/var/lib/rancher/k3s/agent/images+` ディレクトリに置くことで、containerd イメージストアにイメージをプルすることができる。テキストファイルは、K3sの起動前に配置することも、K3sの実行中に作成または変更することもできます。K3sは、CRI API経由で画像を順次取り込み、オプションでxref:installation/private-registry.adoc[registries.yaml]設定を使用する。
+
+例えば、こうだ：
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+cp example.txt /var/lib/rancher/k3s/agent/images
+----
+
+`+example.txt+` ：
+
+----
+docker.io/library/redis:latest
+docker.io/library/mysql:latest
+----
+
+数秒後、`+redis+` と`+mysql+` イメージがノードの containerd イメージストアで利用可能になる。
+
+`+sudo k3s ctr images list+` を使って、containerd イメージストアに問い合わせる。
+--
+
+オフライン画像インポート::
++
+--
+ユーザーは、`+/var/lib/rancher/k3s/agent/images+` ディレクトリにイメージの tarball を置くことで、containerd イメージストアに直接イメージをインポートできる。tarballは、K3sが起動する前に配置することも、K3sの実行中に作成または変更することもできます。K3sは必要に応じてイメージのtarボールを解凍し、イメージを抽出し、containerdイメージストアにロードする。
+
+例えば、こうだ：
+
+[,bash]
+----
+mkdir /var/lib/rancher/k3s/agent/images
+curl  https://github.com/k3s-io/k3s/releases/download/v1.33.1%2Bk3s1/k3s-airgap-images-amd64.tar.zst -O  /var/lib/rancher/k3s/agent/images/k3s-airgap-images-amd64.tar.zst
+----
+
+数秒後、イメージtarボールに含まれるイメージがノードのcontainerdイメージストアで利用可能になる。
+
+`+sudo k3s ctr images list+` を使って、containerd イメージストアに問い合わせる。
+
+これはエアギャップ環境で使用される方法である。詳細については、xref:installation/airgap.adoc[エアギャップの取り付けに関する説明書に従って]ください。
+--
+======
+
+== 画像登録の設定
+
+K3sは画像登録のために2つの選択肢をサポートしています：
+
+* xref:installation/private-registry.adoc[プライベートレジストリの構成では]、`+registries.yaml+` を使用してコンテナイメージレジストリの認証とミラーリングを構成します。
+* xref:installation/registry-mirror.adoc[Embedded Registry Mirror]は、ノード間で画像をピアツーピアで共有するために、組み込みの分散画像レジストリミラーを有効にする方法を示しています。
