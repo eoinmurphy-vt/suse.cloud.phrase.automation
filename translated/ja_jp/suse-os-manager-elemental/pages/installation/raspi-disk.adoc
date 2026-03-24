@@ -1,0 +1,53 @@
+= Raspberry Pi用生ディスクイメージの作成方法
+:revdate: 2024-09-24
+:page-revdate: {revdate}
+
+このガイドでは、SDカードに書き込み、他のインストールメディアなしで起動できるRAWディスクイメージを構築する方法を紹介します。
+
+[CAUTION]
+====
+SDカード上のデータはすべて消去されますので、重要なものが入っていないSDカードのみをご使用ください。
+
+SDカードはそれなりに大きく（32GB以上）、*高速で*なければならない（！）。
+====
+
+.SeedImageリソース
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: SeedImage
+metadata:
+  name: fire-img
+  namespace: fleet-default
+spec:
+  type: raw
+  baseImage: registry.opensuse.org/isv/rancher/elemental/staging/containers/suse/sl-micro/6.0/baremetal-os-container:latest
+  targetPlatform: linux/arm64
+  registrationRef:
+    apiVersion: elemental.cattle.io/v1beta1
+    kind: MachineRegistration
+    name: fire-nodes
+    namespace: fleet-default
+----
+
+使用しているビルドポッドのログを確認する：
+
+[,shell]
+----
+kubectl logs -n fleet-default fire-img -f -c build
+----
+
+ビルドが完了したら、wgetを使ってイメージファイルをダウンロードしよう：
+
+[,shell]
+----
+wget --no-check-certificate $(kubectl get seedimage -n fleet-default fire-img -o jsonpath="{.status.downloadURL}") -O sle-micro.arm64.raw
+----
+
+これで、`+.raw+` のイメージをSDカードに書き込むことができる。`+dd+`https://www.opensuse.org[openSUSE]には、https://en.opensuse.org/SDB:Live_USB_stick[Linux]、https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_Windows[Windows]、https://en.opensuse.org/SDB:Create_a_Live_USB_stick_using_macOS[OS X] 用に、ストレージメディアにイメージを書き込む方法が説明されています。
+
+== マシンの始動
+
+生ディスクイメージには、EFIパーティション、OEMパーティション、リカバリーパーティションのみが含まれます。初回起動時にシステムはリカバリーシステムに入り、不足しているパーティションを拡張・追加します。拡張後、rancherに登録され、再起動する。
+
+登録段階でエラーが発生した場合は、`+journalctl -u elemental-register-reset+` を使用してジャーナルを見つけることができます。
