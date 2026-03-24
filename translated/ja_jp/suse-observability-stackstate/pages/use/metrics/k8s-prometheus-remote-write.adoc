@@ -1,0 +1,56 @@
+= プロメテウスのリモート書き込み
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+:description: SUSE Observability
+
+オンプレミスまたはセルフホストでPrometheusを実行し、環境のメトリクスを集約している場合は、SUSE Observabilityでこれらのメトリクスをミラーリングできます。これにより、SUSE Observabilityの強力なトポロジーと相関機能を使用して、ツールを切り替えることなくKubernetes環境のトラブルシューティングを行うことができます。
+
+これを可能にするために、SUSE ObservabilityはPrometheus`+remote_write+` プロトコルをエンドポイントとして公開しています。このエンドポイントを使用して、PrometheusインスタンスがSUSE Observabilityにメトリクスを送信するように設定できます。その後、メトリクスは自動的に取り込まれ、SUSE Observabilityによって観測されるコンポーネントにメトリクスをバインドすることが可能になります。次の図は、この仕組みを示している：
+
+image::k8s/k8s-prometheus-remotewrite.png[プロメテウス遠隔書き込み]
+
+== 前提条件
+
+PrometheusのメトリクスをSUSE Observabilityでミラーリングするには、SUSE Observabilityにメトリクスを送信するために使用するAPIキーを調べる必要があります。APIキーは、SUSE ObservabilityにインストールされているKubernetes StackPackの説明に記載されています。以下の手順は、APIキーを見つける方法を示している：
+
+. SUSE Observability UIを開き、StackPacksページに移動します。
++
+image::k8s/k8s-stackpacks.png[スタックパック]
+
+. Kubernetes StackPackを見つけてクリックする。
+. StackPackの説明には、SUSE Observabilityにメトリクスを送信するために使用するAPI Keyが記載されています。
++
+image::k8s/k8s-stackpacks-apikey.png[APIキー]
+
+== Prometheusインスタンスの設定
+
+PrometheusインスタンスがSUSE Observabilityにメトリクスを送信するように設定するには、Prometheus設定に新しいリモート書き込みエンドポイントを追加する必要があります。これは、`+prometheus.yml+` ファイルの`+remote_write+` セクションを更新することで可能です。エンドポイントへの認証には、ヘッダー認証と基本認証の2種類があります。
+
+=== ヘッダー認証
+
+prometheusのremote_writeリクエストに`+sts-api-key+` ヘッダを追加することで、API Keyを使用して認証することができます。次の例は、この設定方法を示している：
+
+[,yaml]
+----
+remote_write:
+- url: https://<tenant>.app.stackstate.io/receiver/prometheus/api/v1/write
+  headers:
+    sts-api-key: <API Key>
+----
+
+=== 基本認証
+
+prometheusのremote_writeリクエストに`+basic_auth+` セクションを追加することで、基本認証を使って認証することができます。このAPIへのリクエストはヘッドレスサービスから行われるため、ユーザー名フィールドには静的な値`+apikey+` が設定される。次の例は、この設定方法を示している：
+
+[,yaml]
+----
+remote_write:
+- url: https://<tenant>.app.stackstate.io/receiver/prometheus/api/v1/write
+  basic_auth:
+    username: apikey
+    password: <API Key>
+----
+
+== 仕上げ
+
+設定変更がPrometheus設定ファイルに適用された後、Prometheusを再起動する必要があります。再起動後、PrometheusはSUSE Observabilityへのメトリクス送信を開始します。メトリクスは環境の他の部分と自動的に関連付けられ、SUSE Observability UIで表示されます。
