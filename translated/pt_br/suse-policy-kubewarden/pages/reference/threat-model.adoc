@@ -1,0 +1,249 @@
+include::partial$variables.adoc[]
+= Modelo de ameaça
+:revdate: 2026-03-18
+:page-revdate: {revdate}
+:description: Leia e entenda o Modelo de Ameaça de Controle de Admissão para criar seu próprio modelo de ameaça específico para cada circunstância, garantindo padrões seguros no Kubernetes.
+:doc-persona: ["kubewarden-all"]
+:doc-topic: ["security", "threat-model"]
+:doc-type: ["reference"]
+:keywords: ["kubernetes", "modelo de ameaça de controle de admissão", "kubewarden"]
+:sidebar_label: Modelo de ameaça
+:sidebar_position: 80
+:current-version: {page-origin-branch}
+
+O https://github.com/kubernetes/community/tree/master/sig-security[Grupo de Interesse Especial (SIG) de Segurança do Kubernetes] definiu um Modelo de Ameaça de Controle de Admissão para o Kubernetes. A equipe do {project-name} avalia continuamente o {short-project-name}em relação a esse modelo de ameaça e trabalha para fornecer padrões seguros. Recomenda-se que os administradores do site {short-project-name} leiam e entendam o modelo de ameaças e o utilizem para criar seu próprio modelo de ameaças específico para a circunstância, conforme necessário.
+
+Os detalhes sobre cada ameaça estão no sitehttps://github.com/kubernetes/sig-security/tree/main/sig-security-docs/papers/admission-control[documento publicado pela SIG Security].
+
+== Ameaças ao Kubernetes
+
+=== Ameaça 1 - O atacante inunda o webhook com tráfego, impedindo sua operação
+
+==== Cenário
+
+Um invasor que tenha acesso ao endpoint do Webhook, no nível da rede, pode enviar grandes quantidades de tráfego, causando uma negação de serviço efetiva ao controlador de admissão.
+
+==== Mitigação
+
+Falha no fechamento do webhook. Se o webhook não responder a tempo, por qualquer motivo, o servidor da API deverá rejeitar a solicitação.
+Esse é o comportamento padrão do site {short-project-name}.
+
+Falha no fechamento significa que se, por qualquer motivo, o site{short-project-name} parar de responder ou travar, o servidor de API rejeitará a solicitação por padrão.
+Isso ocorre mesmo que a solicitação seja normalmente aceita por {short-project-name}.
+
+=== Ameaça 2 - O invasor passa cargas de trabalho que exigem processamento complexo, causando tempos limite
+
+==== Cenário
+
+Um invasor, que pode acessar o controlador de admissão em um nível de rede, passa solicitações para o controlador de admissão que exigem processamento complexo e causam tempos limite, pois o controlador de admissão usa o poder de computação para processar as cargas de trabalho.
+
+==== Mitigação
+
+O webhook falha ao fechar e autenticar os chamadores.
+Esse é o comportamento padrão do site {short-project-name}.
+
+=== Ameaça 3 - O invasor explora a configuração incorreta do webhook para contornar
+
+==== Cenário
+
+Um invasor, que tem direitos para criar cargas de trabalho no cluster, pode explorar uma configuração incorreta para contornar o controle de segurança pretendido.
+
+==== Mitigação
+
+Revisões regulares da configuração do webhook podem ajudar a detectar problemas.
+
+=== Ameaça 4 - O invasor tem direitos para excluir ou modificar o objeto webhook do Kubernetes
+
+==== Cenário
+
+Um invasor que tenha acesso à API do Kubernetes tem privilégios suficientes para excluir o objeto webhook no cluster.
+
+==== Mitigação
+
+Os direitos RBAC devem ser estritamente controlados.
+
+==== A fazer
+
+A maior parte do RBAC não está dentro do escopo da discussão atual. No entanto, o seguinte será disponibilizado no devido tempo para ajudar os usuários do {short-project-name}:
+
+* Orientações sobre o RBAC mínimo a ser implementado.
+* Fornecimento e documentação de uma política que detecta e pode bloquear alterações no RBAC.
+
+=== Ameaça 5 - O invasor obtém acesso a credenciais válidas para o webhook
+
+==== Cenário
+
+Um invasor obtém acesso a credenciais de cliente válidas para o webhook do controlador de admissão.
+
+==== Mitigação
+
+Falha no fechamento do webhook.
+Esse é o comportamento padrão do site {short-project-name}.
+
+=== Ameaça 6 - O invasor obtém acesso a uma credencial de administrador de cluster
+
+==== Cenário
+
+Um invasor obtém acesso a uma credencial de nível de administrador de cluster no cluster do Kubernetes.
+
+==== Mitigação
+
+N/A
+
+=== Ameaça 7 - O atacante detecta o tráfego na rede de contêineres
+
+==== Cenário
+
+Um invasor que tenha acesso à rede de contêineres pode detectar o tráfego entre o servidor de API e o webhook do controlador de admissão.
+
+==== Mitigação
+
+Como o webhook usa criptografia TLS para todo o tráfego, o {short-project-name} é seguro.
+
+=== Ameaça 8 - O atacante executa um ataque MITM no webhook
+
+==== Cenário
+
+Um invasor na rede de contêineres, que tenha acesso ao recurso NET_RAW, pode tentar usar as ferramentas MITM para interceptar o tráfego entre o servidor de API e o webhook do controlador de admissão.
+
+==== Mitigação
+
+Configure o cluster com autenticação mTLS para os Webhooks e ative o recurso mTLS na pilha {short-project-name}. Como alternativa, configure o mTLS usando um CNI que ofereça suporte a políticas de rede. Consultexref:/reference/security-hardening/webhooks-hardening.adoc["Webhooks seguros com TLS mútuo"] para obter mais informações.
+
+Use a políticahttps://artifacthub.io/packages/kubewarden/capabilities-psp/capabilities-psp[capabilities-psp]e configure-a para eliminar os recursos NET_RAW.
+
+=== Ameaça 9 - O invasor rouba o tráfego do webhook por meio de spoofing
+
+==== Cenário
+
+Um invasor pode redirecionar o tráfego do servidor de API pretendido, para o webhook do controlador de admissão, por meio de falsificação.
+
+==== Mitigação
+
+Configure o cluster com autenticação mTLS para os Webhooks e ative o recurso mTLS na pilha {short-project-name}. Como alternativa, configure o mTLS usando um CNI que ofereça suporte a políticas de rede. Consultexref:/reference/security-hardening/webhooks-hardening.adoc["Webhooks seguros com TLS mútuo"] para obter mais informações.
+
+=== Ameaça 10 - Abusar de uma regra de mutação para criar um contêiner privilegiado
+
+==== Cenário
+
+Um invasor pode fazer com que um controlador de admissão mutante modifique uma carga de trabalho, de modo a permitir a criação de contêineres privilegiados.
+
+==== Mitigação
+
+Revise e teste todas as regras.
+
+=== Ameaça 11 - O invasor implementa cargas de trabalho em namespaces que estão isentos do controle de admissão
+
+==== Cenário
+
+Um invasor pode implantar cargas de trabalho em namespaces do Kubernetes isentos da configuração do controlador de admissão.
+
+==== Mitigação
+
+Os direitos RBAC são estritamente controlados
+
+==== A fazer
+
+A maior parte do RBAC está fora do escopo dessa decisão. No entanto, a equipe do{short-project-name} tem como objetivo:
+
+* Avise os usuários por meio de nossos documentos e _sugira_ o RBAC mínimo a ser usado.
+* Forneça uma política que detecte alterações no RBAC e *talvez* as bloqueie.
+
+=== Ameaça 12 - A regra de bloqueio pode ser contornada devido à falta de correspondência (por exemplo, falta de initcontainers)
+
+==== Cenário
+
+Um invasor criou um manifesto de carga de trabalho que usa um recurso da API do Kubernetes que não é coberto pelo controlador de admissão
+
+==== Mitigação
+
+Revise e teste todas as regras. Você deve revisar os PRs que alteram quaisquer regras na implantação de políticas.
+
+=== Ameaça 13 - O invasor explora a correspondência incorreta de strings em uma lista de bloqueios para contornar as regras
+
+==== Cenário
+
+Um invasor, que tem direitos para criar cargas de trabalho, ignora uma regra explorando a correspondência incorreta de strings.
+
+==== Mitigação
+
+Revise e teste todas as regras.
+
+==== A fazer
+
+Introduzir testes para cobrir essa regra.
+Como sempre, você deve analisar os PRs que alteram as regras na implantação de políticas.
+
+=== Ameaça 14 - O invasor usa recursos novos/antigos da API do Kubernetes que não têm regras
+
+==== Cenário
+
+Um invasor, com direitos para criar cargas de trabalho, usa novos recursos da API do Kubernetes (por exemplo, uma versão alterada da API) para contornar uma regra.
+
+==== Mitigação
+
+Revise e teste todas as regras. Há uma política que testa o uso de recursos obsoletos. Está disponível emhttps://github.com/kubewarden/deprecated-api-versions-policy[the deprecated-api-versions-policy].
+
+NOTE: `+deprecated-api-versions-policy+` lida apenas com recursos personalizados conhecidos por ele. A ameaça são as versões de recursos obsoletos e as novas versões desconhecidas que são mal utilizadas, portanto, a política cobre apenas parte do problema.
+
+=== Ameaça 15 - O invasor implanta um contêiner privilegiado no nó que executa o controlador Webhook
+
+==== Cenário
+
+Um invasor, que tem direitos para implantar contêineres privilegiados no cluster, cria um contêiner privilegiado no nó do cluster em que o webhook do controlador de admissão opera.
+
+==== Mitigação
+
+O controlador de admissão usa políticas restritivas para evitar cargas de trabalho privilegiadas.
+
+=== Ameaça 16 - O invasor monta um caminho de host de nó privilegiado, permitindo a modificação da configuração do controlador do Webhook
+
+==== Cenário
+
+Um invasor, que tem direitos para implantar volumes hostPath com cargas de trabalho, cria um volume que permite o acesso aos arquivos do pod do controlador de admissão.
+
+Implemente o gráfico `+kubewarden-default+` Helm e ative suas políticas recomendadas, que incluem a política `+hostpaths-psp+`. Essa política está configurada para reduzir os volumes compartilhados do hostPath.
+
+=== Ameaça 17 - O invasor tem acesso SSH privilegiado ao nó do cluster que executa o webhook de admissão
+
+==== Cenário
+
+Um invasor pode fazer login nos nós do cluster como um usuário privilegiado via SSH.
+
+==== Mitigação
+
+N/A
+
+=== Ameaça 18 - O invasor usa políticas para enviar dados confidenciais de solicitações de admissão para sistemas externos
+
+==== Cenário
+
+Um invasor pode configurar uma política que escuta solicitações de admissão e envia dados confidenciais para um sistema externo.
+
+==== Mitigação
+
+* Configure o cluster com autenticação mTLS para os Webhooks e ative o recurso mTLS na pilha {short-project-name}. Como alternativa, configure o mTLS usando um CNI que ofereça suporte a políticas de rede.
+
+* Por padrão, as políticas do {short-project-name} não têm acesso à rede e são executadas em um ambiente restritivo, controlando estritamente o acesso externo aos Webhooks.
+
+== {short-project-name} ameaças
+
+=== {short-project-name} ameaça 1 - Bootstrapping de confiança para o controlador de admissão
+
+==== Cenário
+
+Supondo um cluster Kubernetes confiável, mas novo, um invasor pode comprometer a pilha {short-project-name} antes da implantação e da aplicação de qualquer uma das políticas de segurança.
+
+Por exemplo, por:
+
+* usando imagens não assinadas e maliciosas para:
+ ** {short-project-name}-controlador
+ ** servidor de políticas
+ ** qualquer uma das dependências do site {short-project-name} 
+ ** quaisquer dependências opcionais (Grafana, Prometheus e outras)
+* comprometendo a carga útil dos gráficos do Helm
+
+==== Mitigação
+
+. {short-project-name} fornece uma lista de materiais do software, que relaciona todas as imagens necessárias. Isso ajuda com o Zero-Trust. O administrador do Kubernetes deve verificar as imagens do {short-project-name}, as imagens de suas dependências e os gráficos fora do cluster do Kubernetes, em um ambiente confiável. Você pode fazer isso com `+cosign+`, por exemplo. A propósito, essa é uma parte da implementação necessária para instalações com passagem de ar.
+. Use gráficos Helm assinados e resumos verificados em vez de tags para imagens {short-project-name}nesses gráficos Helm. No entanto, isso não protege as dependências.
