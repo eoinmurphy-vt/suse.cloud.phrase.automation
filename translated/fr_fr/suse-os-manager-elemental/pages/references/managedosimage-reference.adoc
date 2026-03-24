@@ -1,0 +1,259 @@
+= Référence ManagedOSImage
+:revdate: 2025-11-06
+:page-revdate: {revdate}
+
+La ressource ManagedOSImage est chargée de définir une image ou une version d'image du système d'exploitation qui doit être appliquée à chaque nœud d'un ensemble de grappes ciblées. Une fois créée, la ressource ManagedOSImage peut être mise à jour avec une nouvelle adresse `+osImage+` ou `+managedOSVersionName+` pour déclencher une nouvelle mise à niveau. De même, une ManagedOSImage existante peut être mise à jour pour cibler de nouveaux clusters.
+
+Plusieurs clés peuvent être configurées sous une spécification de ressource `+ManagedOSImage+`.
+
+.upgrade-cluster-target.yaml
+[,yaml]
+----
+include::example$upgrade/upgrade-cluster-target.yaml[]
+----
+
+== `+ManagedOSImageSpec+` référence
+
+|===
+| Clé | Type | Valeur par défaut | Description
+
+| osImage
+| chaîne de caractères
+| vide
+| L'image pleinement qualifiée vers laquelle les nœuds doivent être mis à niveau. Cette valeur est prioritaire sur `+managedOSVersionName+` si les deux sont configurées.
+
+| managedOSVersionName
+| chaîne de caractères
+| vide
+| Le nom d'un site `+ManagedOSVersion+` vers lequel mettre à niveau les nœuds.
+
+| cloudConfig
+| objet
+| nul
+| Une configuration cloud-init ou yip à appliquer aux nœuds lors des mises à jour. Voir <<_cloudconfig,la référence>>.
+
+| nodeSelector
+| objet
+| nul
+| Ce sélecteur peut être utilisé pour cibler des nœuds spécifiques dans le site `+clusterTargets+`. Voir <<_nodeselector,la référence>>.
+
+| concurrence
+| int
+| 1
+| Combien de nœuds d'une même grappe doivent être mis à niveau en même temps.
+
+| cordon
+| bool
+| vrai
+| Attribuez la valeur "true" à ce paramètre si les nœuds doivent être isolés avant l'application de la mise à niveau. Inefficace lorsque `+drain+` est également configuré.
+
+| drain
+| objet
+| Voir ref
+| Configurer si et comment les nœuds doivent être vidés avant d'appliquer la mise à niveau. Voir <<_drain,la référence>>.
+
+| préparer
+| objet
+| nul
+| Le conteneur prepare init, s'il est spécifié, est exécuté avant cordon/drain qui est exécuté avant le conteneur upgrade. Voir <<_prepare,la référence>>.
+
+| upgradeContainer
+| objet
+| nul
+| Le conteneur de mise à niveau qui exécutera la mise à niveau sur les nœuds. Voir <<_upgradecontainer,la référence>>.
+
+| clusterRolloutStrategy
+| objet
+| nul
+| RolloverStrategy contrôle le déploiement du paquet de mise à niveau entre les clusters. Voir <<_clusterrolloutstrategy,la référence>>.
+
+| clusterTargets
+| liste
+| nul
+| Déclare les clusters sur lesquels déployer le plan de mise à niveau. Voir <<_clustertargets,la référence>>.
+|===
+
+== `+cloudConfig+`
+
+Ceci décrit une configuration cloud-init ou yip qui sera copiée sur chaque nœud mis à niveau vers le chemin `+/oem/90_operator.yaml+`. +
+Cette configuration sera appliquée par le système après le redémarrage. +
+Pour plus d'informations et d'exemples, voir la xref:references/cloud-config-reference.adoc[référence] `+MachineRegistration+` `+spec.config.cloud-config+`.
+
+== `+nodeSelector+`
+
+Ce https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors[sélecteur d'étiquettes] peut être utilisé pour limiter les mises à niveau à un certain nombre de nœuds au sein des grappes ciblées.
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+[,yaml]
+----
+nodeSelector:
+  matchExpressions:
+  - {key: my-node/label, operator: Exists}
+----
+====
+
+== `+drain+`
+
+Configurer si et comment les nœuds doivent être vidés. +
+Pour désactiver le drainage pendant les mises à niveau, vous pouvez configurer ce champ sur `+null+`. +
+Le drainage est activé par défaut.
+
+Les paramètres de vidange se traduisent directement par l'exécution de la commande https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/[drain] kubectl sur le nœud avant la mise à niveau.
+
+|===
+| Clé | Type | Valeur par défaut | Description
+
+| délai d'attente
+| temps.Durée
+| nul
+| Durée d'attente avant d'abandonner la vidange d'un nœud, zéro signifiant infini.
+
+| gracePeriod
+| int
+| nul
+| Période de temps en secondes accordée à chaque pod pour se terminer de manière gracieuse. Si elle est négative, la valeur par défaut spécifiée dans le pod sera utilisée.
+
+| deleteEmptydirData
+| bool
+| vrai
+| Continuer même s'il y a des pods utilisant emptyDir (données locales qui seront supprimées lorsque le nœud sera vidé).
+
+| ignoreDaemonSets
+| bool
+| vrai
+| Ignorer les pods gérés par DaemonSet.
+
+| force
+| bool
+| vrai
+| Continuer même s'il y a des pods qui ne déclarent pas de contrôleur.
+
+| disableEviction
+| bool
+| faux
+| Obliger le drain à utiliser la suppression, même si l'éviction est prise en charge. Cela permet de contourner la vérification des PodDisruptionBudgets, à utiliser avec précaution.
+
+| skipWaitForDeleteTimeout
+| int
+| 60
+| Si l'horodatage de suppression du pod est supérieur à N secondes, ne pas attendre le pod. Les secondes doivent être supérieures à 0 pour passer.
+
+| podSelector
+| sélecteur d'étiquettes
+| nul
+| Sélecteur d'étiquettes pour filtrer les modules sur le nœud. Seules les nacelles sélectionnées seront expulsées.
+|===
+
+== `+prepare+`
+
+Définit un conteneur `+prepare+` Init qui est exécuté avant le conteneur `+upgrade+` exécutant le travail de mise à niveau sur un nœud. +
+Les clés se traduisent directement par la spécification du https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[conteneur]. +
+Notez que le système de fichiers du nœud est monté à l'adresse `+/host+` à l'intérieur du conteneur.
+
+|===
+| Clé | Type | Valeur par défaut | Description
+
+| image
+| chaîne de caractères
+| vide
+| Nom de l'image du conteneur.
+
+| commande
+| liste
+| vide
+| Tableau des points d'entrée.
+
+| args
+| liste
+| vide
+| Arguments pour le point d'entrée.
+
+| env
+| liste
+| vide
+| Liste des variables d'environnement à définir dans le conteneur.
+
+| envFrom
+| liste
+| vide
+| Liste des sources permettant d'alimenter les variables d'environnement dans le conteneur.
+
+| volumes
+| liste
+| vide
+| Liste des volumes de `+hostPath+`. Voir <<_prepare_volumes,la référence>>.
+
+| securityContext
+| objet
+| nul
+| Les options de sécurité avec lesquelles le conteneur éphémère doit être exécuté.
+|===
+
+=== `+prepare.volumes+`
+
+Chaque définition de volume se traduira par un volume https://kubernetes.io/docs/concepts/storage/volumes/#hostpath-volume-types[hostPath] (`+source+`) qui sera monté dans le conteneur (`+destination+`). +
+Notez que, par défaut, le système de fichiers racine de l'hôte `+/+` sera toujours monté sur `+/host+`.
+
+|===
+| Clé | Type | Valeur par défaut | Description
+
+| nom
+| chaîne de caractères
+| vide
+| Nom du volume.
+
+| source
+| chaîne de caractères
+| vide
+| Chemin d'accès au volume HostPath.
+
+| destination
+| chaîne de caractères
+| vide
+| Chemin de montage du volume HostPath.
+|===
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+[,yaml]
+----
+volumes:
+  - name: my-custom-volume
+    source: /foo
+    destination: /foo
+----
+====
+
+== `+upgradeContainer+`
+
+Définit le conteneur `+upgrade+` qui exécute le travail de mise à niveau sur un nœud. +
+Les clés se traduisent directement par la spécification du https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#Container[conteneur]. +
+Notez que le système de fichiers du nœud est monté à l'adresse `+/host+` à l'intérieur du conteneur.
+
+[CAUTION]
+====
+Lorsque vous utilisez une xref:operator-operational-tasks/custom-images.adoc[image basée sur] {elemental-product-name} ou xref:operator-operational-tasks/custom-images.adoc[{elemental-product-name}, vous ne devez éditer que la clé] `+env+` pour définir éventuellement les variables `+FORCE+`, `+UPGRADE_RECOVERY+` ou `+UPGRADE_RECOVERY_ONLY+`. +
+Pour plus d'informations, vous pouvez consulter la documentation relative à xref:node-operational-tasks/upgrade.adoc#_upgrade_via_command_line_interface[la mise à niveau]. +
+Toute autre modification du site `+upgradeContainer+` peut entraîner des problèmes lors des mises à jour. +
+====
+
+== `+clusterRolloutStrategy+`
+
+Cela permet de contrôler le déploiement de l'offre groupée à travers les clusters. Pour plus d'informations, vous pouvez consulter la https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_rolloutstrategy[documentation de référence].
+
+== `+clusterTargets+`
+
+Sélectionnez les clusters à cibler pour la mise à niveau de l'image du système d'exploitation. Pour plus d'informations, vous pouvez consulter la https://documentation.suse.com/cloudnative/continuous-delivery/v0.13/en/reference/ref-crds.html#_bundletarget[documentation de référence].
+
+.Cliquez ici pour plus d'informations
+[%collapsible]
+====
+[,yaml]
+----
+clusterTargets:
+  - clusterName: volcano
+----
+====
