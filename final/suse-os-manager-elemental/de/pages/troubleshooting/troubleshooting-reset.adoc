@@ -2,10 +2,10 @@
 :revdate: 2025-07-03
 :page-revdate: {revdate}
 
-Jede `MachineInventory` mit der `elemental.cattle.io/resettable: "true"` Annotation wird die Ausführung eines Rücksetzplans auslösen, sobald sie gelöscht wird. +
-Der `machineinventory.elemental.cattle.io` Finalizer wird erst entfernt, nachdem der Plan vom `elemental-system-agent`, der auf der Maschine läuft, erfolgreich ausgeführt wurde.
+Jedes `MachineInventory` mit dem Vermerk `elemental.cattle.io/resettable: "true"` löst beim Löschen die Ausführung eines Reset-Plans aus. +
+Der `machineinventory.elemental.cattle.io` finalizer wird erst nach erfolgreicher Ausführung des Plans durch den `elemental-system-agent` auf dem Rechner entfernt.
 
-Sie können untersuchen, warum ein `MachineInventory` noch nicht gelöscht wurde, indem Sie ihn überprüfen:
+Sie können herausfinden, warum eine `MachineInventory` noch nicht gelöscht wurde, indem Sie sie untersuchen:
 
 [,yaml]
 ----
@@ -40,9 +40,9 @@ status:
       namespace: fleet-default
 ----
 
-Sie können auch den referenzierten Plan `Secret` überprüfen. +
-Beachten Sie, dass der `elemental-system-agent`, der auf der Maschine läuft, dieses Geheimnis überwacht und den Plan ausführen sollte. +
-Sie können auch den Fortschritt in den Maschinenprotokollen überwachen: `journalctl -u elemental-system-agent -f`.
+Sie können auch den referenzierten Plan `Secret` einsehen. +
+Beachten Sie, dass die `elemental-system-agent`, die auf dem Rechner läuft, dieses Geheimnis beobachtet und den Plan ausführen sollte. +
+Sie können den Fortschritt auch anhand der Maschinenprotokolle verfolgen: `journalctl -u elemental-system-agent -f`.
 
 [,yaml]
 ----
@@ -74,7 +74,7 @@ data:
   plan: eyJmaWxlcyI6W3siY29udGVudCI6ImJtRnRaVG9nUld4bGJXVnVkR0ZzSUZKbGMyVjBDbk4wWVdkbGN6b0tJQ0FnSUc1bGRIZHZjbXN1WVdaMFpYSTZDaUFnSUNBZ0lDQWdMU0JqYjIxdFlXNWtjem9LSUNBZ0lDQWdJQ0FnSUNBZ0xTQmxiR1Z0Wlc1MFlXd3RjbVZuYVhOMFpYSWdMUzFrWldKMVp5QXRMWEpsYzJWMENpQWdJQ0FnSUNBZ0lDQnBaam9nSjFzZ0xXWWdMM0oxYmk5amIzTXZjbVZqYjNabGNubGZiVzlrWlNCZEp3b2dJQ0FnSUNBZ0lDQWdibUZ0WlRvZ1VuVnVjeUJsYkdWdFpXNTBZV3dnY21WelpYUUsiLCJwYXRoIjoiL29lbS9yZXNldC1jbG91ZC1jb25maWcueWFtbCIsInBlcm1pc3Npb25zIjoiMDYwMCJ9XSwiaW5zdHJ1Y3Rpb25zIjpbeyJuYW1lIjoiY29uZmlndXJlIG5leHQgYm9vdCB0byByZWNvdmVyeSBtb2RlIiwiYXJncyI6WyIvb2VtL2dydWJlbnYiLCJzZXQiLCJuZXh0X2VudHJ5PXJlY292ZXJ5Il0sImNvbW1hbmQiOiJncnViMi1lZGl0ZW52In0seyJuYW1lIjoic2NoZWR1bGUgcmVib290IiwiYXJncyI6WyItciIsIisxIl0sImNvbW1hbmQiOiJzaHV0ZG93biJ9XX0K
 ----
 
-Der vom `elemental-operator` erstellte Plan sollte die folgenden Anweisungen enthalten:
+Der von `elemental-operator` erstellte Plan sollte die folgenden Anweisungen enthalten:
 
 [,json]
 ----
@@ -110,12 +110,12 @@ Der vom `elemental-operator` erstellte Plan sollte die folgenden Anweisungen ent
 }
 ----
 
-Wenn der `elemental-system-agent` den Plan erfolgreich ausgeführt hat, wird der `machineinventory.elemental.cattle.io` Finalizer auf dem `MachineInventory` entfernt und der `MachineInventory` wird gelöscht. +
-Beachten Sie, dass dies kein Hinweis darauf ist, dass die Maschine bereits vollständig zurückgesetzt wurde. +
-Dies ist eine Einschränkung der aktuellen Implementierung und wird sich schließlich verbessern, sodass es möglich sein wird, den Rücksetzstatus vollständig zu verfolgen.
+Wenn der `elemental-system-agent` den Plan erfolgreich ausgeführt hat, wird der `machineinventory.elemental.cattle.io` finalizer auf dem `MachineInventory` entfernt und der `MachineInventory` wird gelöscht. +
+Beachten Sie, dass dies kein Hinweis darauf ist, dass das Gerät bereits vollständig zurückgesetzt worden ist. +
+Dies ist eine Einschränkung der derzeitigen Implementierung und wird sich mit der Zeit verbessern, so dass es möglich sein wird, den Rücksetzungsstatus vollständig zu verfolgen.
 
-Wir erwarten jedoch, dass der Host neu startet und dabei in den Wiederherstellungsmodus bootet. +
-Sobald der `cos-setup-network` im Wiederherstellungsmodus ist, sollte er die cloud-init-Konfiguration ausführen, die auf `/oem/reset-cloud-config.yaml` geschrieben wurde. +
+In diesem Stadium erwarten wir jedoch, dass der Host einen Neustart durchführt und im Wiederherstellungsmodus neu startet. +
+Sobald der Wiederherstellungsmodus aktiviert ist, sollte `cos-setup-network` die Cloud-init-Konfiguration ausführen, die auf `/oem/reset-cloud-config.yaml` geschrieben wurde. +
 Sie können den Status mit `journalctl -u cos-setup-network -f` überwachen.
 
 Die cloud-init-Anweisungen sollten wie folgt aussehen:
@@ -131,15 +131,15 @@ stages:
             - systemctl start elemental-register-reset
 ----
 
-Die `elemental-register` Kommandozeilenschnittstelle wird sich beim `elemental-operator` als neue Maschine registrieren. Dies wird zur Erstellung eines neuen `MachineInventory` Objekts führen. +
-Die entfernte `MachineRegistration` Konfiguration wird ebenfalls abgerufen, um die Rücksetzoptionen anzuwenden, zum Beispiel `reset-persistent`, `reset-oem` oder die Energieeinstellungen, entweder `reboot` oder `power-off`. +
-Nach dem Zurücksetzen sollte die Maschine, abhängig von den Einstellungen, entweder heruntergefahren oder neu gestartet werden und bereit sein, in einen neuen Cluster übernommen zu werden.
+Der `elemental-register` cli wird auf der Website `elemental-operator` als neues Gerät registriert. Dies führt zur Erstellung eines neuen `MachineInventory` Objekts. +
+Die Fernkonfiguration `MachineRegistration` wird ebenfalls abgerufen, um die Rücksetzoptionen anzuwenden, z. B. `reset-persistent`, `reset-oem`, oder die Leistungseinstellungen, entweder `reboot` oder `power-off`. +
+Nach dem Zurücksetzen sollte der Rechner, je nach Einstellungen, entweder heruntergefahren oder neu gestartet werden und bereit sein, in einen neuen Cluster aufgenommen zu werden.
 
-== Zwanghaftes Löschen eines MachineInventory, das sich im Zurücksetzungsprozess befindet
+== Zwangsweise Löschung eines MachineInventory beim Zurücksetzen
 
-Wenn die Maschine die Zurücksetzungsanweisungen nicht ausführen kann und das zugehörige `MachineInventory` nicht gelöscht wird, gibt es zwei gleichwertige Möglichkeiten, wie Sie das Problem manuell beheben können.
+Wenn das Gerät nicht in der Lage ist, die Rücksetzanweisungen auszuführen und die entsprechende `MachineInventory` nicht gelöscht wird, gibt es zwei gleichwertige Möglichkeiten, das Problem manuell zu beheben.
 
-* Entfernen Sie die `elemental.cattle.io/resettable: "true"` Annotation von der `MachineInventory`.
-* Entfernen Sie den `machineinventory.elemental.cattle.io` Finalizer von der `MachineInventory`.
+* Entfernen Sie den Vermerk `elemental.cattle.io/resettable: "true"` aus der `MachineInventory`.
+* Entfernen Sie den `machineinventory.elemental.cattle.io` finalizer von der `MachineInventory`.
 
-Denken Sie daran, sich auch um die Maschine selbst zu kümmern, indem Sie sie vollständig neu bereitstellen oder im Wiederherstellungsmodus neu starten und den `elemental reset` Befehl direkt verwenden.
+Denken Sie daran, sich auch um den Rechner selbst zu kümmern, indem Sie ihn vollständig neu bereitstellen oder in den Wiederherstellungsmodus booten und direkt den Befehl `elemental reset` verwenden.
