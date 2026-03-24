@@ -1,0 +1,74 @@
+= Maschine zurücksetzen
+:revdate: 2025-09-08
+:page-revdate: {revdate}
+
+Es gibt zwei Möglichkeiten, {elemental-product-name} in den ursprünglichen Zustand zurückzusetzen oder außer Betrieb zu nehmen:
+
+. Wenn Sie einen Cluster löschen, werden alle zugehörigen Maschinen zurückgesetzt.
++
+image::reset-cluster-deletion.png[Einen Cluster löschen, um alle Maschinen zurückzusetzen]
+
+. Wenn Sie einen Cluster verwalten, löschen Sie einfach den Knoten, der zurückgesetzt werden muss.
++
+image::reset-single-node-deletion.png[Einen einzelnen Knoten löschen, um ihn zurückzusetzen]
+
+== Arbeitsablauf zurücksetzen
+
+Sobald die zugehörige `+MachineInventory+` zur Löschung markiert ist, wird ein Rücksetzungsplan von der `+elemental-system-agent+` auf dem Rechner ausgeführt.
+
+Wenn die Maschine noch läuft, wird dieser Plan ausgeführt:
+
+. Starten Sie das Gerät im Wiederherstellungsmodus neu.
+. Führen Sie `+systemctl start elemental-register-reset+` aus. +
+Dadurch wird die entfernte `+MachineRegistration+` abgerufen und die Optionen `+spec.config.elemental.reset+` angewendet, um den Rechner zurückzusetzen. +
+Es wird eine neue `+MachineInventory+` erstellt und die `+spec.config.cloud-config+`, die in der `+MachineRegistration+` definiert ist, wird wieder angewendet.
+
+Beachten Sie, dass sich der Verweis `+MachineRegistration+` *nicht* ändert, das Gerät *nicht* neu installiert wird und die Partition `+COS_PERSISTENT+` und `+COS_OEM+` standardmäßig gelöscht werden, wenn der Reset auf `+enabled+` erfolgt. Weitere Informationen finden Sie in der xref:installation/installation.adoc#_deployed_partition_table[Partitionstabelle].
+
+Da die `+cloud-config+` während des Zurücksetzungs-Workflows erneut angewendet wird, können Sie einen Computer zurücksetzen, um Aktualisierungen aus der `+MachineRegistration+` Definition anzuwenden, z. B. um `+users+` Anmeldeinformationen und autorisierte Schlüssel zu drehen. Es wird dringend empfohlen, die Option `+reset-oem+` zu aktivieren, um Konflikte mit bereits konfigurierten Cloud-Konfigurationen zu vermeiden.
+
+Wenn Sie einen Rechner an eine andere `+MachineRegistration+` binden und eine neue vollständige Installation auslösen möchten, müssen Sie ihn mit einem neuen Image erneut bereitstellen.
+
+== Reset der Maschine aktivieren
+
+Um das automatische Zurücksetzen von Maschinen zu ermöglichen, sollte das `+spec.config.elemental.reset.enabled+` Flag der `+MachineRegistration+` umgeschaltet werden. +
+Diese Funktion ist standardmäßig ausgeschaltet, aber sobald sie aktiviert ist, wird diese Einstellung automatisch auf alle neu erstellten `+MachineInventory+` übertragen. +
+Zum Beispiel:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineRegistration
+metadata:
+  name: fire-nodes
+  namespace: fleet-default
+spec:
+  config:
+    elemental:
+      reset:
+        enabled: true
+        reset-persistent: true
+        reset-oem: true
+        # These cloud-init configs will be created during reset and will persist on the system after
+        config-urls:
+          - "https://my.cloud.init/reset-plan-1.yaml"
+          - "https://my.cloud.init/reset-plan-2.yaml"
+        # You can select a different image to run the reset.
+        # Note that this image will not be installed on the system.
+        system-uri: "my.oci.registry/reset-image:latest"
+        power-off: false
+        reboot: true
+----
+
+Es ist auch möglich, das Zurücksetzen auf der Ebene `+MachineInventory+` zu aktivieren, z. B. in Szenarien, in denen einige Maschinen physisch sind und von einem automatischen Zurücksetzen profitieren, während einige andere virtuell sind und einfach zerstört und bei Bedarf neu bereitgestellt werden können. +
+Um ein einzelnes `+MachineInventory+` zu kennzeichnen, damit es zurückgesetzt werden kann, können Sie den Vermerk `+elemental.cattle.io/resettable: true+` verwenden. +
+Zum Beispiel:
+
+[,yaml]
+----
+apiVersion: elemental.cattle.io/v1beta1
+kind: MachineInventory
+metadata:
+  annotations:
+    elemental.cattle.io/resettable: "true"
+----
