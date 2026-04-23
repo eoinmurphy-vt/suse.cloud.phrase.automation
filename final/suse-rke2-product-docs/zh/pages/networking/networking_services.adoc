@@ -1,0 +1,215 @@
+= 网络服务
+:page-languages: [en, zh]
+:revdate: 2026-03-16
+:page-revdate: {revdate}
+
+本页面解释了 CoreDNS 和 Nginx-Ingress 控制器在 RKE2 中的工作原理。
+
+有关 Canal 配置选项的详细信息或如何设置您自己的 CNI，请参阅 xref:networking/basic_network_options.adoc[基本网络选项] 页面。
+
+有关 RKE2 需要打开的端口的信息，请参阅 xref:install/requirements.adoc[安装要求]。
+
+== CoreDNS
+
+CoreDNS 在启动服务器时默认部署。要禁用，请在配置文件中使用 `disable: rke2-coredns` 选项运行每个服务器。
+
+如果您不安装 CoreDNS，您需要自己安装集群 DNS 提供程序。
+
+CoreDNS 默认与 https://github.com/kubernetes-incubator/cluster-proportional-autoscaler[自动扩展器] 一起部署。要禁用它或更改其配置，请使用 xref:add-ons/helm.adoc#_customizing_packaged_components_with_helmchartconfig[HelmChartConfig] 资源。
+
+=== NodeLocal DNSCache
+
+https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/[NodeLocal DNSCache] 通过在每个节点上运行 DNS 缓存代理来提高性能。要激活此功能，请应用以下 HelmChartConfig：
+
+[,yaml]
+----
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    nodelocal:
+      enabled: true
+----
+
+Helm 控制器将使用新配置重新部署 CoreDNS.请注意，nodelocal 会修改节点的 iptables 以拦截 DNS 流量。因此，在不重新部署的情况下激活然后停用此功能，将导致 DNS 服务停止工作。
+
+请注意，如果 kube-proxy 使用 ipvs 模式，则必须在该模式下部署 NodeLocal DNSCache。要在此模式下部署，请应用以下 HelmChartConfig：
+
+[,yaml]
+----
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    nodelocal:
+      enabled: true
+      ipvs: true
+----
+
+=== 在 kube-proxy 替代模式下使用 Cilium 的 NodeLocal DNS Cache
+
+此功能从版本 v1.28.13+rke2r1、v1.29.8+rke2r1 和 v1.30.4+rke2r1 开始可用。
+
+如果您选择的 CNI 是 xref:networking/basic_network_options.adoc[Cilium 在 kube-proxy 替代模式]，并希望使用 NodeLocal DNS Cache，则需要配置 Cilium 使用 https://docs.cilium.io/en/v1.15/network/kubernetes/local-redirect-policy/#node-local-dns-cache[本地重定向策略 (LRP)] 将 DNS 流量路由到您的 NodeLocal 缓存。这是因为在此模式下，Cilium eBPF 路由绕过 iptables 规则，因此 NodeLocal 无法配置它们以将 DNS 流量路由到自身.
+
+这分为两个步骤：
+
+. 通过在 Cilium HelmChartConfig 中将 `localRedirectPolicy` 标志设置为 true 来激活 Cilium 的本地重定向策略功能。这看起来像这样：
++
+[,yaml]
+----
+---
+# /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-cilium
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    kubeProxyReplacement: true
+    k8sServiceHost: <KUBE_API_SERVER_IP>
+    k8sServicePort: <KUBE_API_SERVER_PORT>
+    localRedirectPolicy: true
+----
+
+. 配置 `rke2-coredns` 图表以通过应用以下 HelmChartConfig 来设置其 LRP：
++
+[,yaml]
+----
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    nodelocal:
+      enabled: true
+      use_cilium_lrp: true
+----
+
+== Ingress 控制器
+
+[tabs]
+======
+ingress-nginx::
++
+--
+
+[WARNING]
+====
+ingress-nginx 控制器将在 2026 年 3 月终止服务（EOL），并在 RKE2 v1.36 中被弃用。
+
+{rke2-product-name} 用户将在 RKE2 v1.32、v1.33、v1.34、v1.35 和 v1.36 的整个生命周期内继续获得支持和 CVE 修复（8+）。我们建议按照 https://support.scc.suse.com/s/kb/Migrating-from-Ingress-NGINX-to-Traefik-in-a-standalone-RKE2-cluster[从 Ingress-NGINX 迁移到 Traefik 的独立 RKE2 集群] 指南切换到 Traefik。
+====
+
+https://github.com/kubernetes/ingress-nginx[ingress-nginx] 是一个由 NGINX 提供支持的 Ingress 控制器，它使用 ConfigMap 来存储 NGINX 配置。
+
+`ingress-nginx` 在启动服务器时默认部署。在其默认配置中，端口 80 和 443 将被 ingress 控制器绑定，这使得这些端口无法用于集群中的 HostPort 或 NodePort 服务。
+
+可以通过创建 xref:add-ons/helm.adoc#_customizing_packaged_components_with_helmchartconfig[HelmChartConfig 清单] 来指定配置选项，以自定义 `rke2-ingress-nginx` HelmChart 值。例如，位于 `/var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml` 的 HelmChartConfig 具有以下内容，将 ConfigMap 中存储的 NGINX 配置的 `use-forwarded-headers` 设置为 `"true"`：
+
+[,yaml]
+----
+# /var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-ingress-nginx
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    controller:
+      config:
+        use-forwarded-headers: "true"
+----
+
+有关更多信息，请参阅官方 https://github.com/rancher/rke2-charts/tree/main/charts/rke2-ingress-nginx/rke2-ingress-nginx/4.14.400#configuration[ingress-nginx Helm 配置参数]。
+
+--
+
+Traefik::
++
+--
+[IMPORTANT]
+.版本门控
+====
+Traefik 支持自 2024 年 8 月的版本开始提供：v1.28.12+rke2r1、v1.29.7+rke2r1、v1.30.3+rke2r1。
+====
+
+https://doc.traefik.io/traefik/[Traefik] 是一个现代 HTTP 反向代理和负载均衡器，旨在轻松部署微服务。它简化了设计、部署和运行应用程序时的网络复杂性。
+
+要使用 Traefik，请在配置文件中使用 `ingress-controller: traefik` 选项启动每个服务器。
+
+可以通过创建 xref:add-ons/helm.adoc#_customizing_packaged_components_with_helmchartconfig[HelmChartConfig 清单] 来指定配置选项，以自定义 `rke2-traefik` HelmChart 值。例如，位于 `/var/lib/rancher/rke2/server/manifests/rke2-traefik-config.yaml` 的 HelmChartConfig 具有以下内容，将日志级别更改为 "DEBUG"。::
+
+[,yaml]
+----
+# /var/lib/rancher/rke2/server/manifests/rke2-traefik-config.yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    logs:
+      general:
+        level: "DEBUG"
+----
+要查看所有可配置选项，请访问图表的 https://github.com/rancher/rke2-charts/blob/main/charts/rke2-traefik/rke2-traefik/39.0.502/values.yaml[values.yaml]。
+
+--
+======
+
+要禁用 ingress 控制器，请在配置文件中使用 `ingress-controller: none` 选项启动每个服务器。
+
+=== 网关 API
+
+网关 API 是一组 Kubernetes 资源，提供动态基础设施配置和高级流量路由。虽然传统的 Ingress API 仍然受到支持（并且没有计划被弃用），但网关 API 提供了一种更具表现力、角色导向和可扩展的服务暴露管理方式。
+
+要在 {rke2-product-name} 中利用网关 API，您必须使用 Traefik。请使用以下 HelmChartConfig 来启用网关 API：
+
+```yaml
+# /var/lib/rancher/rke2/server/manifests/rke2-traefik-config.yaml
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+#       experimentalChannel: true (read warning below)
+```
+Traefik 与 https://gateway-api.sigs.k8s.io/reference/1.4/spec/[网关 API v1.4] 兼容。
+
+[WARNING]
+====
+如果您需要对实验性网关 API 资源的支持，例如 TCPRoute，您必须从官方 https://github.com/kubernetes-sigs/gateway-api/releases/tag/v1.4.0[网关 API 发布] 安装 https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/experimental-install.yaml[experimental-install.yaml] 并在 rke2-traefik 图表值中使用选项 `providers.kubernetesGateway.experimentalChannel=true`。
+====
+
+== 服务负载均衡器
+
+Kubernetes 服务可以是 LoadBalancer 类型，但它需要一个外部负载均衡器控制器来正确实现功能，例如，提供外部 IP。RKE2 可以选择性地部署一个称为 https://github.com/k3s-io/klipper-lb[ServiceLB] 的负载均衡器控制器，该控制器使用可用的主机端口。有关更多信息，请阅读以下 https://documentation.suse.com/cloudnative/k3s/latest/en/networking/networking-services.html#_service_load_balancer[链接]。
+
+[TIP]
+====
+查看 K3s 文档时，请在适用的情况下使用标签 `svccontroller.rke2.cattle.io` 而不是 `svccontroller.k3s.cattle.io`。
+====
+
+要启用 ServiceLB，在部署 RKE2 时使用标志 `--enable-servicelb`。

@@ -1,0 +1,129 @@
+= 安装方法
+:page-languages: 如果您的节点安装并启用了 NetworkManager，请确保它被配置为忽略 CNI 管理的接口。
+:revdate: 2025-08-06
+:page-revdate: {revdate}
+
+[IMPORTANT] 
+====
+如果您的节点已安装并启用了 NetworkManager，请确保xref:known_issues.adoc#_networkmanager[其配置为忽略 CNI 管理的接口]。
+====
+
+[IMPORTANT]
+====
+您可以使用 Prime Artifacts URL 上列出的任何 RKE2 Prime 版本来获取这些步骤中提到的资产。要了解有关 Prime Artifacts URL 的更多信息，请参阅我们的 https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[仅限 Prime 的文档]。需要身份验证。使用您的 https://scc.suse.com/home[SUSE 客户中心 (SCC)] 凭据登录。
+====
+
+RKE2 可以通过多种方式安装，其中两种是首选且受支持的方法。这些方法是 tarball 和 RPM。快速入门中引用的安装脚本是这两种方法的封装程序。
+
+本文档对这些安装方法进行了更详细的说明。
+
+== Tarball
+
+要通过安装方式安装 RKE2，您首先需要获取安装脚本。这可以通过多种方式完成。
+
+这将获取安装脚本并立即启动安装过程。
+
+[,sh]
+----
+# curl -sfL https://get.rke2.io | sudo sh -
+curl -sfL https://get.rke2.io | sh -
+----
+
+或者，您可以下载安装脚本并使其可执行。
+
+[,sh]
+----
+curl -sfL https://get.rke2.io --output install.sh
+chmod +x install.sh
+----
+
+=== 安装
+
+运行安装程序，其中`INSTALL_RKE2_ARTIFACT_URL`是 Prime Artifacts URL，而`INSTALL_RKE2_CHANNEL`是您可以订阅的发布渠道，默认为稳定版。在此示例中，`INSTALL_RKE2_CHANNEL="latest"`为您提供了 RKE2 的最新版本。
+
+[,bash]
+----
+sudo INSTALL_RKE2_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/rke2 INSTALL_RKE2_CHANNEL="latest" ./install.sh
+----
+
+如果您想指定一个版本，请设置`INSTALL_RKE2_VERSION`环境变量。
+
+[,bash]
+----
+sudo INSTALL_RKE2_ARTIFACT_URL=<PRIME-ARTIFACTS-URL>/rke2 INSTALL_RKE2_VERSION="<VERSION>" ./install.sh
+----
+
+这将把`rke2-server`服务及`rke2`二进制文件安装到您的机器上。由于其特性，除非以 root 用户身份运行或通过`sudo`运行，否则将会失败。
+
+当安装脚本执行时，它会判断系统的类型。如果系统采用 RPM（例如 CentOS 或 RHEL），则将执行基于 RPM 的安装；否则，脚本将默认为 tarball 安装。下面将介绍基于 RPM 的安装过程。
+
+接下来，安装脚本下载 tarball，通过比较 SHA256 哈希值进行验证，最后将内容提取到 `/usr/local`。如果需要，操作员可以在安装后自由移动文件。此操作仅提取 tarball，不会进行其他系统修改。
+
+Tarball 结构 / 内容：
+
+* bin - 包含 RKE2 可执行文件以及 `rke2-killall.sh` 和 `rke2-uninstall.sh` 脚本。
+* lib - 包含服务器和代理的 systemd 单元文件。
+* share - 包含 RKE2 许可证以及在 CIS 模式下运行 RKE2 时使用的 sysctl 配置文件。
+
+要进一步配置系统，您需要参考 xref:reference/server_config.adoc[server] 或 xref:reference/linux_agent_config.adoc[agent] 文档。
+
+== RPM
+
+要开始 RPM 安装过程，您需要获取上面提到的安装脚本。该脚本将检查您的系统是否存在 `rpm`、`yum` 或 `dnf`，如果存在其中任何一个，它将判断系统基于 Redhat，并开始 RPM 安装过程。
+
+文件将以 `/usr` 前缀而不是 `/usr/local` 前缀安装。
+
+=== 储存库
+
+签名的 RPM 在 `rpm-testing.rancher.io` 和 `rpm.rancher.io` RPM 仓库中发布。如果您在支持 RPM 的节点上运行 https://get.rke2.io 脚本，它将默认使用这些 RPM 仓库。但您也可以自己安装它们。
+
+RPM 提供 `systemd` 单元来管理 `rke2`，但在第一次启动服务之前需要通过配置文件进行配置。
+
+=== Enterprise Linux 7/8/9
+
+为了使用 RPM 储存库，在 CentOS 或 RHEL 系统上，运行以下 bash 代码片段：
+
+[,bash]
+----
+export RKE2_MINOR=28
+export LINUX_MAJOR=7 # or 8 or 9 etc
+cat << EOF > /etc/yum.repos.d/rancher-rke2-1-${RKE2_MINOR}-latest.repo
+[rancher-rke2-common-latest]
+name=Rancher RKE2 Common Latest
+baseurl=https://rpm.rancher.io/rke2/latest/common/centos/${LINUX_MAJOR}/noarch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://rpm.rancher.io/public.key
+
+[rancher-rke2-1-${RKE2_MINOR}-latest]
+name=Rancher RKE2 1.${RKE2_MINOR} Latest
+baseurl=https://rpm.rancher.io/rke2/latest/1.${RKE2_MINOR}/centos/${LINUX_MAJOR}/x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://rpm.rancher.io/public.key
+EOF
+----
+
+=== 安装
+
+在配置好储存库后，您可以运行以下任一命令：
+
+[,sh]
+----
+yum -y install rke2-server
+----
+
+或
+
+[,sh]
+----
+yum -y install rke2-agent
+----
+
+RPM 将安装相应的 `rke2-server.service` 或 `rke2-agent.service` systemd 单元，可以像这样调用：`systemctl start rke2-server`。确保在启动 `rke2` 之前进行配置，按照下面的 `Configuration File` 指示进行。
+
+== 手动
+
+RKE2 二进制文件是静态编译和链接的，这使得 RKE2 二进制文件可以在不同的 Linux 发行套件之间便携，而无需担心依赖问题。最简单的安装方法是下载二进制文件，确保它是可执行的，然后将其复制到`${PATH}`，通常是`/usr/local/bin`。首次执行后，RKE2将创建所有必要的目录和文件。要进一步配置系统，您需要参考xref:install/configuration.adoc[配置文件]文档。

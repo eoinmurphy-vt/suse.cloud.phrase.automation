@@ -1,0 +1,184 @@
+= Windows隔离安装
+:page-languages: [en, zh]
+:revdate: 2025-08-06
+:page-revdate: {revdate}
+
+*Windows支持要求使用Calico或Flannel作为RKE2集群的CNI。*
+
+您可以通过两种不同的方法，在隔离的环境中使用RKE2 Windows代理（工作节点）节点。这需要首先完成RKE2 xref:install/airgap.adoc[隔离设置]。
+
+[IMPORTANT]
+====
+您可以使用在Prime Artifacts URL上列出的任何RKE2 Prime版本来获取这些步骤中提到的资产。要了解有关 Prime Artifacts URL 的更多信息，请参阅我们的 https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[仅限 Prime 的文档]。需要身份验证。使用您的 https://scc.suse.com/home[SUSE 客户中心 (SCC)] 凭据登录。
+====
+
+下载适用于您的RKE2版本的隔离镜像压缩包，或使用私有注册表。目前根据我们验证的xref:install/requirements.adoc#_windows[Windows版本]，已发布三种适用于Windows的压缩包工件。
+
+* `rke2.windows-amd64.tar.gz`
+* `rke2-windows-1809-amd64-images.tar.gz`
+* `rke2-windows-ltsc2022-amd64-images.tar.gz`
+
+步骤中提到的所有文件均可从您所需的RKE2版本的 https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]获取。
+
+== 准备Windows代理节点
+
+[NOTE]
+====
+必须启用Windows Server容器功能，以便RKE2代理正常工作。
+====
+
+. 以管理员权限打开一个新的PowerShell窗口。
++
+[,powershell]
+----
+powershell -Command "Start-Process PowerShell -Verb RunAs"
+----
+
+. 在新的PowerShell窗口中，运行以下命令。
++
+[,powershell]
+----
+Enable-WindowsOptionalFeature -Online -FeatureName containers –All
+----
+
+. 重启节点以使`Containers`功能正常工作。
+
+== Windows tar包方法
+
+. 从 https://scc.suse.com/rancher-docs/rancherprime/latest/en/reference-guide.html#prime-artifacts-url[Prime Artifacts URL]下载您所使用的RKE2版本的Windows镜像压缩包和二进制文件。
++
+**使用tar.gz镜像压缩包**
+
+** *Windows Server*
++
+[,powershell]
+----
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2.windows-amd64.tar.gz -OutFile /var/lib/rancher/rke2/agent/images/rke2.windows-amd64.tar.gz
+----
++
+** *Windows Server 2019 LTSC（amd64）（操作系统版本17763.2061）*
++
+[,powershell]
+----
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2-windows-1809-amd64-images.tar.gz -OutFile c:/var/lib/rancher/rke2/agent/images/rke2-windows-1809-amd64-images.tar.gz
+----
++
+** *Windows Server 2022 LTSC（amd64）（操作系统版本20348.169）*
++
+[,powershell]
+----
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2-windows-ltsc2022-amd64-images.tar.gz -OutFile c:/var/lib/rancher/rke2/agent/images/rke2-windows-ltsc2022-amd64-images.tar.gz
+----
++
+**使用tar.zst镜像压缩包**
+
+与pigz相比，Zstandard提供了更好的压缩比和更快的解压速度。
+
+** *Windows Server 2019 LTSC（amd64）（操作系统版本17763.2061）*
++
+[,powershell]
+----
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2-windows-1809-amd64-images.tar.zst -OutFile /var/lib/rancher/rke2/agent/images/rke2-windows-1809-amd64-images.tar.zst
+----
++
+** *Windows Server 2022 LTSC（amd64）（操作系统版本20348.169）*
++
+[,powershell]
+----
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2-windows-ltsc2022-amd64-images.tar.zst -OutFile c:/var/lib/rancher/rke2/agent/images/rke2-windows-ltsc2022-amd64-images.tar.zst
+----
++
+** 使用`rke2-windows-<VERSION>-amd64.tar.gz`或`rke2-windows-<VERSION>-amd64.tar.zst`。与pigz相比，Zstandard提供了更好的压缩比和更快的解压速度。
++
+. 确保`/var/lib/rancher/rke2/agent/images/`目录在节点上存在。
++
+[,powershell]
+----
+ New-Item -Type Directory c:\usr\local\bin -Force
+ New-Item -Type Directory c:\var\lib\rancher\rke2\bin -Force
+----
+. 将压缩档案复制到节点上的`/var/lib/rancher/rke2/agent/images/`，确保保留文件扩展名。
+. <<Install Windows RKE2>>”结尾。
+
+== 私有注册表方法
+
+私有注册表支持遵循来自xref:install/containerd_registry_configuration.adoc[containerd注册表配置]的所有设置，包括端点覆盖、传输协议（HTTP/HTTPS）、身份验证、证书验证等。
+
+. 将所有所需的系统镜像添加到您的私有注册表。可以从与上述每个压缩包对应的`.txt`文件中获取镜像列表。或者，您可以`docker load`隔离镜像压缩包，然后标记并推送加载的镜像。
+. 使用<<Install Windows RKE2>>和`system-default-registry`参数，或使用xref:install/containerd_registry_configuration.adoc[containerd注册表配置]将您的注册表用作docker.io的镜像。
+
+== 安装Windows RKE2
+
+这些步骤仅在完成<<Windows Tarball Method,tarball方法>>或<<Private Registry Method>>之一后执行。
+
+. 获取Windows RKE2二进制文件`rke2-windows-amd64.exe`。确保二进制文件命名为`rke2.exe`并放置在`c:/usr/local/bin`中。
++
+[,powershell]
+----
+Invoke-WebRequest <PRIME-Artifacts-URL>/rke2/<VERSION>/rke2-windows-amd64.exe -OutFile c:/usr/local/bin/rke2.exe
+----
+
+. 为Windows配置rke2-agent。
++
+[,powershell]
+----
+New-Item -Type Directory c:/etc/rancher/rke2 -Force
+Set-Content -Path c:/etc/rancher/rke2/config.yaml -Value @"
+server: https://<server>:9345
+token: <token from server node>
+"@
+----
++
+要了解有关config.yaml文件的更多信息，请参见xref:install/configuration.adoc#_configuration_file[安装选项文档。]
+
+. 配置您的路径。
++
+[,powershell]
+----
+$env:PATH+=";c:\var\lib\rancher\rke2\bin;c:\usr\local\bin"
+
+"Path",
+[Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine) + ";c:\var\lib\rancher\rke2\bin;c:\usr\local\bin",
+[EnvironmentVariableTarget]::Machine)
+----
+
+. 通过使用所需参数运行二进制文件来启动RKE2 Windows服务。有关其他参数，请参见xref:reference/windows_agent_config.adoc[Windows代理配置参考]。
++
+[,powershell]
+----
+c:\usr\local\bin\rke2.exe agent service --add
+Start-Service rke2
+----
++
+* 如果您使用的是Rancher Prime注册表，请在`config.yaml`中设置以下值：
+.. 设置`system-default-registry: registry.rancher.com`。
+.. 如果您不使用默认CNI Canal，请设置`cni: <CNI>`。
++
+[,yaml]
+----
+system-default-registry: registry.rancher.com
+cni: <CNI>
+----
+* 如果使用私有注册表方法，请在`config.yaml`中设置以下值：
++
+[,yaml]
+----
+system-default-registry: "registry.example.com:5000"
+----
++
+[NOTE] 
+====
+`system-default-registry`参数必须仅指定有效的RFC 3986 URI权威，即主机和可选端口。
+====
++
+如果您更喜欢仅使用CLI参数，请使用所需的参数运行二进制文件。
++
+[,powershell]
+----
+c:/usr/local/bin/rke2.exe agent --token <> --server <>
+----

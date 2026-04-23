@@ -1,0 +1,163 @@
+= Containerd 容器注册表配置
+:page-languages: [en, zh]
+:revdate: 2025-08-06
+:page-revdate: {revdate}
+
+Containerd 可以配置为连接到私有注册表，并在每个节点上使用它们拉取私有镜像。
+
+在启动时，RKE2 将检查 `registries.yaml` 处是否存在 `/etc/rancher/rke2/` 文件，并指示 containerd 使用文件中定义的任何注册表。如果您希望使用私有注册表，则需要在每个将使用该注册表的节点上以 root 身份创建此文件。
+
+服务器节点默认是可调度的。如果您没有为服务器节点设置污点且将在其上运行工作负载，请确保在每个服务器上也创建 `registries.yaml` 文件。
+
+containerd 中的配置可以用于通过 TLS 连接到私有注册表，也可以用于连接启用身份验证的注册表。以下部分将解释 `registries.yaml` 文件，并给出在 RKE2 中使用私有注册表配置的不同示例。
+
+== 注册表配置文件
+
+该文件由两个主要部分组成：
+
+* 镜像
+* 配置文件
+
+=== 镜像
+
+Mirrors 是一个指令，用于定义私有注册表的名称和端点。私有注册表可以用作默认 docker.io 注册表的本地镜像，或用于名称中明确指定注册表的镜像。
+
+例如，以下配置将从 `\https://registry.example.com:5000` 处的私有注册表拉取 `library/busybox:latest` 和 `registry.example.com/library/busybox:latest`：
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+  registry.example.com:
+    endpoint:
+      - "https://registry.example.com:5000"
+----
+
+每个镜像必须有一个名称和一组端点。从注册表拉取镜像时，containerd 将逐个尝试这些端点 URL，并使用第一个可用的端点。
+
+[NOTE]
+====
+如果未配置端点，containerd 假定可以通过 HTTPS 在 443 端口匿名访问该注册表，并使用主机操作系统信任的证书。有关更多信息，您可以 https://github.com/containerd/containerd/blob/master/docs/cri/registry.md#configure-registry-endpoint[查阅 containerd 文档]。
+====
+
+==== 重写
+
+每个镜像可以有一组重写规则。重写规则可以根据正则表达式更改镜像的标签。如果镜像注册表中的组织/项目结构与上游的不同，这将非常有用。
+
+例如，以下配置将透明地从 `rancher/rke2-runtime:v1.23.5-rke2r1` 拉取镜像 `registry.example.com:5000/mirrorproject/rancher-images/rke2-runtime:v1.23.5-rke2r1`：
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+    rewrite:
+      "^rancher/(.*)": "mirrorproject/rancher-images/$1"
+----
+
+=== 配置
+
+configs 部分定义了每个镜像的 TLS 和凭证配置。对于每个镜像，您可以定义 `auth` 和/或 `tls`。TLS 部分包括：
+
+|===
+| 指令 | 说明
+
+| `cert_file`
+| 将用于与注册表进行身份验证的客户端证书路径
+
+| `key_file`
+| 将用于与注册表进行身份验证的客户端密钥路径
+
+| `ca_file`
+| 定义用于验证注册表服务器证书文件的 CA 证书路径
+
+| `insecure_skip_verify`
+| 布尔值，定义是否应跳过注册表的 TLS 验证
+|===
+
+凭证由用户名/密码或身份验证令牌组成：
+
+* 用户名：私有注册表基本身份验证的用户名
+* 密码：私有注册表基本身份验证的用户密码
+* 身份验证令牌：私有注册表基本身份验证的身份验证令牌
+
+以下是使用私有注册表的不同模式的基本示例：
+
+=== 使用 TLS
+
+以下是使用 TLS 时，您如何在每个节点上配置 `/etc/rancher/rke2/registries.yaml` 的示例。
+
+_使用身份验证:_
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+    tls:
+      cert_file:            # path to the cert file used to authenticate to the registry
+      key_file:             # path to the key file for the certificate used to authenticate to the registry
+      ca_file:              # path to the ca file used to verify the registry's certificate
+      insecure_skip_verify: # may be set to true to skip verifying the registry's certificate
+----
+
+_不使用身份验证:_
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    tls:
+      cert_file:            # path to the cert file used to authenticate to the registry
+      key_file:             # path to the key file for the certificate used to authenticate to the registry
+      ca_file:              # path to the ca file used to verify the registry's certificate
+      insecure_skip_verify: # may be set to true to skip verifying the registry's certificate
+----
+
+=== 不使用 TLS
+
+以下是当 _不_ 使用 TLS 时，您如何在每个节点上配置 `/etc/rancher/rke2/registries.yaml` 的示例。
+
+_明文 HTTP 使用身份验证:_
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+configs:
+  "registry.example.com:5000":
+    auth:
+      username: xxxxxx # this is the registry username
+      password: xxxxxx # this is the registry password
+----
+
+_明文 HTTP 不使用身份验证:_
+
+[,yaml]
+----
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://registry.example.com:5000"
+----
+
+____
+如果使用不带 TLS 的明文 HTTP 注册表，您需要将 `http://` 指定为端点 URI 方案，否则将默认为 `https://`。
+____
+
+为了使注册表更改生效，您需要在启动节点上的 RKE2 之前配置此文件，或者在每个已配置的节点上重启 RKE2。

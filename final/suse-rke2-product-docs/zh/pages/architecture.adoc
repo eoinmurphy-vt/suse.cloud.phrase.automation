@@ -1,0 +1,118 @@
+= 下一代 Kubernetes 发行版的结构
+:page-languages: [en, zh]
+:revdate: 2025-10-29
+:page-revdate: {revdate}
+
+== 体系结构概述
+
+通过 RKE2，我们从开发和维护轻量级 https://kubernetes.io[Kubernetes] 发行版 https://k3s.io[K3s] 中吸取经验教训，并将其应用于构建一个企业级的发行版，具有 https://k3s.io[K3s] 的易用性。这意味着 RKE2 在最简单的情况下，是一个需要在所有预期参与 https://kubernetes.io[Kubernetes] 集群的节点上安装和配置的单一二进制文件。一旦启动，RKE2 就能够启动并监督各节点中角色匹配的代理，同时从网络中获取所需的内容。
+
+image::overview.png[体系结构概述]
+
+RKE2 汇集了多种开源技术，使这一切得以运作：
+
+* https://k3s.io[K3s]
+ ** https://github.com/k3s-io/helm-controller[Helm 控制器]
+* https://kubernetes.io[K8s]
+ ** https://github.com/kubernetes/kubernetes/tree/master/cmd/kube-apiserver[API 服务器]
+ ** https://github.com/kubernetes/kubernetes/tree/master/cmd/kube-controller-manager[控制器管理器]
+ ** https://github.com/kubernetes/kubernetes/tree/master/cmd/kubelet[Kubelet]
+ ** https://github.com/kubernetes/kubernetes/tree/master/cmd/kube-scheduler[调度程序]
+ ** https://github.com/kubernetes/kubernetes/tree/master/cmd/kube-proxy[代理]
+* https://etcd.io[etcd]
+* https://github.com/opencontainers/runc[runc]
+* https://containerd.io[containerd]/link:https://github.com/kubernetes/cri-api[cri]
+* https://github.com/containernetworking/cni[CNI]：Canal (https://docs.tigera.io/calico/latest/about[Calico] & https://github.com/flannel-io/flannel[Flannel])， https://cilium.io[Cilium]， https://docs.tigera.io/calico/latest/about[Calico] 或 https://github.com/flannel-io/flannel[Flannel]。此外： https://github.com/k8snetworkplumbingwg/multus-cni[Multus]
+* https://coredns.io[CoreDNS]
+* https://kubernetes.github.io/ingress-nginx[Ingress NGINX Controller] 和/或 https://traefik.io/traefik[Traefik]
+* https://github.com/kubernetes-sigs/metrics-server[Metrics Server]
+* https://helm.sh[Helm]
+
+除了 Traefik 之外，所有这些都是与 https://github.com/golang/go/tree/dev.boringcrypto/misc/boring[Go+BoringCrypto] 编译并静态链接的。
+
+== 进程生命周期
+
+=== 内容启动
+
+RKE2 从 RKE2 Runtime 镜像中提取二进制文件和清单，以运行 _server_ 和 _agent_ 节点。
+这意味着 RKE2 默认扫描 `/var/lib/rancher/rke2/agent/images/*.tar` 以查找 https://hub.docker.com/r/rancher/rke2-runtime/tags[`rancher/rke2-runtime`] 镜像（其标签与 `rke2 --version` 的输出相关），如果找不到，则尝试从网络中拉取（即：Docker Hub）。然后 RKE2 从镜像中提取 `/bin/`，将其扁平化为 `/var/lib/rancher/rke2/data/${RKE2_DATA_KEY}/bin`，其中 `${RKE2_DATA_KEY}` 代表一个唯一字符串，用于标识该镜像。
+
+为了使 RKE2 按预期工作，运行时镜像至少必须提供：
+
+* *`containerd`*（ https://github.com/kubernetes/cri-api[CRI]）
+* *`containerd-shim`*（shims 封装 `runc` 任务，并且在 `containerd` 停止时不会停止）
+* *`containerd-shim-runc-v1`*
+* *`containerd-shim-runc-v2`*
+* *`kubelet`*（Kubernetes 节点代理）
+* *`runc`*（OCI 运行时）
+
+运行时镜像还提供以下操作工具：
+
+* *`ctr`*（低级别 `containerd` 维护和检查）
+* *`crictl`*（低级别 CRI 维护和检查）
+* *`kubectl`*（Kubernetes 集群维护和检查）
+* *`socat`*（`containerd` 进行端口转发所需）
+
+在提取二进制文件后，RKE2 将从镜像中提取图表到 `/var/lib/rancher/rke2/server/manifests` 目录。
+
+=== 初始化服务器
+
+在嵌入式 K3s 引擎中，服务器是专门的代理进程，这意味着以下启动将推迟，直到节点容器运行时已启动。
+
+==== 准备组件
+
+===== `kube-apiserver`
+
+拉取 `kube-apiserver` 镜像（如果尚未存在），并启动一个 goroutine 等待 `etcd`，然后在 `/var/lib/rancher/rke2/agent/pod-manifests/` 中写入静态 Pod 定义。
+
+===== `kube-controller-manager`
+
+拉取 `kube-controller-manager` 镜像（如果尚未存在），并启动一个 goroutine 等待 `kube-apiserver`，然后在 `/var/lib/rancher/rke2/agent/pod-manifests/` 中写入静态 Pod 定义。
+
+===== `kube-scheduler`
+
+拉取 `kube-scheduler` 镜像（如果尚未存在），并启动一个 goroutine 等待 `kube-apiserver`，然后在 `/var/lib/rancher/rke2/agent/pod-manifests/` 中写入静态 Pod 定义。
+
+==== 启动集群
+
+在 goroutine 中启动一个 HTTP 服务器，监听其他集群服务器/代理，然后初始化/加入集群。
+
+===== `etcd`
+
+拉取 `etcd` 镜像（如果尚未存在），并启动一个 goroutine 等待 `kubelet`，然后在 `/var/lib/rancher/rke2/agent/pod-manifests/` 中写入静态 Pod 定义。
+
+===== `helm-controller`
+
+启动 goroutine，在等待 `kube-apiserver` 准备好后启动嵌入式 `helm-controller`。
+
+=== 初始化代理
+
+代理进程的入口点。对于服务器进程，嵌入式 K3s 引擎直接调用此方法。
+
+==== 容器运行时
+
+===== `containerd`
+
+生成 `containerd` 进程并监听终止。如果 `containerd` 退出，则 `rke2` 进程也将退出。
+
+==== 节点代理
+
+===== `kubelet`
+
+生成并监督 `kubelet` 进程。如果 `kubelet` 退出，则 `rke2` 将尝试重新启动它。
+一旦 `kubelet` 正在运行，它将启动任何可用的静态 Pods。对于服务器，这意味着 `etcd` 和 `kube-apiserver` 将依次启动，允许通过静态 Pod 启动的其余组件连接到 `kube-apiserver` 并开始处理。
+
+==== 服务器 Chart
+
+在服务器节点上，`helm-controller` 现在可以将 `/var/lib/rancher/rke2/server/manifests` 中找到的任何 Chart 应用于集群。
+
+* rke2-canal.yaml 或 rke2-cilium.yaml 或 rke2-calico.yaml 或 rke2-flannel.yaml 或 rke2-multus.yaml（守护程序集，启动）
+* rke2-coredns.yaml（部署，启动）
+* rke2-ingress-nginx.yaml 和/或 rke2-traefik.yaml 以及 rke2-traefik-crd.yaml（部署）
+* rke2-metrics-server.yaml（部署）
+* rke2-runtimeclasses.yaml（部署）
+* rke2-snapshot-controller-crd.yaml、rke2-snapshot-controller.yaml 和 rke2-snapshot-validation-webhook.yaml（部署）
+
+=== 守护程序
+
+RKE2 进程现在将无限期运行，直到接收到 SIGTERM 或 SIGKILL，或者 `containerd` 进程退出。
