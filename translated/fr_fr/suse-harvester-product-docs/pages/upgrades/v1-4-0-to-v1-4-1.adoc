@@ -1,0 +1,352 @@
+= Mettez à niveau de v1.4.0 à v1.4.1
+:revdate: 2025-07-07
+:page-revdate: {revdate}
+
+== informations générales
+
+Un bouton *Upgrade* apparaît sur l'écran *Dashboard* chaque fois qu'une nouvelle version {harvester-product-name} à laquelle vous pouvez mettre à niveau est disponible. Pour plus d'informations, voir xref:./upgrades.adoc#_start_an_upgrade[Démarrer une mise à niveau].
+
+Pour les environnements isolés physiquement, voir xref:./upgrades.adoc#_prepare_an_air_gapped_upgrade[Préparer une mise à niveau isolée physiquement].
+
+[IMPORTANT]
+====
+Vérifiez l'utilisation du disque des images du système d'exploitation sur chaque nœud avant de commencer la mise à niveau. Pour ce faire, accédez au nœud via SSH et exécutez la commande `+du -sh /run/initramfs/cos-state/cOS/*+`.
+
+Exemple :
+
+[,shell]
+----
+# du -sh /run/initramfs/cos-state/cOS/*
+1.7G    /run/initramfs/cos-state/cOS/active.img
+3.1G    /run/initramfs/cos-state/cOS/passive.img
+----
+
+Si `+passive.img+` (qui représente l'image de Harvester v1.4.0 précédemment installée) consomme 3,1 Go d'espace disque, exécutez les commandes suivantes en utilisant le compte [Root] :
+
+[,shell]
+----
+# mount -o remount,rw /run/initramfs/cos-state
+# fallocate --dig-holes /run/initramfs/cos-state/cOS/passive.img
+# mount -o remount,ro /run/initramfs/cos-state
+----
+
+`+passive.img+` est converti en un fichier sparse, qui ne devrait consommer que 1.7G d'espace disque (le même que `+active.img+`). Cela garantit que chaque nœud dispose de suffisamment d'espace libre, empêchant le processus de mise à niveau de devenir <<3. Upgrade stuck in "Waiting Reboot" state,bloqué dans l'état "Attente de redémarrage">>.
+====
+
+=== Mettez à jour l'extension UI de Harvester sur {rancher-product-name} v2.10.1
+
+Vous devez utiliser **v1.0.3** de l'extension UI de Harvester pour importer des clusters {harvester-product-name} v1.4.1 sur {rancher-short-name} v2.10.1.
+
+. Sur l'interface {rancher-short-name}, allez à *local -> Apps -> Repositories*.
+
+. Localisez le dépôt nommé *harvester*, puis sélectionnez *⋮ -> Actualiser*.
++
+Ce dépôt a les propriétés suivantes :
++
+* URL : **https://github.com/harvester/harvester-ui-extension**
+* Branche : **gh-pages**
++
+image::upgrade/rancher-2.10.1-repository-page.png[]
+
+. Allez à l'écran *Extensions*.
+
+. Localisez l'extension nommée *Harvester*, puis cliquez sur *Mettre à jour*.
+
+. Sélectionnez la version *1.0.3*, puis cliquez sur *Mettre à jour*.
++
+image::upgrade/update-harvester-ui-extension-modal.png[]
+
+. Laissez un certain temps pour que l'extension soit mise à jour, puis actualisez l'écran.
+
+[IMPORTANT]
+====
+L'interface utilisateur {rancher-short-name} affiche un message d'erreur après la mise à jour de l'extension. Le message d'erreur disparaît lorsque vous actualisez l'écran.
+
+Ce problème, qui existe dans {rancher-short-name} v2.10.0 et v2.10.1, sera corrigé dans v2.10.2. 
+====
+
+Problèmes connexes : https://github.com/harvester/harvester/issues/7234[#7234] et https://github.com/rancher/capi-ui-extension/issues/107[#107]
+
+== Problèmes connus
+
+=== 1. Mise à niveau bloquée dans l'état "Pré-drainé"
+
+Le processus de mise à niveau peut être bloqué dans l'état "Pré-drainé". Kubernetes est censé drainer la charge de travail sur le nœud, mais certains facteurs peuvent provoquer un blocage du processus.
+
+image::upgrade/3730-stuck.png[]
+
+Une cause possible est des processus liés aux moteurs orphelins du Longhorn Instance Manager. Pour déterminer si cela s'applique à votre situation, effectuez les étapes suivantes :
+
+. Vérifiez le nom du pod `+instance-manager+` sur le nœud bloqué.
++
+Exemple :
++
+Le nœud bloqué est `+harvester-node-1+`, et le nom du pod Instance Manager est `+instance-manager-d80e13f520e7b952f4b7593fc1883e2a+`.
++
+[,shell]
+----
+$ kubectl get pods -n longhorn-system --field-selector spec.nodeName=harvester-node-1 | grep instance-manager
+instance-manager-d80e13f520e7b952f4b7593fc1883e2a          1/1     Running   0              3d8h
+----
+
+. Vérifiez les journaux du Longhorn Manager pour des messages d'information.
++
+Exemple :
++
+[,shell]
+----
+$ kubectl -n longhorn-system logs daemonsets/longhorn-manager
+...
+time="2025-01-14T00:00:01Z" level=info msg="Node instance-manager-d80e13f520e7b952f4b7593fc1883e2a is marked unschedulable but removing harvester-node-1 PDB is blocked: some volumes are still attached InstanceEngines count 1 pvc-9ae0e9a5-a630-4f0c-98cc-b14893c74f9e-e-0" func="controller.(*InstanceManagerController).syncInstanceManagerPDB" file="instance_manager_controller.go:823" controller=longhorn-instance-manager node=harvester-node-1
+----
++
+Le pod `+instance-manager+` ne peut pas être drainé en raison du moteur `+pvc-9ae0e9a5-a630-4f0c-98cc-b14893c74f9e-e-0+`.
+
+. Vérifiez si le moteur fonctionne toujours sur le nœud bloqué.
++
+Exemple :
++
+[,shell]
+----
+$ kubectl -n longhorn-system get engines.longhorn.io pvc-9ae0e9a5-a630-4f0c-98cc-b14893c74f9e-e-0 -o jsonpath='{"Current state: "}{.status.currentState}{"\nNode ID: "}{.spec.nodeID}{"\n"}'
+Current state: stopped
+Node ID:
+----
++
+Le problème existe probablement si la sortie montre que le moteur n'est pas en cours d'exécution ou introuvable.
+
+. Vérifiez si tous les volumes sont sains.
++
+[,shell]
+----
+kubectl get volumes -n longhorn-system -o yaml | yq '.items[] | select(.status.state == "attached")| .status.robustness'
+----
++
+Tous les volumes doivent être marqués `+healthy+`. Si ce n'est pas le cas, signalez le problème.
+
+. Supprimez le PodDisruptionBudget (PDB) du pod `+instance-manager+`.
++
+Exemple :
++
+[,shell]
+----
+kubectl delete pdb instance-manager-d80e13f520e7b952f4b7593fc1883e2a -n longhorn-system
+----
+
+Problèmes liés : https://github.com/harvester/harvester/issues/7366[#7366] et https://github.com/longhorn/longhorn/issues/6764[#6764]
+
+=== 2. Mettez à niveau avec une StorageClass par défaut qui n'est pas `+harvester-longhorn+`
+
+Le Harvester ajoute l'annotation `+storageclass.kubernetes.io/is-default-class: "true"+` à `+harvester-longhorn+`, qui est la StorageClass par défaut d'origine. Lorsque vous remplacez `+harvester-longhorn+` par une autre StorageClass, les éléments suivants se produisent :
+
+* Le ManagedChart du Harvester affiche le message d'erreur `+cannot patch "harvester-longhorn" with kind StorageClass: admission webhook "validator.harvesterhci.io" denied the request: default storage class %!s(MISSING) already exists, please reset it first+`.
+
+* Le webhook refuse la demande de mise à niveau.
++
+image::upgrade/upgrade-with-another-default-storage-class.png[]
+
+Vous pouvez effectuer l'une des solutions de contournement suivantes :
+
+* Définissez `+harvester-longhorn+` comme la StorageClass par défaut.
+
+* Ajoutez `+spec.values.storageClass.defaultStorageClass: false+` au ManagedChart `+harvester+`.
++
+[,shell]
+----
+kubectl edit managedchart harvester -n fleet-local
+----
+
+* Ajoutez `+timeoutSeconds: 600+` à la spécification du ManagedChart du Harvester.
++
+[,shell]
+----
+kubectl edit managedchart harvester -n fleet-local
+----
++
+image::upgrade/upgrade-with-another-default-storage-class-workaround.png[]
+
+Problème lié : https://github.com/harvester/harvester/issues/7375[#7375]
+
+=== 3. Mise à niveau bloquée dans l'état "En attente de redémarrage"
+
+Le processus de mise à niveau peut rester bloqué dans l'état "En attente de redémarrage" après que l'image Harvester v1.4.1 a été installée sur un nœud et qu'un redémarrage a été initié. À ce stade, le contrôleur de mise à niveau observe si le système d'exploitation Harvester v1.4.1 est en cours d'exécution.
+
+Si l'image Harvester v1.4.1 (ci-après dénommée `+active.img+`) ne parvient pas à démarrer pour une raison quelconque, le nœud redémarre automatiquement en mode de secours et démarre l'image Harvester v1.4.0 précédemment installée (ci-après dénommée `+passive.img+`). Le contrôleur de mise à niveau ne parvient pas à détecter le système d'exploitation attendu, donc la mise à niveau reste bloquée jusqu'à ce qu'un administrateur résolve le problème avec `+active.img+`.
+
+`+active.img+` peut devenir corrompu et non amorçable en raison d'un espace disque insuffisant dans la partition `+COS_STATE+` pendant la mise à niveau. Cela se produit si Harvester v1.4.0 a été initialement installé sur le nœud et que le système a été configuré pour utiliser un disque de données séparé. Le problème ne se produit pas dans les situations suivantes :
+
+* Le système dispose d'un seul disque partagé par le système d'exploitation et les données.
+* Une version antérieure de Harvester a été installée puis mise à niveau vers la v1.4.0.
+
+Pour vérifier si le problème existe dans votre environnement, effectuez les étapes suivantes :
+
+. Accédez au nœud via SSH et connectez-vous en utilisant le compte [Root].
+
+. Exécutez les commandes `+cat /proc/cmdline+` et `+head -n1 /etc/harvester-release.yaml+`.
++
+Exemple :
++
+[,shell]
+----
+# cat /proc/cmdline
+BOOT_IMAGE=(loop0)/boot/vmlinuz console=tty1 root=LABEL=COS_STATE cos-img/filename=/cOS/passive.img panic=0 net.ifnames=1 rd.cos.oemlabel=COS_OEM rd.cos.mount=LABEL=COS_OEM:/oem rd.cos.mount=LABEL=COS_PERSISTENT:/usr/local rd.cos.oemtimeout=120 audit=1 audit_backlog_limit=8192 intel_iommu=on amd_iommu=on iommu=pt multipath=off upgrade_failure
+
+# head -n1 /etc/harvester-release.yaml
+harvester: v1.4.0
+----
++
+La présence de `+cos-img/filename=/cOS/passive.img+` et `+upgrade_failure+` dans la sortie indique que le système a démarré en mode de secours. La version de Harvester dans `+/etc/harvester-release.yaml+` confirme que le système utilise actuellement l'image v1.4.0.
+
+. Vérifiez si `+active.img+` est corrompu en exécutant la commande `+fsck.ext2 -nf /run/initramfs/cos-state/cOS/active.img+`.
++
+Exemple :
++
+[,shell]
+----
+# fsck.ext2 -nf /run/initramfs/cos-state/cOS/active.img
+e2fsck 1.46.4 (18-Aug-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+
+    [...a list of various different errors may appear here...]
+
+e2fsck: aborted
+
+COS_ACTIVE: ********** WARNING: Filesystem still has errors **********
+----
+
+. Vérifiez les tailles des partitions en exécutant la commande `+lsblk -o NAME,LABEL,SIZE+`.
++
+Exemple :
++
+[,shell]
+----
+# lsblk -o NAME,LABEL,SIZE
+ NAME   LABEL             SIZE
+loop0  COS_ACTIVE          3G
+sr0                     1024M
+vda                      250G
+├─vda1 COS_GRUB           64M
+├─vda2 COS_OEM            64M
+├─vda3 COS_RECOVERY        4G
+├─vda4 COS_STATE           8G
+└─vda5 COS_PERSISTENT  237.9G
+vdb    HARV_LH_DEFAULT   128G
+----
++
+La sortie dans l'exemple montre une partition `+COS_STATE+` de 8 Go. Dans ce cas spécifique, qui implique une tentative de mise à niveau infructueuse et un `+active.img+` corrompu, la partition n'avait probablement pas assez d'espace libre pour que la mise à niveau réussisse.
+
+Pour résoudre le problème, effectuez les étapes suivantes :
+
+. Si votre cluster a deux nœuds ou plus, accédez aux nœuds restants via SSH et vérifiez l'utilisation du disque de `+active.img+` et `+passive.img+`.
++
+[,shell]
+----
+# du -sh /run/initramfs/cos-state/cOS/*
+1.7G    /run/initramfs/cos-state/cOS/active.img
+3.1G    /run/initramfs/cos-state/cOS/passive.img
+----
++
+Si `+passive.img+` consomme 3,1 Go d'espace disque, exécutez la commande suivante en utilisant le compte [Root] :
++
+[,shell]
+----
+# mount -o remount,rw /run/initramfs/cos-state
+# fallocate --dig-holes /run/initramfs/cos-state/cOS/passive.img 
+# mount -o remount,ro /run/initramfs/cos-state
+----
++
+`+passive.img+` est converti en un fichier sparse, qui ne devrait consommer que 1.7G d'espace disque (le même que `+active.img+`). Cela garantit que les autres nœuds disposent de suffisamment d'espace libre, empêchant le processus de mise à niveau de se bloquer à nouveau.
+
+. Accédez au nœud bloqué via SSH, puis exécutez la commande suivante en utilisant le compte [Root] :
++
+[,shell]
+----
+# mount -o remount,rw /run/initramfs/cos-state
+# cp /run/initramfs/cos-state/cOS/passive.img \
+    /run/initramfs/cos-state/cOS/active.img
+# tune2fs -L COS_ACTIVE /run/initramfs/cos-state/cOS/active.img
+# mount -o remount,ro /run/initramfs/cos-state
+----
++
+Le `+passive.img+` existant (propre) est copié sur le `+active.img+` corrompu, et l'étiquette est correctement définie.
+
+. Redémarrez le nœud bloqué, puis sélectionnez la première entrée (*Harvester v1.4.1*) sur l'écran de démarrage GRUB.
++
+L'écran de démarrage GRUB affiche initialement *Harvester v1.4.1 (fallback)* par défaut. Malgré la version affichée, le système démarre sur Harvester v1.4.0.
+
+. Copiez `+rootfs.squashfs+` de l'ISO de Harvester v1.4.1 vers un emplacement pratique sur le nœud bloqué.
++
+L'ISO peut être monté soit sur le nœud bloqué, soit sur un autre système. Vous pouvez copier le fichier en utilisant la commande `+scp+`.
+
+. Accédez au nœud bloqué via SSH, puis exécutez la commande suivante en utilisant le compte [Root] :
++
+[,shell]
+----
+# mkdir /tmp/manual-os-upgrade
+# mkdir /tmp/manual-os-upgrade/config
+# mkdir /tmp/manual-os-upgrade/rootfs
+# mount -o loop rootfs.squashfs /tmp/manual-os-upgrade/rootfs
+# cat > /tmp/manual-os-upgrade/config/config.yaml <<EOF
+upgrade:
+    system:
+        size: 3072
+EOF
+# elemental upgrade \
+            --logfile /tmp/manual-os-upgrade/upgrade.log \
+            --directory /tmp/manual-os-upgrade/rootfs \
+            --config-dir /tmp/manual-os-upgrade/config \
+            --debug
+----
++
+[NOTE]
+====
+Vous devez remplacer le chemin d'exemple dans la quatrième ligne par le chemin réel du `+rootfs.squashfs+` copié.
+====
++
+Un nouveau `+active.img+` (propre) est généré à partir de l'image racine de l'ISO Harvester v1.4.1.
++
+Si des erreurs se produisent, sauvegardez une copie de `+/tmp/manual-os-upgrade/upgrade.log+`.
+
+. Exécutez les commandes suivantes :
++
+[,shell]
+----
+# umount /tmp/manual-os-upgrade/rootfs
+# reboot
+----
++
+Le nœud doit démarrer avec succès sur Harvester v1.4.1, et la mise à niveau doit se poursuivre comme prévu.
+
+Problèmes liés : https://github.com/harvester/harvester/issues/7457[#7457], https://github.com/harvester/harvester/issues/7493[#7493], https://github.com/harvester/harvester/issues/7518[#7518]
+
+=== 4. La mise à niveau redémarre de manière inattendue après avoir cliqué sur le bouton "Ignorer".
+
+Lorsque vous utilisez {rancher-short-name} pour mettre à niveau {harvester-product-name}, l'interface utilisateur {rancher-short-name} affiche une boîte de dialogue avec un bouton étiqueté "Ignorer". Cliquer sur ce bouton peut entraîner les problèmes suivants :
+
+* La section `+status+` du CR `+harvesterhci.io/v1beta1/upgrade+` est effacée, entraînant la perte de toutes les informations importantes concernant la mise à niveau.
+* Le processus de mise à niveau redémarre de manière inattendue.
+
+Ce problème affecte {rancher-short-name} v2.10.x, qui utilise v1.0.2, v1.0.3 et v1.0.4 de la xref:../integrations/rancher/harvester-ui-extension.adoc#_support_matrix[Harvester UI Extension]. Toutes les versions de l'interface utilisateur {harvester-product-name} ne sont pas affectées. Le problème est corrigé dans Harvester UI Extension v1.0.5 et v1.5.0.
+
+Pour éviter ce problème, effectuez l'une des actions suivantes :
+
+* Utilisez l'interface utilisateur {harvester-product-name} pour mettre à niveau. Cliquer sur le bouton "Ignorer" dans l'interface utilisateur {harvester-product-name} ne provoque pas de comportement inattendu.
+* Au lieu de cliquer sur le bouton dans l'interface utilisateur {rancher-short-name}, exécutez la commande suivante contre le cluster :
++
+[,shell]
+----
+kubectl -n harvester-system label upgrades -l harvesterhci.io/latestUpgrade=true harvesterhci.io/read-message=true
+----
+
+Problème lié : https://github.com/harvester/harvester/issues/7791[#7791]
+
+=== 5. Les machines virtuelles qui utilisent des volumes RWX migrables redémarrent de manière inattendue
+
+Les machines virtuelles qui utilisent des volumes xref:integrations/rancher/csi-driver.adoc#_rwx_volumes_support[RWX volumes] migrables redémarrent de manière inattendue lorsque les pods du plugin CSI sont redémarrés. Ce problème affecte {harvester-product-name} v1.4.x, v1.5.0 et v1.5.1.
+
+La solution de contournement consiste à désactiver le paramètre https://documentation.suse.com/cloudnative/storage/1.8/en/longhorn-system/settings.html#_automatically_delete_workload_pod_when_the_volume_is_detached_unexpectedly[Supprimer automatiquement le pod de charge de travail lorsque le volume est détaché de manière inattendue] sur l'interface utilisateur {longhorn-product-name} avant de commencer la mise à niveau. Vous devez réactiver le paramètre une fois la mise à niveau terminée.
+
+Le problème sera corrigé dans {longhorn-product-name} v1.8.3, v1.9.1 et les versions ultérieures. {harvester-product-name} v1.6.0 inclura {longhorn-product-name} v1.9.1. 
+
+Problèmes connexes : https://github.com/harvester/harvester/issues/8534[#8534] et https://github.com/longhorn/longhorn/issues/11158[#11158]
