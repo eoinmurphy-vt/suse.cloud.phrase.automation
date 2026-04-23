@@ -1,0 +1,319 @@
+= 要求
+:page-languages: [en, zh]
+:revdate: 2026-02-06
+:page-revdate: {revdate}
+
+RKE2 非常轻量，但有一些最低要求，如下所述。
+
+== 先决条件
+
+两个 RKE2 节点不能有相同的节点名称。默认情况下，节点名称取自机器的主机名。
+
+如果您的两台或更多机器有相同的主机名，您必须执行以下操作之一：
+
+* 将主机名更新为唯一值。
+* 在配置文件中将 `+node-name+` 参数设置为唯一值。
+* 在配置文件中将 `+with-node-id+` 参数设置为 `+true+`，以将随机生成的 ID 号附加到主机名。
+
+如果控制平面节点之间的往返时间 (RTT) 超过 2ms，请参考以下 https://support.scc.suse.com/s/kb/Maximum-RTT-Round-Trip-Time-for-an-RKE2-cluster?language=en_US[指南]。
+
+== 体系结构
+
+RKE2 可用于 x86_64 和 arm64/aarch64。
+
+== 操作系统
+
+=== Linux
+
+请参阅 https://www.suse.com/suse-rke2/support-matrix/all-supported-versions[RKE2 支持矩阵]，了解所有已通过 RKE2 验证的操作系统版本。一般来说，RKE2 应该可以在任何使用 systemd 和 iptables 的 Linux 发行套件上运行。
+
+==== RHEL 10
+
+在 RHEL 10（及其衍生版本如 Rocky Linux）上，需要额外的软件包以允许 nf_conntrack。
+
+[,bash]
+----
+sudo dnf install kernel-modules-extra -y
+----
+
+=== Windows
+
+[IMPORTANT]
+====
+Windows 支持要求选择 Calico 或 Flannel 作为 RKE2 集群的 CNI。
+====
+
+[NOTE] 
+====
+需要启用 Windows Server 容器功能，以使 RKE2 Windows 代理正常工作。
+====
+
+RKE2 Windows 节点（工作节点）代理已在以下操作系统及其后续非主要版本上进行了测试和验证：
+
+* Windows Server 2019 LTSC (amd64) (操作系统版本 17763.2061)
+* Windows Server 2022 LTSC (amd64) (操作系统版本 20348.169)
+
+打开一个具有管理员权限的新 Powershell 窗口。
+
+[,powershell]
+----
+powershell -Command "Start-Process PowerShell -Verb RunAs"
+----
+
+在新的 Powershell 窗口中，运行以下命令。
+
+[,powershell]
+----
+Enable-WindowsOptionalFeature -Online -FeatureName Containers -All
+----
+
+这将需要重启以使 `+Containers+` 功能正常运行。
+
+== 硬件
+
+硬件要求根据您的部署规模而变化。最低推荐配置在此列出。
+
+=== Linux/Windows
+
+* RAM：最低 4GB（我们建议至少 8GB）
+* CPU：最低 2（我们建议至少 4 个处理器）
+
+=== 虚拟机规格指南
+
+当控制平面 + etcd 节点的处理器和 RAM 受限时，标准工作负载条件下可以加入的代理节点数量可能会受到限制。
+
+|===
+| 服务器 处理器 | 服务器 RAM | 代理数量
+
+| 2
+| 4 GB
+| 0-225
+
+| 4
+| 8 GB
+| 226-450
+
+| 8
+| 16 GB
+| 451-1300
+
+| 16+
+| 32 GB
+| 1300+
+|===
+
+建议以 50 个或更少的批次加入代理节点，以便处理器释放空间，因为节点加入时会出现峰值。如果希望超过 255 个节点，请记得修改默认 `+cluster-cidr+`！
+
+这些数据是在特定测试条件下检索的。这将根据环境和工作负载而有所不同。以下步骤概述了为检索此数据而进行的测试。最后一次在 v1.27.4+rke2r1 上执行。所有机器均在 AWS 中配置，使用标准的 20 GiB gp3 卷。
+
+. 使用 prometheus 数据源在 grafana 上监控资源。
+. 以模拟持续集群活动的方式部署工作负载：
+** 一个基本的工作负载，持续地扩展和缩减
+** 一个在循环中被删除和重新创建的工作负载
+** 一个包含多个其他资源（包括 CRD）的恒定工作负载。
+. 以每次 30-50 个的批次加入代理节点。
+
+==== 磁盘
+
+RKE2 的性能依赖于数据库的性能，由于 RKE2 嵌入式运行 etcd 并将数据目录存储在磁盘上，我们建议尽可能使用 SSD 以确保最佳性能。
+
+== 网络
+
+[IMPORTANT]
+====
+如果您的节点安装并启用了 NetworkManager，xref:known_issues.adoc#_networkmanager[请确保其配置为忽略 CNI 管理的接口]。如果您的节点安装并启用了 Wicked，xref:known_issues.adoc#_wicked[请确保转发 sysctl 配置已启用]。
+====
+
+RKE2 服务器需要端口 6443 和 9345 可被集群中的其他节点访问。
+
+当使用 Flannel VXLAN 时，所有节点需要能够通过 UDP 端口 8472 访问其他节点。
+
+如果您希望使用指标服务器，您需要在每个节点上打开端口 10250。
+
+[IMPORTANT] 
+====
+节点上的 VXLAN 端口不应暴露给外部，因为这会使您的集群网络被任何人访问。在防火墙/安全组后运行您的节点，禁用对 8472 端口的访问。
+====
+
+=== 入站网络规则
+
+|===
+| 端口 | 协议 | 源 | 目标 | 说明
+
+| 6443
+| TCP
+| 所有 RKE2 节点
+| RKE2 服务器节点
+| Kubernetes API
+
+| 9345
+| TCP
+| 所有 RKE2 节点
+| RKE2 服务器节点
+| RKE2 监控 API
+
+| 10250
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| kubelet 指标
+
+| 2379
+| TCP
+| RKE2 服务器节点
+| RKE2 服务器节点
+| etcd 客户端端口
+
+| 2380
+| TCP
+| RKE2 服务器节点
+| RKE2 服务器节点
+| etcd 对等端口
+
+| 2381
+| TCP
+| RKE2 服务器节点
+| RKE2 服务器节点
+| etcd 指标端口
+
+| 30000-32767
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| NodePort 端口范围
+|===
+
+==== CNI 特定的入站网络规则
+
+[tabs]
+======
+
+Canal::
++
+|===
+| 端口 | 协议 | 源 | 目标 | 说明
+
+| 8472
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 VXLAN 的 Canal CNI
+
+| 9099
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Canal CNI 健康检查
+
+| 51820
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 WireGuard IPv4 的 Canal CNI
+
+| 51821
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 WireGuard IPv6/双栈的 Canal CNI
+|===
+
+Cilium::
++
+|===
+| 端口 | 协议 | 源 | 目标 | 说明
+
+| 8/0
+| ICMP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Cilium CNI 健康检查
+
+| 4240
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Cilium CNI 健康检查
+
+| 8472
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 VXLAN 的 Cilium CNI
+
+| 51871
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 WireGuard 的 Cilium CNI
+
+|===
+
+Calico::
++
+|===
+| 端口 | 协议 | 源 | 目标 | 说明
+
+| 179
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 BGP 的 Calico CNI
+
+| 4789
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 VXLAN 的 Calico CNI
+
+| 5473
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 Typha 的 Calico CNI
+
+| 9098
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Calico Typha 健康检查
+
+| 9099
+| TCP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Calico 健康检查
+|===
+
+Flannel::
++
+|===
+| 端口 | 协议 | 源 | 目标 | 说明
+
+| 4789
+| UDP
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 VXLAN 的 Flannel CNI
+|===
+======
+
+=== Windows 特定的入站网络规则
+
+|===
+| 协议 | 端口 | 源 | 目标 | 说明
+
+| UDP
+| 4789
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| Calico 和 Flannel VXLAN 所需
+
+| TCP
+| 179
+| 所有 RKE2 节点
+| 所有 RKE2 节点
+| 使用 BGP 的 Calico CNI
+|===
+
+通常，所有出站流量将被允许。
