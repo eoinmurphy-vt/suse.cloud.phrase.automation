@@ -1,0 +1,480 @@
+= CNCF AI 一致性
+:page-languages: [en, zh]
+:revdate: 2025-11-06
+:page-revdate: {revdate}
+
+https://docs.google.com/document/d/1hXoSdh9FEs13Yde8DivCYjjXyxa7j4J8erjZPEGWuzc/edit?tab=t.0[CNCF Kubernetes AI 一致性] 定义了一组额外的能力、API 和配置，Kubernetes 集群必须提供这些能力，以可靠和高效地运行 AI/ML 工作负载，超出标准的 CNCF Kubernetes 一致性。
+
+本页面展示了如何使用 RKE2 v1.34.1+rke2r1 满足这些要求。
+
+== 支持动态资源分配 (DRA)
+
+https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/[DRA] 是一个新的 API，能够实现更灵活、细粒度的资源请求，超出简单的计数，自 v1.34 起已普遍可用 (GA)。
+
+通过运行以下命令验证所有 `+resource.k8s.io/v1+` DRA API 资源是否已启用：
+
+[,bash]
+----
+kubectl api-resources --api-group=resource.k8s.io
+----
+
+预期输出：
+
+[,yaml]
+----
+NAME                     SHORTNAMES   APIVERSION           NAMESPACED   KIND
+deviceclasses                         resource.k8s.io/v1   false        DeviceClass
+resourceclaims                        resource.k8s.io/v1   true         ResourceClaim
+resourceclaimtemplates                resource.k8s.io/v1   true         ResourceClaimTemplate
+resourceslices                        resource.k8s.io/v1   false        ResourceSlice
+----
+
+== 支持网关 API
+
+https://gateway-api.sigs.k8s.io/[网关 API] 代表了 Kubernetes 入口、负载平衡和服务网格 API 的下一代。
+
+要在 RKE2 中启用网关 API，集群必须部署时启用 Traefik，并配置其 KubernetesGateway 提供者，如 xref:networking/networking_services.adoc#_ingress_controller[入口控制器文档] 中所述。
+
+通过运行以下命令验证所有 `+gateway.networking.k8s.io/v1+` 网关 API 资源是否已启用：
+
+[,bash]
+----
+kubectl api-resources --api-group=gateway.networking.k8s.io/v1
+----
+
+预期输出：
+
+[,yaml]
+----
+NAME              SHORTNAMES   APIVERSION                          NAMESPACED   KIND
+gatewayclasses    gc           gateway.networking.k8s.io/v1        false        GatewayClass
+gateways          gtw          gateway.networking.k8s.io/v1        true         Gateway
+grpcroutes                     gateway.networking.k8s.io/v1        true         GRPCRoute
+httproutes                     gateway.networking.k8s.io/v1        true         HTTPRoute
+referencegrants   refgrant     gateway.networking.k8s.io/v1beta1   true         ReferenceGrant
+----
+
+要验证 Traefik 是否在使用网关 API 资源：
+
+. 创建一个 GatewayClass：
++
+[,yaml]
+----
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: traefik
+spec:
+  controllerName: traefik.io/gateway-controller
+----
+
+. 检查状态：
++
+[,yaml]
+----
+kubectl get gatewayclass traefik -o jsonpath='{.status}'
+----
++
+预期输出：
++
+[,json]
+----
+"message":"Handled by Traefik controller","observedGeneration":1,"reason":"Handled","status":"True","type":"Accepted"
+----
+
+== 群组调度
+
+必须提供一个群组调度解决方案（例如 Kueue 或 Volcano）以确保分布式 AI 工作负载的全有或全无调度。
+
+我们将在 RKE2 中使用 Volcano 进行此验证测试。
+
+[,bash]
+----
+helm repo add volcano-sh https://volcano-sh.github.io/helm-charts
+helm repo update
+helm install volcano volcano-sh/volcano -n volcano-system --create-namespace
+----
+
+安装将在 `+volcano-system+` 名称空间中创建三个部署：
+
+----
+NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/volcano-admission     1/1     1            1           130m
+deployment.apps/volcano-controllers   1/1     1            1           130m
+deployment.apps/volcano-scheduler     1/1     1            1           130m
+----
+
+验证已完成，但我们将进行功能测试。以下步骤在一个双GPU集群上创建一个包含两个任务（每个任务需要一个 NVIDIA GPU）的群组作业：
+
+[,yaml]
+----
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: gpu-nbody-gang-job
+  namespace: default
+spec:
+  minAvailable: 2
+  schedulerName: volcano
+
+  tasks:
+    - name: nbody-task-1
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          runtimeClassName: nvidia
+          containers:
+            - name: cuda-container-1
+              image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+              command: ["/bin/bash", "-c"]
+              args:
+                - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+
+    - name: nbody-task-2
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          runtimeClassName: nvidia
+          containers:
+            - name: cuda-container-2
+              image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+              command: ["/bin/bash", "-c"]
+              args:
+                - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+----
+
+几秒钟后，两个 Pod 应该都处于运行状态。
+
+为了测试群组调度失败，请修改清单以使用 `+minAvailable: 3+` 并添加第三个任务。重新提交作业：
+
+[,yaml]
+----
+    - name: nbody-task-3
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          runtimeClassName: nvidia
+          containers:
+            - name: cuda-container-3
+              image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+              command: ["/bin/bash", "-c"]
+              args:
+                - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+----
+
+观察到三个Pod保持在待处理状态。这证明群组调度按预期运作。
+
+[,bash]
+----
+default          gpu-nbody-gang-job-nbody-task-1-0                             0/1     Pending     0          50s
+default          gpu-nbody-gang-job-nbody-task-2-0                             0/1     Pending     0          50s
+default          gpu-nbody-gang-job-nbody-task-3-0                             0/1     Pending     0          50s
+----
+
+== 集群自动扩缩器
+
+如果平台提供集群自动扩缩器或等效机制，则必须能够根据待处理的 Pod 自动扩展针对加速器的节点组。由于RKE2是Kubernetes的一个发行版，它不提供集成的集群自动扩缩器。
+
+作为参考，我们解释如何使用上游自动扩缩器https://github.com/kubernetes/autoscaler[autoscaler]，以Azure为例。
+
+. 创建一个https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/overview[虚拟机规模集（VMSS）]，其中包含配备GPU的虚拟机。
+. 使用以下选项部署RKE2：
++
+[,yaml]
+----
+disable-cloud-controller: true # Only in rke2-server
+kubelet-arg: # On both rke2-server and rke2-agent
+- --cloud-provider=external
+----
+
+. 安装Azure CCM：
++
+[,bash]
+----
+helm install --repo https://raw.githubusercontent.com/kubernetes-sigs/cloud-provider-azure/master/helm/repo cloud-provider-azure --generate-name --set cloudControllerManager.imageRepository=mcr.microsoft.com/oss/kubernetes --set cloudControllerManager.imageName=azure-cloud-controller-manager --set cloudNodeManager.imageRepository=mcr.microsoft.com/oss/kubernetes --set cloudNodeManager.imageName=azure-cloud-node-manager --set cloudControllerManager.configureCloudRoutes=false --set cloudControllerManager.allocateNodeCidrs=false
+----
+
+. 创建`+azure.json+`文件并将其保存到`+/etc/kubernetes/azure.json+`。确保它包含以下两个选项：
++
+[,json]
+----
+  "useManagedIdentityExtension": false,
+  "useInstanceMetadata": true
+----
++
+已部署的节点应包含ProviderID。通过以下方式验证：
++
+[,bash]
+----
+kubectl get nodes -o yaml | grep ProviderID
+----
++
+ProviderID是从实例的元数据中检索的。请使用以下方法检查：
++
+[,bash]
+----
+curl -H Metadata:true "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+----
+
+. 安装上游自动扩缩器。
+.. 首先，创建一个`+values.yaml+`配置文件，指定步骤1中的VMSS和其他必要的Azure详细信息。
+.. 然后运行以下`+helm+`命令：
++
+[,bash]
+----
+helm repo add autoscaler https://kubernetes.github.io/autoscaler
+helm repo update
+helm install cluster-autoscaler autoscaler/cluster-autoscaler -f values.yaml
+----
+
+. 当正确部署时，自动扩缩器会监控请求GPU资源的Pod。如果集群无法满足请求，自动扩缩器会联系Azure以自动预配并向集群添加新的GPU节点。
+
+== 水平Pod自动扩缩器
+
+根据与AI/ML工作负载相关的自定义指标扩缩Pod的能力，是通过https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/[水平Pod自动扩缩器（HPA）]实现的，该功能在Kubernetes中默认包含。
+
+为了演示此要求，请在 RKE2 中安装 Ollama 部署。然后使用以下清单进行验证：
+
+[,yaml]
+----
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ollama-hpa
+spec:
+  scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: ollama
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Object
+    object:
+      describedObject:
+        apiVersion: v1
+        kind: Namespace
+        name: suse-private-ai
+      metric:
+        name: gpu_utilization
+      target:
+        type: AverageValue
+        averageValue: "70"
+----
+
+增加 Ollama 的负载将使 GPU 利用率提高到 70%，从而触发新的 Ollama Pod 的部署。
+
+== 加速器性能指标
+
+此要求要求一个功能齐全的加速器指标解决方案，通过标准化的机器可读指标端点公开细粒度的性能指标。此解决方案必须包括每个加速器的利用率和内存使用情况的核心指标集。
+
+当安装NVIDIA GPU操作员时（如xref:add-ons/gpu_operators.adoc#_deploy_nvidia_operator[GPU操作员文档]中所述），将部署一个`+nvidia-dcgm-exporter+` DaemonSet和服务。查询此服务以收集所需的GPU指标，例如加速器利用率、内存使用、温度、功耗等。
+
+例如，如果您在集群内部通过 SSH 连接到一个节点，它将显示使用 OpenMetrics 文本格式公开的指标。以下部分详细说明如何部署Prometheus和Grafana以使用这些指标。
+
+[,bash]
+----
+# Get the clusterIP
+svcIP=$(kubectl get svc nvidia-dcgm-exporter -n gpu-operator -o jsonpath='{.spec.clusterIP}')
+# Get the port
+svcPort=$(kubectl get svc nvidia-dcgm-exporter -n gpu-operator -o jsonpath='{.spec.ports[0].port}')
+# Output the metrics
+curl -sL http://${svcIP}:${svcPort}/metrics
+----
+
+== AI作业和推理服务指标
+
+此要求要求一个能够发现和收集以标准化格式公开的工作负载指标的系统。
+
+Prometheus和Grafana满足此要求。首先，安装它们：
+
+[,bash]
+----
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prometheus-stack prometheus-community/kube-prometheus-stack \
+>   --namespace monitoring \
+>   --create-namespace
+----
+
+安装后，创建一个ServiceMonitor以从工作负载中抓取指标。作为示例，以下清单配置了 Prometheus 以从 NVIDIA GPU Operator 收集 DCGM 指标：
+
+[,yaml]
+----
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nvidia-dcgm-monitor
+  namespace: monitoring
+  labels:
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-dcgm-exporter
+  namespaceSelector:
+    matchNames:
+      - gpu-operator
+  endpoints:
+  - port: gpu-metrics
+    path: /metrics
+    interval: 15s
+----
+
+几分钟后，Grafana 仪表板将显示 DCGM 指标，例如 `+DCGM_FI_DEV_GPU_UTIL+`。
+
+== 确保加速器的安全访问。
+
+此要求规定，容器内对加速器的访问必须得到适当隔离，并由 Kubernetes 进行调解。为此，请按照 GPU Operator 文档 xref:add-ons/gpu_operators.adoc#_deploy_nvidia_operator[docs] 中的说明安装 NVIDIA GPU Operator。
+
+安装后，验证工具包配置在 `+/usr/local/nvidia/toolkit/.config/nvidia-container-runtime/config.toml+` 中包含：
+
+[,yaml]
+----
+accept-nvidia-visible-devices-as-volume-mounts = true
+accept-nvidia-visible-devices-envvar-when-unprivileged = false
+----
+
+确保 `+device-plugin+` DaemonSet 包含以下环境变量：
+
+[,yaml]
+----
+DEVICE_LIST_STRATEGY:        volume-mounts
+----
+
+如果配置正确，请通过在仅有一个 GPU 的集群中运行以下三个 Pod 来验证隔离要求：
+
+[,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nbody-gpu-benchmark1
+  namespace: default
+spec:
+  restartPolicy: OnFailure
+  runtimeClassName: nvidia
+  containers:
+  - name: cuda-container
+    image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+    command: ["/bin/bash", "-c"]
+    args:
+      - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nbody-gpu-benchmark2
+  namespace: default
+spec:
+  restartPolicy: OnFailure
+  runtimeClassName: nvidia
+  containers:
+  - name: cuda-container2
+    image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+    command: ["/bin/bash", "-c"]
+    args:
+      - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nbody-gpu-benchmark3
+  namespace: default
+spec:
+  restartPolicy: OnFailure
+  runtimeClassName: nvidia
+  containers:
+  - name: cuda-container3
+    image: nvcr.io/nvidia/k8s/cuda-sample:nbody
+    command: ["/bin/bash", "-c"]
+    args:
+      - "while true; do sleep 5 && cuda-samples/nbody -gpu -benchmark; done"
+----
+
+预期结果（隔离确认）：
+
+* Pod 1 成功运行并消耗 GPU。
+* Pod 2 未被 Kubernetes 调度，因为集群中唯一可用的 GPU 已被 Pod 1 消耗。
+* Pod 3 运行但未能找到可用的 GPU，如日志所示。
+
+此结果表明加速器隔离正常工作。
+
+== 强大的 CRD 和控制器操作
+
+此要求规定，必须安装并可靠运行至少一个复杂的 AI Operator 及其 CRD。验证需要确认 CRD 已注册，并且 Admission Webhook 拒绝无效配置。
+
+要验证此要求，请在 RKE2 中安装 Kubeflow Training Operator。由于没有 Helm 图表，请使用以下 `+kubectl+` 命令作为变通方法：
+
+[,bash]
+----
+kubectl apply -k "github.com/kubeflow/training-operator/manifests/overlays/standalone?ref=v1.8.0"
+----
+
+验证 CRD 是否已安装以及 webhook 是否已注册：
+
+[,bash]
+----
+$> kubectl get crds | grep kubeflow
+mpijobs.kubeflow.org                                       2025-10-24T13:04:27Z
+mxjobs.kubeflow.org                                        2025-10-24T13:04:27Z
+paddlejobs.kubeflow.org                                    2025-10-24T13:04:28Z
+pytorchjobs.kubeflow.org                                   2025-10-24T13:04:28Z
+tfjobs.kubeflow.org                                        2025-10-24T13:04:29Z
+xgboostjobs.kubeflow.org                                   2025-10-24T13:04:29Z
+
+$> kubectl get validatingwebhookconfigurations
+validator.training-operator.kubeflow.org   5          10m
+
+$> kubectl get pods -n kubeflow
+NAME                                READY   STATUS    RESTARTS   AGE
+training-operator-f7d4b59f6-vdnh9   1/1     Running   0          9m54s
+----
+
+通过尝试应用以下无效的 TFJob 清单（缺少必需的图像字段）来测试 Admission Webhook 的拒绝能力：
+
+[,yaml]
+----
+# saved as invalid-tfjob.yaml
+apiVersion: kubeflow.org/v1
+kind: TFJob
+metadata:
+  name: tfjob-invalid-test
+spec:
+  tfReplicaSpecs:
+    Chief:
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - name: tensorflow
+              # INTENTIONAL ERROR: Missing the 'image' field
+              # image: tensorflow/tensorflow:latest
+              # command: ["/bin/bash", "-c"]
+              # args: ["echo 'Chief running'; sleep 10;"]
+----
+
+Admission Webhook 返回预期的错误，确认其功能：
+
+[,bash]
+----
+Error from server (Forbidden): error when creating "invalid-tfjob.yaml": admission webhook "validator.tfjob.training-operator.kubeflow.org" denied the request: spec.tfReplicaSpecs[Chief].template.spec.containers[0].image: Required value: must be required
+----
+
+删除前一个示例中的注释，然后重新提交作业以验证部署是否成功。
