@@ -1,0 +1,179 @@
+= 外部数据存储
+:page-languages: [en, zh]
+:revdate: 2025-08-08
+:page-revdate: {revdate}
+
+使用外部数据存储意味着利用位于Kubernetes集群外部的数据库。Kubernetes通过网络访问外部数据存储，而不是将其包含在集群内。这种方法对于拥有现有数据库基础设施的组织或那些更有经验操作企业级SQL数据库（如MySQL或PostgreSQL）的组织来说可能是常见的。项目https://github.com/k3s-io/kine[kine]用于SQL数据库。外部数据存储的替代方案是xref:datastore/embedded.adoc[嵌入式数据存储]。
+
+== 数据存储选项
+
+* *外部数据库*
+** https://etcd.io/[etcd]（针对版本3.5.4进行认证）
+** https://www.mysql.com[MySQL]（针对版本5.7和8.0进行认证）
+** https://mariadb.org/[MariaDB]（针对版本10.6.8进行认证）
+** https://www.postgresql.org/[PostgreSQL]（针对版本12.16、13.12、14.9和15.4进行认证）
+
+[WARNING]
+.预处理语句支持
+====
+RKE2需要数据库对预处理语句的支持。这意味着像https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-transaction-pooling[PgBouncer]这样的连接池可能需要额外配置才能与RKE2一起使用。
+====
+
+=== 外部数据存储配置参数
+
+如果您希望使用外部数据存储，如PostgreSQL、MySQL或etcd，您必须设置`+datastore-endpoint+`配置，以便RKE2知道如何连接到它。您还可以指定参数以配置连接的身份验证和加密。下表总结了这些选项：
+
+|===
+| 选项 | 环境变量 | 说明
+
+| `+datastore-endpoint+`
+| `+RKE2_DATASTORE_ENDPOINT+`
+| 指定PostgreSQL、MySQL或etcd连接字符串。这是用于描述与数据存储连接的字符串。该字符串的结构特定于每个后端，详细信息如下。
+
+| `+datastore-cafile+`
+| `+RKE2_DATASTORE_CAFILE+`
+| 用于帮助保护与数据存储通信的TLS证书颁发机构（CA）文件。如果您的数据存储通过TLS使用由自定义证书颁发机构签署的证书提供请求，您可以使用此参数指定该CA，以便RKE2客户端可以正确验证证书。
+
+| `+datastore-certfile+`
+| `+RKE2_DATASTORE_CERTFILE+`
+| 用于基于客户端证书进行身份验证以访问您的数据存储的TLS证书文件。要使用此功能，您的数据存储必须配置为支持基于客户端证书的身份验证。如果您指定此参数，则必须同时指定 `+datastore-keyfile+` 参数。
+
+| `+datastore-keyfile+`
+| `+RKE2_DATASTORE_KEYFILE+`
+| 用于基于客户端证书进行身份验证以访问您的数据存储的TLS密钥文件。有关更多详细信息，请参见之前的 `+datastore-certfile+` 参数。
+|===
+
+=== 数据存储端点格式和功能
+
+如前所述，传递给 `+datastore-endpoint+` 参数的值的格式取决于数据存储后端。以下详细说明了每个支持的外部数据存储的格式和功能。
+
+[tabs]
+======
+
+PostgreSQL::
++
+--
+PostgreSQL的典型`+datastore-endpoint+`选项具有以下格式：
+
+`+postgres://username:password@hostname:port/database-name+`
+
+提供了更高级的配置参数。有关这些的更多信息，请参见 https://godoc.org/github.com/lib/pq.。
+
+如果您指定了数据库名称且该数据库不存在，服务器将尝试创建它。
+
+如果您仅将`+postgres://+`作为端点提供，RKE2将尝试执行以下操作：
+
+* 使用`+postgres+`作为用户名和密码连接到localhost。
+* 创建一个名为 `+kubernetes+` 的数据库。
+--
+
+MySQL / MariaDB::
++
+--
+MySQL 和 MariaDB 的典型 `+datastore-endpoint+` 选项具有以下格式：
+
+`+mysql://username:password@tcp(hostname:3306)/database-name+`
+
+提供了更高级的配置参数。有关更多信息，请参见 https://github.com/go-sql-driver/mysql#dsn-data-source-name.。
+
+如果您指定了数据库名称且该数据库不存在，服务器将尝试创建它。
+
+如果您仅将`+mysql://+`作为端点提供，RKE2将尝试执行以下操作：
+
+* 使用 `+root+` 用户和无密码连接到 `+/var/run/mysqld/mysqld.sock+` 的 MySQL 套接字。
+* 创建一个名为 `+kubernetes+` 的数据库。
+--
+
+etcd::
++
+--
+etcd 的典型 `+datastore-endpoint+` 选项具有以下格式：
+
+`+\https://etcd-host-1:2379,https://etcd-host-2:2379,https://etcd-host-3:2379+`
+
+以上假设了一个典型的三节点etcd集群。该参数接受以逗号分隔的 etcd URL。
+--
+======
+
+== 外部数据库
+
+=== 1.创建外部数据存储
+
+您首先需要为集群创建一个外部数据存储。有关更多详细信息，请参见 <<Datastore Options>> 部分。
+
+=== 2.启动服务器节点
+
+RKE2 需要两个或更多服务器节点以进行此 HA 配置。有关最低机器要求，请参见 xref:install/requirements.adoc[要求] 指南。
+
+在这些节点上使用 `+rke2-server+` 启动 `+systemctl start rke2-server+` 服务时，必须在配置中设置 `+datastore-endpoint+` 选项，以便 RKE2 知道如何连接到外部数据存储。`+token+` 选项也可以用于在添加节点时设置确定性词元。当为空时，此词元将自动生成以供进一步使用。
+
+例如，可以使用如下的 `+config.yaml+` 来配置 RKE2，使 MySQL 数据库作为外部数据存储并设置一个词元：
+
+[NOTE]
+====
+RKE2 配置文件需要手动创建。您可以通过以特权用户身份运行 touch /etc/rancher/rke2/config.yaml 来完成此操作。
+====
+
+[,yaml]
+----
+datastore-endpoint: "mysql://username:password@tcp(hostname:3306)/database-name"
+token: SECRET
+----
+
+数据存储端点格式根据数据库类型而有所不同。有关详细信息，请参阅 <<Datastore Endpoint Format and Functionality,数据存储端点格式>> 部分。
+
+要在启动服务器节点时配置 TLS 证书，请参阅 <<External Datastore Configuration Parameters,数据存储配置部分>>。
+
+默认情况下，服务器节点将可调度，因此您的工作负载可以在其上启动。如果您希望拥有一个专用的控制平面，不运行任何用户工作负载，可以使用 xref:advanced.adoc#_node_labels_and_taints[污点]。
+
+一旦您在所有服务器节点上启动了 `+rke2-server+` 进程，请使用 `+kubectl get nodes+` 检查集群是否已正确启动。您应该看到您的服务器节点处于 `+Ready+` 状态。
+
+=== 3.可选：加入额外的服务器节点
+
+在步骤 2 中指定的相同示例配置可以用于加入额外的服务器节点，并且必须将第一个节点的相同词元添加到配置中。
+
+如果第一个服务器节点在没有 `+token+` 选项的情况下启动，则可以从已加入集群的任何服务器中检索词元值：
+
+[,bash]
+----
+cat /var/lib/rancher/rke2/server/token
+----
+
+然后，您可以通过将 `+server+` 地址添加到配置中并使用 `+rke2-server+` 启动 `+systemctl start rke2-server+` 进程来加入额外的服务器。
+
+[,yaml]
+----
+server: https://you-first-server-node-address:9345
+datastore-endpoint: "mysql://username:password@tcp(hostname:3306)/database-name"
+token: SECRET
+----
+
+在所有服务器节点中，有一些配置标志必须保持一致：
+
+* 与网络相关的标志：`+cluster-dns+`、`+cluster-domain+`、`+cluster-cidr+`、`+service-cidr+`
+* 控制某些组件部署的标志：`+disable-helm-controller+` 以及传递给 `+disable+` 的任何组件
+* 与功能相关的标志：`+secrets-encryption+`
+
+[NOTE]
+====
+确保保留此词元的副本，因为在从备份恢复和添加节点时需要它。
+====
+
+=== 4.可选：加入代理节点
+
+因为 RKE2 服务器节点默认是可调度的，所以 RKE2 集群不需要代理节点。然而，您可能希望拥有专用的代理节点来运行您的应用程序和服务。
+
+您只需指定代理应注册的 URL（可以是服务器 IP 地址之一或固定注册地址）以及它应使用的词元，存放在 `+config+` 文件中。
+
+[,yaml]
+----
+server: https://you-first-server-node-address:9345
+token: SECRET
+----
+
+然后，您可以安装代理：
+
+[,bash]
+----
+curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
+----
