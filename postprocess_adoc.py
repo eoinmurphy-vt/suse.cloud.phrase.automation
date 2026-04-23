@@ -36,40 +36,74 @@ def detect_and_convert_to_utf8(file_path):
         text = raw.decode("utf-8", errors="replace")
     return text
 
-def cleanup_text(text):
+def cleanup_text(text, lang_code=""):
     before = text
-    
-    # --- 1. GLOBAL RULES
-    # Fix Phrase's habit of adding + signs inside backticks and quotes
-    text = re.sub(r'&quot;\`\+([^\`\n]+)\+\`&quot;', r'"`\1`"', text)
-    text = re.sub(r'&apos;\`\+([^\`\n]+)\+\`&apos;', r"'`\1`'", text)
-    text = re.sub(r'\`\+([^\`\n]+)\+\`', r'`\1`', text) 
-    
-    # --- 2. PROTECT CODE BLOCKS ---
-    protected_blocks = []
-    def protect(match):
-        protected_blocks.append(match.group(0))
-        return f"__PROTECTED_BLOCK_{len(protected_blocks)-1}__"
-        
-    text = re.sub(r'^(-{4,}|\.{4,})$.*?^\1$', protect, text, flags=re.MULTILINE | re.DOTALL)
 
-    # --- 3. NORMAL TEXT CLEANUP (Runs only outside of code blocks) ---
+    # --- STAGE 0: GLOBAL PHRASE TM CLEANUP (BACKTICKS) ---
+    # Runs globally. This catches Phrase TM's backtick garbage
+    text = re.sub(r'&quot;`\+([^`\n]+)\+`&quot;', r'"`\1`"', text)
+    text = re.sub(r'&apos;`\+([^`\n]+)\+`&apos;', r"'`\1`'", text)
+    text = re.sub(r'`\+([^`\n]+)\+`', r'`\1`', text)
+
+    # --- STAGE 1: PROTECT MULTILINE CODE BLOCKS ---
+    # Protects Tables, Certs, and JSON logs from the aggressive cleanup below.
+    protected_multi = []
+
+    def protect_multi(match):
+        protected_multi.append(match.group(0))
+        return f"__MULTI_BLOCK_{len(protected_multi) - 1}__"
+
+    text = re.sub(r'^(-{4,}|\.{4,})$.*?^\1$', protect_multi, text, flags=re.MULTILINE | re.DOTALL)
+
+    # --- STAGE 2: PROTECT KUBERNETES VERSIONS ---
+    # Protects semantic versions like "v1.24.8+rke2r1" from the aggressive cleanup.
+    protected_tech = []
+
+    def protect_tech(match):
+        protected_tech.append(match.group(0))
+        return f"__TECH_BLOCK_{len(protected_tech) - 1}__"
+
+    text = re.sub(r'\bv[0-9]+(?:\.[0-9]+)+[\w\-\+]*', protect_tech, text)
+
+    # --- STAGE 3: AGGRESSIVE PHRASE TM CLEANUP ---
+    # Now safe to run because Tables, Certs, and Versions are successfully hidden!
     text = re.sub(r'\[literal\]#([^#]+)#', r'[monospaced]#\1#', text, flags=re.IGNORECASE)
-    
-    # The aggressive plus-sign stripper (Base64 certs are safely hidden)
     text = re.sub(r'\+([A-Za-z0-9/_\.-]+)\+', r'\1', text)
-    
-    # The Phrase footnote/circumflex backslash fix
     text = re.sub(r'\\\^\[(.*?)\]\^', r'^[\1]^', text)
-    
-    # --- 4. RESTORE CODE BLOCKS ---
-    for i, block in enumerate(protected_blocks):
-        text = text.replace(f"__PROTECTED_BLOCK_{i}__", block)
-        
+
+    # --- STAGE 4: PROTECT INLINE CODE BLOCKS ---
+    # Protects newly cleaned backticks so the typography rules below don't break code operators (!=).
+    protected_inline = []
+
+    def protect_inline(match):
+        protected_inline.append(match.group(0))
+        return f"__INLINE_BLOCK_{len(protected_inline) - 1}__"
+
+    text = re.sub(r'`[^`\n]+`', protect_inline, text)
+
+    # --- STAGE 5: TYPOGRAPHY & CJK CLEANUP ---
+    # Fix broken CJK links
+    text = re.sub(r'([^\s\[\(\<"\'\n:`\\?=&*_])(https?://)', r'\1 \2', text)
+
+    # Apply French typography rules ONLY if the target language is French
+    if lang_code.startswith("fr"):
+        text = re.sub(r'([^\s]) ([:;?!])(?=\s|$|["\'»)])(?!:|=)', r'\1{nbsp}\2', text)
+
+    # --- STAGE 6: RESTORE ALL BLOCKS ---
+    # Unpack everything in the reverse order
+    for i, block in enumerate(protected_inline):
+        text = text.replace(f"__INLINE_BLOCK_{i}__", block)
+
+    for i, block in enumerate(protected_tech):
+        text = text.replace(f"__TECH_BLOCK_{i}__", block)
+
+    for i, block in enumerate(protected_multi):
+        text = text.replace(f"__MULTI_BLOCK_{i}__", block)
+
     # Final whitespace cleanup
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r'[ ]{2,}$', '', text, flags=re.MULTILINE)
-    
+
     if text != before: stats["cleaned"] += 1
     return text
 
@@ -121,10 +155,29 @@ def map_output_path(src_path: str, rel: str) -> str:
 with open(LOG_FILE, "w", encoding="utf-8") as f:
     f.write(f"Postprocess started: {datetime.datetime.now()}\n\n")
 
-for path in Path(SRC_DIR).rglob("*.adoc"):
-    src_path = str(path)
+# FAIL-SAFE LOGIC
+force_all = os.getenv("FORCE_ALL", "false").lower() == "true"
+files_to_process = []
+
+if force_all:
+    # Manual override requested: bulldoze the whole directory
+    files_to_process = [str(p) for p in Path(SRC_DIR).rglob("*.adoc")]
+    log("⚠ MANUAL OVERRIDE TRIGGERED: Processing ALL files.")
+else:
+    # Delta processing: Only read the files modified by Git
+    try:
+        with open("changed_files.txt", "r") as f:
+            for line in f:
+                filepath = line.strip()
+                # Ensure the changed file is an AsciiDoc file and exists in our source directory
+                if filepath.endswith('.adoc') and filepath.startswith(SRC_DIR) and os.path.exists(filepath):
+                    files_to_process.append(filepath)
+    except FileNotFoundError:
+        log("No changed_files.txt manifest found. Skipping delta processing.")
+
+# Loop through smart list instead of the whole drive
+for src_path in files_to_process:
     rel = os.path.relpath(src_path, SRC_DIR)
-    
     dst_path = map_output_path(src_path, rel)
 
     if not dst_path:
@@ -133,12 +186,19 @@ for path in Path(SRC_DIR).rglob("*.adoc"):
 
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     text = detect_and_convert_to_utf8(src_path)
-    text = cleanup_text(text)
-    
+
+    # Use your smart function to get the language code (e.g., 'fr', 'zh-cn')
+    lang_folder = rel.split(os.sep)[0]
+    smart_lang_code = get_target_lang(lang_folder)
+
+    # Pass the smart language code into the cleanup function
+    text = cleanup_text(text, smart_lang_code)
+
     with open(dst_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
-    
-    stats["processed"] += 1
-    log(f"✓ {dst_path}")
 
-log(f"\nSummary: Processed={stats['processed']}, Cleaned={stats['cleaned']}, Errors={stats['errors']}")
+    stats["processed"] += 1
+    log(f"✓ Processed: {rel} -> {dst_path}")
+
+log(f"\n=== Test Complete ===")
+log(f"Summary: Processed={stats['processed']}, Cleaned={stats['cleaned']}, Errors={stats['errors']}, Skipped={stats['skipped']}")

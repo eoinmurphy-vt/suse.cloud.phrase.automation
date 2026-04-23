@@ -1,13 +1,32 @@
 name: Postprocess Translated Files
 
 on:
-  push:
-    branches: [ main, dev ]
-    paths:
-      - 'translated/**/*.adoc'
-      - 'postprocess_adoc.py'
-
+  # OPTION 1: Manual Trigger (Active)
+  # Run this manually from the Actions tab when Phrase TM finishes a project
   workflow_dispatch:
+    inputs:
+      force_all:
+        description: 'Force re-process ALL files (Ignore fail-safe)'
+        required: false
+        type: boolean
+        default: false
+
+  # OPTION 2: Scheduled Trigger (Currently disabled for future projects)
+  # To enable overnight batching, simply remove the '#' from the two lines below.
+  # schedule:
+  #   - cron: '0 0 * * *'
+
+  # OPTION 3: Push Trigger (Currently disabled to prevent Phrase TM spam)
+  # push:
+  #   branches: [ main ]
+  #   paths:
+  #     - 'translated/**/*.adoc'
+  #     - 'postprocess_adoc.py'
+
+# The "Debounce" Safety Net: Cancels running jobs if a new trigger fires
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -18,7 +37,7 @@ jobs:
     env:
       SRC_DIR: ${{ vars.TRANSLATED_DIR || 'translated' }}
       DST_DIR: ${{ vars.FINAL_DIR || 'final' }}
-      CURRENT_REPO: ${{ vars.CURRENT_REPO_NAME || 'eoinmurphy-vt/suse.cloud.phrase.automation' }}
+      CURRENT_REPO: ${{ github.repository }}
 
     steps:
       - name: Checkout Repository
@@ -34,9 +53,25 @@ jobs:
       - name: Install Dependencies
         run: pip install chardet
 
+      - name: Generate Delta Manifest
+        env:
+          # Pulls the manual checkbox value from the workflow_dispatch UI
+          FORCE_ALL_INPUT: ${{ inputs.force_all }}
+        run: |
+          if [ "$FORCE_ALL_INPUT" == "true" ]; then
+            echo "Manual Override: Processing ALL files."
+            echo "FORCE_ALL=true" >> $GITHUB_ENV
+          else
+            echo "Fail-Safe Active: Identifying only changed files..."
+            # Get the exact list of files modified in this push/batch
+            git diff-tree --no-commit-id --name-only -r ${{ github.sha }} > changed_files.txt || true
+            echo "FORCE_ALL=false" >> $GITHUB_ENV
+          fi
+
       - name: Run Postprocessing
         run: |
           mkdir -p "$DST_DIR" logs
+          # The Python script will read the FORCE_ALL variable exported from the previous step
           python postprocess_adoc.py
 
       - name: Debug Final Folder Contents
@@ -59,6 +94,7 @@ jobs:
 
           git commit -m "Auto-restored final AsciiDoc files after translation"
 
+          # Uses your specific secret for pushing directly to the repo
           git remote set-url origin https://${{ secrets.VISTATEC_REPO_WRITE_PAT }}@github.com/$CURRENT_REPO.git
 
           MAX_ATTEMPTS=10

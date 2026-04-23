@@ -24,13 +24,13 @@ def log(msg: str):
 def detect_and_read_utf8(path):
     """Detect encoding and return text decoded as UTF-8. Tries strict UTF-8 first."""
     
-    # 1. ATTEMPT STRICT UTF-8 FIRST (This prevents mojibake corruption)
+    # 1. ATTEMPT STRICT UTF-8 FIRST (Prevents mojibake corruption)
     try:
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
             return text
     except UnicodeDecodeError:
-        pass # If the file genuinely isn't UTF-8, continue to the fallback
+        pass # If the file genuinely isn't UTF-8, continue to fallback
 
     # 2. FALLBACK TO CHARDET (Only if strict UTF-8 fails)
     with open(path, "rb") as f:
@@ -70,31 +70,29 @@ def preprocess_content(text: str) -> str:
     """
     Transformations for translation prep.
     Includes robust literal monospace conversion that handles artifacts, 
-    preserves spacing, and enforces strict single-line matching.
+    preserves spacing, enforces strict single-line matching, and protects code blocks.
     """
     
-    # --- STEP 1: SANITIZE (Cleanup previous errors) ---
-    # We remove the specific artifacts "+` and `+" (and optional spaces attached to the +)
-    # This prepares the text so the main regex doesn't have to guess.
-    
-    # Matches: Quote + Plus + (Optional Space) + Backtick
+    # --- STEP 1: PROTECT CODE BLOCKS ---
+    protected_blocks = []
+    def protect(match):
+        protected_blocks.append(match.group(0))
+        return f"__PROTECTED_BLOCK_{len(protected_blocks)-1}__"
+        
+    # Finds anything between 4 dashes (----) or 4 dots (....)
+    text = re.sub(r'^(-{4,}|\.{4,})$.*?^\1$', protect, text, flags=re.MULTILINE | re.DOTALL)
+
+
+    # --- STEP 2: SANITIZE (Cleanup previous errors) ---
+    # Remove the specific artifacts "+` and `+" (and optional spaces attached to the +)
     sanitize_start = re.compile(r'([\"\'“‘])\+[ \t]*(\`)')
     text = sanitize_start.sub(r'\1\2', text)
 
-    # Matches: Backtick + (Optional Space) + Plus + Quote
     sanitize_end = re.compile(r'(\`)[ \t]*\+([\"\'”’])')
     text = sanitize_end.sub(r'\1\2', text)
 
 
-    # --- STEP 2: APPLY FORMATTING (Strict Single-Line, Space-Safe) ---
-    
-    # REGEX EXPLANATION:
-    # 1. Start Quote (Optional)
-    # 2. Pre-Artifact: (?:\+*) -> Only matches PLUS signs. NO SPACES.
-    # 3. Backtick Block: \`([^\`\n]+)\` -> No newlines allowed.
-    # 4. Post-Artifact: (?:\+*) -> Only matches PLUS signs. NO SPACES.
-    # 5. End Quote (Optional)
-
+    # --- STEP 3: APPLY FORMATTING (Strict Single-Line, Space-Safe) ---
     pattern = re.compile(
         r'([\"\'\u201c\u201d\u2018\u2019])?'       # 1. Start Quote
         r'(?:\+*)'                                 # 2. Pre-Junk (PLUS ONLY)
@@ -112,7 +110,7 @@ def preprocess_content(text: str) -> str:
         clean_content = content
         
         # Safety check: Only strip wrappers if length > 1. 
-        # This prevents stripping a single '+' which would result in '++'.
+        # Prevents stripping a single '+' which would result in '++'.
         if len(clean_content) > 1 and clean_content.startswith('+') and clean_content.endswith('+'):
             clean_content = clean_content[1:-1]
         
@@ -134,9 +132,12 @@ def preprocess_content(text: str) -> str:
 
     text = pattern.sub(replacement, text)
 
-    # --- STEP 3: OTHER TRANSFORMATIONS (Preserved from original script) ---
-    # Example: mark monospaced blocks for safer translation
+    # --- STEP 4: OTHER TRANSFORMATIONS ---
     text = re.sub(r'\[monospaced\]#([^#]+)#', r'[literal]#\1#', text)
+
+    # --- STEP 5: RESTORE CODE BLOCKS ---
+    for i, block in enumerate(protected_blocks):
+        text = text.replace(f"__PROTECTED_BLOCK_{i}__", block)
 
     return text
 
@@ -162,7 +163,7 @@ def main():
     text = normalize_ascii(text)
     text = preprocess_content(text)
 
-    # Note: Output is already strictly UTF-8 here
+    # Output is already strictly UTF-8 here
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
 
