@@ -1,0 +1,158 @@
+= 已知问题和限制
+:page-languages: [en, zh]
+:revdate: 2025-07-10
+:page-revdate: {revdate}
+
+本节包含当前已知的问题和限制，适用于{product-name}。如果您遇到此处未记录的{product-name}问题，请在https://github.com/rancher/rke2/issues[此处]打开一个新问题。
+
+== Firewalld与默认网络冲突
+
+Firewalld与RKE2的默认Canal（Calico + Flannel）网络栈冲突。为了避免意外行为，运行RKE2的系统应禁用firewalld。禁用firewalld并不会移除内核的防火墙（iptables/nftables），Canal使用它来管理必要的规则。可以通过Calico资源实现自定义防火墙规则。
+
+== NetworkManager
+
+NetworkManager在默认网络名称空间中操作接口的路由表，许多CNI，包括RKE2的默认CNI，为与容器的连接创建veth对。这可能会干扰CNI正确路由的能力。因此，如果在启用NetworkManager的系统上安装RKE2，强烈建议配置NetworkManager以忽略与calico/flannel相关的网络接口。为此，请在`+/etc/NetworkManager/conf.d+`中创建一个名为`+rke2-canal.conf+`的配置文件，内容为：
+
+[,bash]
+----
+[keyfile]
+unmanaged-devices=interface-name:flannel*;interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:vxlan-v6.calico;interface-name:wireguard.cali;interface-name:wg-v6.cali
+----
+
+如果您尚未安装RKE2，简单的`+systemctl reload NetworkManager+`即可安装配置。如果在已经安装RKE2的系统上进行此配置更改，则需要重启节点以有效应用更改。
+
+在某些操作系统中，如RHEL 8.4，NetworkManager包含两个额外的服务，分别称为`+nm-cloud-setup.service+`和`+nm-cloud-setup.timer+`。 这些服务添加的路由表会干扰CNI插件的配置。不幸的是，如在https://github.com/rancher/rke2/issues/1053[问题]中所述，没有配置可以避免这种情况。因此，如果存在这些服务，应将其禁用。
+
+[IMPORTANT]
+====
+  在NetworkManager-1.30.0-11.el8_4之前，禁用额外服务后，节点也必须重启。
+====
+
+
+== 在 Selinux 强制系统中，Istio 默认情况下失败。
+
+这是由于 RKE2 的即时内核模块加载，在 Selinux 下不允许，除非容器是特权的。为了在这些条件下运行 Istio，需要两个步骤：
+
+. https://istio.io/latest/docs/setup/additional-setup/cni/[启用 CNI] 作为 Istio 安装的一部分。请注意，在撰写本文时，此 https://istio.io/latest/about/feature-stages/[功能] 仍处于 Alpha 状态。
+确保 `+values.cni.cniBinDir=/opt/cni/bin+` 和 `+values.cni.cniConfDir=/etc/cni/net.d+`
+. 安装完成后，应该有 `+cni-node+` 个 pod 处于 CrashLoopBackoff 状态。手动编辑它们的 daemonset，以在 `+install-cni+` 容器上包含 `+securityContext.privileged: true+`。
+
+可以通过以下自定义覆盖执行此操作：
+
+[,yaml]
+----
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  components:
+    cni:
+      enabled: true
+      k8s:
+        overlays:
+        - apiVersion: "apps/v1"
+          kind: "DaemonSet"
+          name: "istio-cni-node"
+          patches:
+          - path: spec.template.spec.containers.[name:install-cni].securityContext.privileged
+            value: true
+  values:
+    cni:
+      image: rancher/mirrored-istio-install-cni:1.9.3
+      excludeNamespaces:
+      - istio-system
+      - kube-system
+      logLevel: info
+      cniBinDir: /opt/cni/bin
+      cniConfDir: /etc/cni/net.d
+----
+
+有关在未遵循这些步骤时出现的确切故障和详细日志的更多信息，请参见 https://github.com/rancher/rke2/issues/504[问题 504]。
+
+== 使用 vxlan 封装的 Calico
+
+当使用 vxlan 封装且 vxlan 接口的校验和卸载开启时，Calico 会遇到内核错误。该问题在 https://github.com/projectcalico/calico/issues/4865[calico 项目] 和 https://github.com/rancher/rke2/issues/1541[rke2 项目] 中进行了描述。我们正在应用的解决方法是通过在 https://github.com/rancher/rke2-charts/blob/main/charts/rke2-calico/rke2-calico/v3.25.001/values.yaml#L75-L76[calico helm chart] 中应用值 `+ChecksumOffloadBroken=true+` 来默认禁用校验和卸载。
+
+在 Ubuntu 18.04、Ubuntu 20.04 和 openSUSE Leap 15.3 中观察到了此问题。
+
+== Wicked
+
+Wicked 根据 sysctl 配置文件（例如在 /etc/sysctl.d/ 目录下）配置主机的网络设置。尽管 RKE2 将参数如 `+/net/ipv4/conf/all/forwarding+` 设置为 1，但该配置可能会在 Wicked 重新应用网络配置时被还原（有几个事件会导致重新应用网络配置，以及在更新期间 rcwicked 重启）。因此，在 sysctl 配置文件中启用 ipv4（在双栈情况下还需启用 ipv6）转发非常重要。例如，建议创建一个名为 `+/etc/sysctl.d/90-rke2.conf+` 的文件，包含这些参数（ipv6 仅在双栈情况下需要）：
+
+[,bash]
+----
+net.ipv4.conf.all.forwarding=1
+net.ipv6.conf.all.forwarding=1
+----
+
+== Canal 和 IP 耗尽
+
+可能的原因有两个：
+
+. `+iptables+` 二进制文件未安装在主机上，并且有一个 pod 定义了 hostPort。该 pod 将获得一个 IP，但其创建将失败，Kubernetes 将不会停止尝试重新创建它，每次尝试时都会消耗一个 IP。类似以下的错误消息将出现在 containerd 日志中。这是显示错误的日志：
++
+[,console]
+----
+plugin type="portmap" failed (add): failed to open iptables: exec: "iptables": executable file not found in $PATH
+----
++
+请安装 iptables 或 xtables-nft 软件包以解决此问题。
+
+. 默认情况下，Canal 通过在 `+/var/lib/cni/networks/k8s-pod-network+` 中为每个 IP 创建锁文件来跟踪 pod IP。每个 IP 属于一个 pod，并将在 pod 被删除后立即删除。然而，在不太可能的情况下，如果 containerd 丢失对运行中的 pods 的跟踪，锁文件可能会泄漏，Canal 将无法再重用这些 IP。如果发生这种情况，您可能会遇到 IP 耗尽错误，例如：
++
+[,console]
+----
+failed to allocate for range 0: no IP addresses available in range set
+----
+
+有两种方法可以解决此问题。您可以手动从该目录中删除未使用的 IP，或者排空节点，运行 rke2-killall.sh，启动 RKE2 systemd 服务并取消节点隔离。如果您需要进行任何这些操作，请通过 GitHub 报告问题，并确保说明触发该问题的方式。
+
+== CIS 模式下的 Ingress
+
+默认情况下，当 RKE2 以 `+profile+` 参数选择的 CIS 配置文件运行时，它会应用可能对 ingress 有限制的网络策略。这与 `+rke2-ingress-nginx+` 图表默认具有 `+hostNetwork: false+` 一起，要求用户设置自己的网络策略以允许访问 ingress URL。以下是一个示例网络策略，允许对其应用的名称空间中的任何工作负载进行 ingress。有关更多配置选项，请参见 https://kubernetes.io/docs/concepts/services-networking/network-policies/。
+
+[,yaml]
+----
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-to-backends
+spec:
+  podSelector: {}
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: rke2-ingress-nginx
+  policyTypes:
+  - Ingress
+----
+
+有关更多信息，请参阅 https://github.com/rancher/rke2/issues/3195. 上的评论。
+
+[#hardened-125]
+== 将安全强化集群从 v1.24.x 升级到 v1.25.x
+
+Kubernetes 在 v1.25 中移除了 PodSecurityPolicy，以支持 Pod 安全标准。您可以在 https://kubernetes.io/docs/concepts/security/pod-security-standards/[上游文档] 中阅读更多关于 PSS 的信息。对于 RKE2，如果在节点上设置了 `+profile+` 标志，则必须采取一些手动步骤。
+
+. 在所有节点上，将 `+profile+` 值更新为 `+cis-1.23+`，但请暂时不要重启或升级 RKE2。
+. 正常进行升级。如果使用 xref:upgrade/automated_upgrade.adoc[自动升级]，请确保运行 `+system-upgrade-controller+` pod 的名称空间已设置为特权，以符合 https://kubernetes.io/docs/concepts/security/pod-security-admission/#pod-security-levels[Pod 安全级别]：
++
+[,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: system-upgrade
+  labels:
+ # This value must be privileged for the controller to run successfully.
+ pod-security.kubernetes.io/enforce: privileged
+ pod-security.kubernetes.io/enforce-version: v1.25
+ # We are setting these to our _desired_ `enforce` level, but note that these below values can be any of the available options.
+ pod-security.kubernetes.io/audit: privileged
+ pod-security.kubernetes.io/audit-version: v1.25
+ pod-security.kubernetes.io/warn: privileged
+ pod-security.kubernetes.io/warn-version: v1.25
+----
