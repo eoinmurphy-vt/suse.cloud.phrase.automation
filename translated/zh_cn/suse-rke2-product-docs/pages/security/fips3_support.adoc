@@ -1,0 +1,65 @@
+= FIPS 140-3 启用
+:page-languages: [en, zh]
+:revdate: 2026-02-05
+:page-revdate: {revdate}
+
+FIPS 140-3 是美国的一个标准。这是联邦政府用于批准加密模块的安全标准。本文档解释了 RKE2 是如何使用通过 FIPS 验证的加密库构建的。
+
+合规性验证可在以下位置获得：xref:attachment$RKE2_FIPS3_Verified.pdf[FIPS 140-3 已验证]。
+
+== 使用 FIPS 兼容的 Go 编译器
+
+所使用的 Go 编译器可以在 https://go.googlesource.com/go/+/dev.boringcrypto[这里] 找到。系统的每个组件都是使用与标准 Go 编译器版本相匹配的此编译器版本构建的。
+
+此版本的 Go 用 FIPS 验证的 BoringCrypto 模块替换了标准 Go 加密库。有关更多信息，请参见 https://go.dev/src/crypto/internal/boring/README[GoBoring README]，以获取更多详细信息。该模块已通过 NIST 验证为 https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4968[BoringCrypto] 模块，并适用于多种系统。
+
+=== 集群组件中的 FIPS 支持
+
+大多数 RKE2 组件使用 GoBoring Go 编译器静态编译。在架构上，RKE2 被划分为几个部分，以下列表概述了这些部分及其相关组件：
+
+* Kubernetes
+ ** API 服务器
+ ** 控制器管理器
+ ** 调度程序
+ ** Kubelet
+ ** Kube Proxy
+ ** 度量服务器
+ ** Kubectl
+* Helm 图表
+ ** Flannel
+ ** Calico
+ ** CoreDNS
+ ** Traefik
+
+== 运行时
+
+为了确保整个架构使用符合 FIPS 140-3 的算法，RKE2 运行时工具使用启用 FIPS 的 Go 编译器进行静态编译。这确保了从 Kubernetes 守护程序到容器编排机制的每个层级都符合要求。
+
+* etcd
+* containerd
+ ** containerd-shim
+ ** containerd-shim-runc-v1
+ ** containerd-shim-runc-v2
+ ** ctr
+* crictl
+* runc
+
+== CNI
+
+RKE2 支持通过 `+--cni+` 标志选择替代 CNI。它捆绑了多个选项，包括 Canal（默认）、Calico、Cilium 和 Multus。然而，只有 Canal 被重建以符合 FIPS 标准。
+
+== 入口
+
+RKE2 配备了两个入口控制器：ingress-nginx 和 Traefik。两者均符合 FIPS 标准。
+
+ingress-nginx 控制器和完整的 Traefik 堆栈（控制器和代理服务器）使用 Go 编写，并使用 <<Use of FIPS Compatible Go compiler,FIPS 兼容的 Go 编译器>> 进行编译。
+
+Ingress-nginx 使用 C 编写的 nginx 代理服务器，并依赖 OpenSSL 正常工作。因此，它利用经过 FIPS 验证的 OpenSSL 版本以实现 FIPS 合规。
+
+[WARNING]
+====
+ingress-nginx 控制器将在 2026 年 3 月达到终止服务（EOL）。
+
+
+{rke2-product-name} 用户将在 RKE2 v1.32、v1.33、v1.34、v1.35 和 v1.36 的整个生命周期内继续获得支持和 CVE 修复（8+）。我们建议按照 https://support.scc.suse.com/s/kb/Migrating-from-Ingress-NGINX-to-Traefik-in-a-standalone-RKE2-cluster[从 Ingress-NGINX 迁移到 Traefik 的独立 RKE2 集群] 指南切换到 Traefik。
+====
