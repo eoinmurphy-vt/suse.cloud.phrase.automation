@@ -1,0 +1,758 @@
+= AWS EC2 自动扩展组中的集群自动伸缩器
+ifeval::["{build-type}" != "srfa"]
+:page-languages: [en, zh]
+endif::[]
+:revdate: 2025-10-01
+:page-revdate: {revdate}
+ifeval::["{build-type}" != "community"]
+:xref-port-reqs: xref:installation-and-upgrade/requirements/port-requirements.adoc
+:xref-cloud-provider-amazon: xref:cluster-deployment/set-up-cloud-providers/amazon.adoc
+:xref-production-checklist: xref:cluster-deployment/production-checklist/production-checklist.adoc
+endif::[]
+ifeval::["{build-type}" == "community"]
+:xref-port-reqs: xref:getting-started/installation-and-upgrade/installation-requirements/port-requirements.adoc
+:xref-cloud-provider-amazon: xref:如何指南/新用户指南/在Rancher中设置Kubernetes集群/设置云提供商/amazon.adoc
+:xref-production-checklist: xref:如何指南/新用户指南/在Rancher中设置Kubernetes集群/可用于生产用途集群检查清单/index.adoc
+endif::[]
+
+本指南将向您展示如何在使用 AWS EC2 自动扩展组的 Rancher 自定义集群上安装和使用 https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/[Kubernetes cluster-autoscaler]。
+
+我们将安装一个具有固定节点数的 Rancher RKE2 自定义集群，其中 etcd 和控制平面角色的节点由 `+cluster-autoscaler+` 管理，而工作节点数则可变。
+
+[#_prerequisites]
+== 先决条件
+
+遵循本指南所需的元素：
+
+* Rancher 服务器已启动并运行
+* 您拥有一个具有适当权限的 AWS EC2 用户，可以创建虚拟机、自动扩展组和 IAM 控制文件及角色
+
+[#_1_create_a_custom_cluster]
+=== 1.创建自定义集群
+
+在 Rancher 服务器上，我们应该创建一个自定义 k8s 集群。请参考 https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/[这里] 检查版本兼容性。
+
+确保 cloud_provider 名称设置为 `+amazonec2+`。集群创建后，我们需要获取：
+
+* clusterID: `+c-xxxxx+` 将用于 EC2 `+kubernetes.io/cluster/<clusterID>+` 实例标签
+* clusterName: 将用于 EC2 `+k8s.io/cluster-autoscaler/<clusterName>+` 实例标签
+* nodeCommand: 将添加到 EC2 实例的 user_data 中，以将新节点添加到集群中
++
+[,sh]
+----
+  sudo docker run -d --privileged --restart=unless-stopped --net=host -v /etc/kubernetes:/etc/kubernetes -v /var/run:/var/run rancher/rancher-agent:<RANCHER_VERSION> --server https://<RANCHER_URL> --token <RANCHER_TOKEN> --ca-checksum <RANCHER_CHECKSUM> <roles>
+----
+
+[#_2_configure_the_cloud_provider]
+=== 2.配置云提供商
+
+在 AWS EC2 上，我们应该创建一些对象来配置我们的系统。我们已定义三个不同的组和 IAM 控制文件以在 AWS 上进行配置。
+
+. 自动扩展组：将成为 EC2 自动扩展组 (ASG) 的节点。ASG 将被 `+cluster-autoscaler+` 用于扩展和缩减。
+ ** IAM 控制文件：K8s 节点所需，集群自动伸缩器将在其上运行。建议用于 Kubernetes 主节点。该控制文件称为 `+K8sAutoscalerProfile+`。
+
++
+[,json]
+----
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Effect": "Allow",
+               "Action": [
+                   "autoscaling:DescribeAutoScalingGroups",
+                   "autoscaling:DescribeAutoScalingInstances",
+                   "autoscaling:DescribeLaunchConfigurations",
+                   "autoscaling:SetDesiredCapacity",
+                   "autoscaling:TerminateInstanceInAutoScalingGroup",
+                   "autoscaling:DescribeTags",
+                   "autoscaling:DescribeLaunchConfigurations",
+                   "ec2:DescribeLaunchTemplateVersions"
+               ],
+               "Resource": [
+                   "*"
+               ]
+           }
+       ]
+   }
+----
+. 主组：将成为 Kubernetes etcd 和/或控制平面的节点。这将不在 ASG 中。
+ ** IAM 控制文件：Kubernetes cloud_provider 集成所需。可选地，`+AWS_ACCESS_KEY+` 和 `+AWS_SECRET_KEY+` 可以替代 https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/aws/README.md#using-aws-credentials[using-aws-credentials.] 该控制文件称为 `+K8sMasterProfile+`。
+
++
+[,json]
+----
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Effect": "Allow",
+               "Action": [
+                   "autoscaling:DescribeAutoScalingGroups",
+                   "autoscaling:DescribeLaunchConfigurations",
+                   "autoscaling:DescribeTags",
+                   "ec2:DescribeInstances",
+                   "ec2:DescribeRegions",
+                   "ec2:DescribeRouteTables",
+                   "ec2:DescribeSecurityGroups",
+                   "ec2:DescribeSubnets",
+                   "ec2:DescribeVolumes",
+                   "ec2:CreateSecurityGroup",
+                   "ec2:CreateTags",
+                   "ec2:CreateVolume",
+                   "ec2:ModifyInstanceAttribute",
+                   "ec2:ModifyVolume",
+                   "ec2:AttachVolume",
+                   "ec2:AuthorizeSecurityGroupIngress",
+                   "ec2:CreateRoute",
+                   "ec2:DeleteRoute",
+                   "ec2:DeleteSecurityGroup",
+                   "ec2:DeleteVolume",
+                   "ec2:DetachVolume",
+                   "ec2:RevokeSecurityGroupIngress",
+                   "ec2:DescribeVpcs",
+                   "elasticloadbalancing:AddTags",
+                   "elasticloadbalancing:AttachLoadBalancerToSubnets",
+                   "elasticloadbalancing:ApplySecurityGroupsToLoadBalancer",
+                   "elasticloadbalancing:CreateLoadBalancer",
+                   "elasticloadbalancing:CreateLoadBalancerPolicy",
+                   "elasticloadbalancing:CreateLoadBalancerListeners",
+                   "elasticloadbalancing:ConfigureHealthCheck",
+                   "elasticloadbalancing:DeleteLoadBalancer",
+                   "elasticloadbalancing:DeleteLoadBalancerListeners",
+                   "elasticloadbalancing:DescribeLoadBalancers",
+                   "elasticloadbalancing:DescribeLoadBalancerAttributes",
+                   "elasticloadbalancing:DetachLoadBalancerFromSubnets",
+                   "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+                   "elasticloadbalancing:ModifyLoadBalancerAttributes",
+                   "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+                   "elasticloadbalancing:SetLoadBalancerPoliciesForBackendServer",
+                   "elasticloadbalancing:AddTags",
+                   "elasticloadbalancing:CreateListener",
+                   "elasticloadbalancing:CreateTargetGroup",
+                   "elasticloadbalancing:DeleteListener",
+                   "elasticloadbalancing:DeleteTargetGroup",
+                   "elasticloadbalancing:DescribeListeners",
+                   "elasticloadbalancing:DescribeLoadBalancerPolicies",
+                   "elasticloadbalancing:DescribeTargetGroups",
+                   "elasticloadbalancing:DescribeTargetHealth",
+                   "elasticloadbalancing:ModifyListener",
+                   "elasticloadbalancing:ModifyTargetGroup",
+                   "elasticloadbalancing:RegisterTargets",
+                   "elasticloadbalancing:SetLoadBalancerPoliciesOfListener",
+                   "iam:CreateServiceLinkedRole",
+                   "ecr:GetAuthorizationToken",
+                   "ecr:BatchCheckLayerAvailability",
+                   "ecr:GetDownloadUrlForLayer",
+                   "ecr:GetRepositoryPolicy",
+                   "ecr:DescribeRepositories",
+                   "ecr:ListImages",
+                   "ecr:BatchGetImage",
+                   "kms:DescribeKey"
+               ],
+               "Resource": [
+                   "*"
+               ]
+           }
+       ]
+   }
+----
+ ** IAM 角色：`+K8sMasterRole: [K8sMasterProfile,K8sAutoscalerProfile]+`。
+ ** 安全组：`+K8sMasterSg+`。更多信息请访问 {xref-port-reqs}#_downstream_kubernetes_cluster_nodes[RKE2 端口（自定义节点选项卡）]
+ ** 标签： +
+`+kubernetes.io/cluster/<clusterID>: owned+`
+ ** 用户数据：`+K8sMasterUserData+` Ubuntu 18.04(ami-0e11cbb34015ff725)，安装 Docker 并将 etcd+控制平面节点添加到 K8s 集群。
++
+[,sh]
+----
+#!/bin/bash -x
+
+cat <<EOF > /etc/sysctl.d/90-kubelet.conf
+vm.overcommit_memory = 1
+vm.panic_on_oom = 0
+kernel.panic = 10
+kernel.panic_on_oops = 1
+kernel.keys.root_maxkeys = 1000000
+kernel.keys.root_maxbytes = 25000000
+EOF
+sysctl -p /etc/sysctl.d/90-kubelet.conf
+
+curl -sL https://releases.rancher.com/install-docker/19.03.sh | sh
+sudo usermod -aG docker ubuntu
+
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+PRIVATE_IP=$(curl -H "X-aws-ec2-metadata-token: ${TOKEN}" -s http://169.254.169.254/latest/meta-data/local-ipv4)
+PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: ${TOKEN}" -s http://169.254.169.254/latest/meta-data/public-ipv4)
+K8S_ROLES="--etcd --controlplane"
+
+sudo docker run -d --privileged --restart=unless-stopped --net=host -v /etc/kubernetes:/etc/kubernetes -v /var/run:/var/run rancher/rancher-agent:<RANCHER_VERSION> --server https://<RANCHER_URL> --token <RANCHER_TOKEN> --ca-checksum <RANCHER_CA_CHECKSUM> --address ${PUBLIC_IP} --internal-address ${PRIVATE_IP} ${K8S_ROLES}
+----
+. 工作组：将成为 k8s 工作平面的一部分的节点。工作节点将通过集群自动伸缩器使用 ASG 进行扩展。
+ ** IAM 控制文件：提供云服务提供商工作节点集成。
+  该控制文件称为 `+K8sWorkerProfile+`。
+
++
+[,json]
+----
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Effect": "Allow",
+               "Action": [
+                   "ec2:DescribeInstances",
+                   "ec2:DescribeRegions",
+                   "ecr:GetAuthorizationToken",
+                   "ecr:BatchCheckLayerAvailability",
+                   "ecr:GetDownloadUrlForLayer",
+                   "ecr:GetRepositoryPolicy",
+                   "ecr:DescribeRepositories",
+                   "ecr:ListImages",
+                   "ecr:BatchGetImage"
+               ],
+               "Resource": "*"
+           }
+       ]
+   }
+----
+
+* IAM 角色：`+K8sWorkerRole: [K8sWorkerProfile]+`。
+* 安全组：`+K8sWorkerSg+` 更多信息请访问 {xref-port-reqs}#_downstream_kubernetes_cluster_nodes[RKE2 端口（自定义节点选项卡）]。
+* 标记：
+ ** `+kubernetes.io/cluster/<clusterID>: owned+`
+ ** `+k8s.io/cluster-autoscaler/<clusterName>: true+`
+ ** `+k8s.io/cluster-autoscaler/enabled: true+`
+* 用户数据：`+K8sWorkerUserData+` Ubuntu 18.04(ami-0e11cbb34015ff725)，安装 Docker 并将工作节点添加到 K8s 集群。
++
+[,sh]
+----
+  #!/bin/bash -x
+
+  cat <<EOF > /etc/sysctl.d/90-kubelet.conf
+  vm.overcommit_memory = 1
+  vm.panic_on_oom = 0
+  kernel.panic = 10
+  kernel.panic_on_oops = 1
+  kernel.keys.root_maxkeys = 1000000
+  kernel.keys.root_maxbytes = 25000000
+  EOF
+  sysctl -p /etc/sysctl.d/90-kubelet.conf
+
+  curl -sL https://releases.rancher.com/install-docker/19.03.sh | sh
+  sudo usermod -aG docker ubuntu
+
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+  PRIVATE_IP=$(curl -H "X-aws-ec2-metadata-token: ${TOKEN}" -s http://169.254.169.254/latest/meta-data/local-ipv4)
+  PUBLIC_IP=$(curl -H "X-aws-ec2-metadata-token: ${TOKEN}" -s http://169.254.169.254/latest/meta-data/public-ipv4)
+  K8S_ROLES="--worker"
+
+  sudo docker run -d --privileged --restart=unless-stopped --net=host -v /etc/kubernetes:/etc/kubernetes -v /var/run:/var/run rancher/rancher-agent:<RANCHER_VERSION> --server https://<RANCHER_URL> --token <RANCHER_TOKEN> --ca-checksum <RANCHER_CA_CHECKCSUM> --address ${PUBLIC_IP} --internal-address ${PRIVATE_IP} ${K8S_ROLES}
+----
+
+更多信息请访问 {xref-cloud-provider-amazon}[AWS 上的 RKE2 集群] 和 https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/aws/README.md[AWS 上的集群自动伸缩器]。
+
+[#_3_deploy_nodes]
+=== 3.部署节点
+
+一旦我们配置了 AWS，让我们创建虚拟机以启动我们的集群：
+
+* 主节点（etcd+控制平面）：根据您的需求，部署三个适当大小的主节点实例。更多信息请访问 {xref-production-checklist}[关于可用于生产用途集群的建议。]
+ ** IAM 角色：`+K8sMasterRole+`
+ ** 安全组：`+K8sMasterSg+`
+ ** 标记：
+  *** `+kubernetes.io/cluster/<clusterID>: owned+`
+ ** 用户数据：`+K8sMasterUserData+`
+* 工作节点：在 EC2 上定义一个 ASG，设置如下：
+ ** 名称：`+K8sWorkerAsg+`
+ ** IAM 角色：`+K8sWorkerRole+`
+ ** 安全组：`+K8sWorkerSg+`
+ ** 标记：
+  *** `+kubernetes.io/cluster/<clusterID>: owned+`
+  *** `+k8s.io/cluster-autoscaler/<clusterName>: true+`
+  *** `+k8s.io/cluster-autoscaler/enabled: true+`
+ ** 用户数据：`+K8sWorkerUserData+`
+ ** 实例：
+  *** 最少：2
+  *** 期望：2
+  *** 最大：10
+
+一旦虚拟机部署完成，您应该有一个运行中的 Rancher 自定义集群，包含三个主节点和两个工作节点。
+
+[#_4_install_cluster_autoscaler]
+=== 4.安装 Cluster-autoscaler
+
+此时，我们应该有一个运行中的 Rancher 集群。我们将根据 cluster-autoscaler 的建议，在主节点和 `+kube-system+` 命名空间上安装 cluster-autoscaler。
+
+[#_parameters]
+==== 参数
+
+此表显示了 cluster-autoscaler 参数以进行微调：
+
+|===
+| 参数 | 默认值 | 说明
+
+| cluster-name
+| -
+| 自动缩放的集群名称（如果可用）
+
+| address
+| :8085
+| 暴露 Prometheus 指标的地址
+
+| kubernetes
+| -
+| Kubernetes 主节点位置。留空以使用默认值
+
+| kubeconfig
+| -
+| 包含授权和主节点位置信息的 kubeconfig 文件路径
+
+| cloud-config
+| -
+| 云提供商配置文件的路径。 空字符串表示没有配置文件
+
+| namespace
+| "kube-system"
+| cluster-autoscaler 运行的命名空间
+
+| 启用缩减规模
+| true
+| CA 是否应该缩减集群规模
+
+| scale-down-delay-after-add
+| "10m"
+| 缩放后多长时间恢复缩减规模评估
+
+| scale-down-delay-after-delete
+| 0
+| 节点删除后多长时间恢复缩减规模评估，默认为 scanInterval
+
+| scale-down-delay-after-failure
+| "3m"
+| 缩减规模失败后多长时间恢复缩减规模评估
+
+| scale-down-unneeded-time
+| "10m"
+| 节点在被认为可以缩减之前的不必要持续时间
+
+| scale-down-unready-time
+| "20m"
+| 未就绪节点在被认为可以缩减之前的不必要持续时间
+
+| scale-down-utilization-threshold
+| 50%
+| 运行在节点上的所有 Pod 的 CPU 或内存总和除以节点的相应可分配资源，低于此值的节点可以考虑缩减
+
+| scale-down-gpu-utilization-threshold
+| 50%
+| 运行在节点上的所有 Pod 的 GPU 请求总和除以节点的可分配资源，低于此值的节点可以考虑缩减
+
+| scale-down-non-empty-candidates-count
+| 30
+| 在一次迭代中考虑的非空节点的最大数量作为缩减候选节点
+
+| scale-down-candidates-pool-ratio
+| 10%
+| 当上一轮迭代中的某些候选节点不再有效时，考虑的额外非空候选节点的比例
+
+| scale-down-candidates-pool-min-count
+| 50
+| 当上一轮迭代中的某些候选节点不再有效时，考虑的额外非空候选节点的最小数量
+
+| node-deletion-delay-timeout
+| "2m"
+| CA 在删除节点之前等待去除 delay-deletion.cluster-autoscaler.kubernetes.io/ 注释的最大时间
+
+| scan-interval
+| "10s"
+| 集群被重新评估以进行扩展或缩减的频率
+
+| max-nodes-total
+| 0
+| 所有节点组中的最大节点数量。集群自动伸缩器不会将集群扩展超过此数量
+
+| cores-total
+| "0:320000"
+| 集群中的最小和最大内核数，格式为 `+<min>:<max>.+` 集群自动伸缩器不会将集群扩展超过这些数字。
+
+| memory-total
+| "0:6400000"
+| 集群中最小和最大内存（以千兆字节为单位），格式为 `+<min>:<max>.+` 集群自动伸缩器不会将集群扩展超过这些数字。
+
+| cloud-provider
+| -
+| 云提供商类型
+
+| max-bulk-soft-taint-count
+| 10
+| 可以同时被标记/取消标记为 PreferNoSchedule 的最大节点数量。设置为 0 以关闭此类标记
+
+| max-bulk-soft-taint-time
+| "3s"
+| 同时最大污点/去污点节点的持续时间
+
+| max-empty-bulk-delete
+| 10
+| 同时可以删除的空节点的最大数量
+
+| max-graceful-termination-sec
+| 600
+| CA在尝试缩减节点时等待pod终止的最大秒数
+
+| max-total-unready-percentage
+| 45
+| 集群中未就绪节点的最大百分比。 超过此限制后，CA停止操作
+
+| ok-total-unready-count
+| 3
+| 允许的未就绪节点数量，不考虑最大未就绪百分比
+
+| scale-up-from-zero
+| true
+| 当没有就绪节点时，CA是否应该扩展
+
+| max-node-provision-time
+| "15m"
+| CA等待节点被配置的最大时间
+
+| nodes
+| -
+| 以云提供商接受的格式设置节点组的最小、最大大小和其他配置数据。可以多次使用。格式：`+<min>:<max>:<other...>+`
+
+| node-group-auto-discovery
+| -
+| 一个或多个节点组自动发现的定义。定义以`+<name of discoverer>:[<key>[=<value>]]+`表示
+
+| estimator
+| "binpacking"
+| 在扩展时使用的资源估算器类型。可用值：["binpacking"]
+
+| 扩展器
+| "random"
+| 在扩展时使用的节点组扩展器类型。可用值：`+["random","most-pods","least-waste","price","priority"]+`
+
+| ignore-daemonsets-utilization
+| false
+| CA在计算缩减时是否应忽略DaemonSet Pod
+
+| ignore-mirror-pods-utilization
+| false
+| CA在计算缩减时是否应忽略Mirror Pod
+
+| write-status-configmap
+| true
+| CA是否应将状态信息写入configmap
+
+| 最大不活动时间
+| "10m"
+| 上次记录的自动伸缩器活动到自动重启的最大时间
+
+| max-failing-time
+| "15m"
+| 上次记录的成功自动伸缩器运行到自动重启的最大时间
+
+| balance-similar-node-groups
+| false
+| 检测相似的节点组并在它们之间平衡节点数量
+
+| node-autoprovisioning-enabled
+| false
+| CA在需要时是否应自动配置节点组
+
+| max-autoprovisioned-node-group-count
+| 15
+| 集群中自动配置的组的最大数量
+
+| unremovable-node-recheck-timeout
+| "5m"
+| 在再次检查之前，无法去除的节点的超时时间
+
+| expendable-pods-priority-cutoff
+| -10
+| 优先级低于截止值的Pod将是可牺牲的。在缩减期间可以毫无顾虑地杀死它们，并且它们不会导致扩展。优先级为零的Pod（禁用PodPriority）是不可牺牲的
+
+| 区域的
+| false
+| 集群是区域性的
+
+| new-pod-scale-up-delay
+| "0s"
+| 小于此年龄的Pod将不被考虑进行扩展
+
+| ignore-taint
+| -
+| 指定在考虑扩展节点组时在节点模板中忽略的污点
+
+| balancing-ignore-label
+| -
+| 指定在比较两个节点组是否相似时，除了基本和云提供商设置的标签外，还要忽略的标签
+
+| aws-use-static-instance-list
+| false
+| CA应该在运行时获取实例类型还是使用静态列表？仅限 AWS
+
+| 性能分析
+| false
+| 是否启用了调试/pprof端点
+|===
+
+[#_deployment]
+==== 部署
+
+根据https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-run-on-control-plane.yaml[cluster-autoscaler-run-on-control-plane.yaml]示例，我们创建了自己的`+cluster-autoscaler-deployment.yaml+`以使用首选的https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler/cloudprovider/aws#auto-discovery-setup[自动发现设置]，更新容忍度、节点选择器、镜像版本和命令配置：
+
+[,yml]
+----
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    k8s-addon: cluster-autoscaler.addons.k8s.io
+    k8s-app: cluster-autoscaler
+  name: cluster-autoscaler
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-autoscaler
+  labels:
+    k8s-addon: cluster-autoscaler.addons.k8s.io
+    k8s-app: cluster-autoscaler
+rules:
+  - apiGroups: [""]
+    resources: ["events", "endpoints"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    resourceNames: ["cluster-autoscaler"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["watch", "list", "get", "update"]
+  - apiGroups: [""]
+    resources:
+      - "pods"
+      - "services"
+      - "replicationcontrollers"
+      - "persistentvolumeclaims"
+      - "persistentvolumes"
+    verbs: ["watch", "list", "get"]
+  - apiGroups: ["extensions"]
+    resources: ["replicasets", "daemonsets"]
+    verbs: ["watch", "list", "get"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["watch", "list"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "replicasets", "daemonsets"]
+    verbs: ["watch", "list", "get"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes"]
+    verbs: ["watch", "list", "get"]
+  - apiGroups: ["batch", "extensions"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resourceNames: ["cluster-autoscaler"]
+    resources: ["leases"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  labels:
+    k8s-addon: cluster-autoscaler.addons.k8s.io
+    k8s-app: cluster-autoscaler
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create","list","watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-autoscaler-status", "cluster-autoscaler-priority-expander"]
+    verbs: ["delete", "get", "update", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-autoscaler
+  labels:
+    k8s-addon: cluster-autoscaler.addons.k8s.io
+    k8s-app: cluster-autoscaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-autoscaler
+subjects:
+  - kind: ServiceAccount
+    name: cluster-autoscaler
+    namespace: kube-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  labels:
+    k8s-addon: cluster-autoscaler.addons.k8s.io
+    k8s-app: cluster-autoscaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cluster-autoscaler
+subjects:
+  - kind: ServiceAccount
+    name: cluster-autoscaler
+    namespace: kube-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+  labels:
+    app: cluster-autoscaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cluster-autoscaler
+  template:
+    metadata:
+      labels:
+        app: cluster-autoscaler
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8085'
+    spec:
+      serviceAccountName: cluster-autoscaler
+      tolerations:
+        - effect: NoSchedule
+          operator: "Equal"
+          value: "true"
+          key: node-role.kubernetes.io/controlplane
+      nodeSelector:
+        node-role.kubernetes.io/controlplane: "true"
+      containers:
+        - image: eu.gcr.io/k8s-artifacts-prod/autoscaling/cluster-autoscaler:<VERSION>
+          name: cluster-autoscaler
+          resources:
+            limits:
+              cpu: 100m
+              memory: 300Mi
+            requests:
+              cpu: 100m
+              memory: 300Mi
+          command:
+            - ./cluster-autoscaler
+            - --v=4
+            - --stderrthreshold=info
+            - --cloud-provider=aws
+            - --skip-nodes-with-local-storage=false
+            - --expander=least-waste
+            - --node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/<clusterName>
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              readOnly: true
+          imagePullPolicy: "Always"
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: "/etc/ssl/certs/ca-certificates.crt"
+----
+
+一旦清单文件准备好，就在Kubernetes集群中部署它（也可以使用Rancher UI）：
+
+[,sh]
+----
+kubectl -n kube-system apply -f cluster-autoscaler-deployment.yaml
+----
+
+[NOTE]
+====
+
+集群自动扩缩容的部署也可以使用https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler/cloudprovider/aws#manual-configuration[手动配置]进行设置。
+====
+
+
+[#_testing]
+== 测试
+
+此时，我们应该在Rancher自定义集群中已有一个集群自动扩缩容正在运行。集群自动扩缩容应管理`+K8sWorkerAsg+` ASG，以在2到10个节点之间进行扩容和缩容，当以下条件之一为真时：
+
+* 由于资源不足，集群中有无法运行的Pod。在这种情况下，集群会扩容。
+* 集群中有节点在长时间内未被充分利用，其Pod可以放置在其他现有节点上。在这种情况下，集群会缩容。
+
+[#_generating_load]
+=== 生成负载
+
+我们准备了一个`+test-deployment.yaml+`，只是为了在Kubernetes集群上生成负载，看看集群自动扩缩容是否正常工作。测试部署请求 1000m 处理器 和 1024Mi 内存，使用三个副本。调整请求的资源和/或副本，以确保耗尽Kubernetes集群资源：
+
+[,yaml]
+----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: hello-world
+  name: hello-world
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hello-world
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: hello-world
+    spec:
+      containers:
+      - image: rancher/hello-world
+        imagePullPolicy: Always
+        name: hello-world
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1024Mi
+          requests:
+            cpu: 1000m
+            memory: 1024Mi
+----
+
+一旦测试部署准备好，就在Kubernetes集群的默认名称空间中部署它（也可以使用Rancher UI）：
+
+----
+kubectl -n default apply -f test-deployment.yaml
+----
+
+[#_checking_scale]
+=== 检查伸缩情况
+
+一旦Kubernetes资源耗尽，集群自动扩缩容应扩容工作节点，以便调度失败的 Pod。它应该扩容，直到所有的 Pod 都被调度。您应该在 ASG 和 Kubernetes 集群上看到新的节点。检查 `+kube-system+` cluster-autoscaler Pod 上的日志。
+
+一旦确认扩容后，接下来检查缩容情况。为此，减少测试部署中的副本数量，直到释放足够的 Kubernetes 集群资源以实现缩容。您应该在 ASG 和 Kubernetes 集群上看到节点消失。检查 `+kube-system+` cluster-autoscaler Pod 上的日志。
