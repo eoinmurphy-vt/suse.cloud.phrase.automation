@@ -2,13 +2,18 @@ name: Sync Changes to External Repos
 
 on:
   # Listen for Postprocess to finish successfully
-  workflow_run:
-    workflows: ["Postprocess Translated Files"]
-    types:
-      - completed
+  # workflow_run:
+  #   workflows: ["Postprocess Translated Files"]
+  #   types:
+  #     - completed
   
   # OPTION 1: Manual Trigger (Active)
   workflow_dispatch:
+    inputs:
+      specific_repo_id:
+        description: "Run for a specific Client ID (leave empty for all)"
+        required: false
+        type: string
 
   # OPTION 2: Scheduled Trigger (Currently disabled for future projects)
   # To enable overnight batching, simply remove the '#' from the two lines below.
@@ -55,6 +60,8 @@ jobs:
           EXT_PAT: ${{ secrets.SUSE_PHRASE_CLIENT_WRITE_PAT }}
           # The GitHub CLI needs the token passed as GH_TOKEN to authenticate the PR
           GH_TOKEN: ${{ secrets.SUSE_PHRASE_CLIENT_WRITE_PAT }}
+          # 1. Grab the specific repo ID from the user input
+          TARGET_REPO: ${{ inputs.specific_repo_id }}
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email action@github.com
@@ -65,6 +72,14 @@ jobs:
             [ -d "$REPO_DIR" ] || continue
             
             CLIENT_ID=$(basename "$REPO_DIR")
+
+            # 2. Add the Skip Logic!
+            # If the user typed a target repo, and THIS folder doesn't match it, skip it.
+            if [ -n "$TARGET_REPO" ] && [ "$CLIENT_ID" != "$TARGET_REPO" ]; then
+              echo "⏭️ Skipping $CLIENT_ID (Targeting only $TARGET_REPO)"
+              continue
+            fi
+
             echo ">>> Processing delivery for: $CLIENT_ID"
 
             CLIENT_URL=$(jq -r ".[] | select(.id==\"$CLIENT_ID\") | .url" $CONFIG_FILE)
